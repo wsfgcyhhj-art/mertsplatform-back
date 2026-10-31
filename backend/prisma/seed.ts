@@ -32,8 +32,17 @@ async function main() {
   console.log(`   Пароль: ${adminPassword}`);
   console.log(`   Роль:   ${admin.role}`);
 
-  // 2. Инициализация 10 дефолтных ачивок
+  // 2. Инициализация дефолтных ачивок
   console.log(`🏆 Инициализация достижений (всего: ${DEFAULT_ACHIEVEMENTS.length})...`);
+  const activeCodes = DEFAULT_ACHIEVEMENTS.map((a) => a.code);
+
+  // Очистка старых неиспользуемых кодов, чтобы каталог был чистым
+  await prisma.achievement.deleteMany({
+    where: {
+      code: { notIn: activeCodes },
+    },
+  });
+
   for (const ach of DEFAULT_ACHIEVEMENTS) {
     await prisma.achievement.upsert({
       where: { code: ach.code },

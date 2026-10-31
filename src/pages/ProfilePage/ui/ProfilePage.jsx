@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import cls from "../styles/profile.module.scss";
 import { useFindUser } from "../../../store/userStore.js";
 import { MdEdit, MdLockReset } from "react-icons/md";
-import { Button, Modal, Input, message, Avatar, Row, Col, Card, Tag, Spin } from 'antd';
-import { FaTelegram, FaUser, FaCheckCircle, FaTrophy } from "react-icons/fa";
+import { Modal, Input, message, Row, Col, Spin } from 'antd';
+import { FaUser, FaTrophy } from "react-icons/fa";
 import { RiTelegram2Line } from "react-icons/ri";
 import { FaPeopleGroup } from "react-icons/fa6";
 import { ProfileBanner } from "./ProfileBanner.jsx";
 import { api } from "../../../api/client.js";
 import { useNavigate } from "react-router-dom";
+import { AchievementIcon } from "../../../components/AchievementToast.jsx";
 
 export const ProfilePage = () => {
     const { userInfo, addUser } = useFindUser();
@@ -35,7 +36,7 @@ export const ProfilePage = () => {
     const [selectedAch, setSelectedAch] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
 
-    const loadProfileData = async () => {
+    const loadProfileData = useCallback(async () => {
         try {
             setLoading(true);
             const [meRes, achRes] = await Promise.all([
@@ -59,11 +60,14 @@ export const ProfilePage = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [addUser]);
 
     useEffect(() => {
         loadProfileData();
-    }, []);
+        const onRefresh = () => loadProfileData();
+        window.addEventListener('merts:refresh-achievements', onRefresh);
+        return () => window.removeEventListener('merts:refresh-achievements', onRefresh);
+    }, [loadProfileData]);
 
     const handleSaveProfile = async () => {
         try {
@@ -98,7 +102,7 @@ export const ProfilePage = () => {
                     addUser(res.data.user);
                     message.success('Аватар обновлен!');
                 }
-            } catch (err) {
+            } catch {
                 message.error('Не удалось загрузить аватар');
             }
         };
@@ -138,7 +142,7 @@ export const ProfilePage = () => {
         try {
             const res = await api.get(`/achievements/${ach.id}`);
             setSelectedAch(res.data?.achievement || ach);
-        } catch (err) {
+        } catch {
             setSelectedAch(ach);
         } finally {
             setLoadingDetail(false);
@@ -162,7 +166,7 @@ export const ProfilePage = () => {
                                 justifyContent: 'center',
                             }}
                         >
-                            {!userInfo?.avatarUrl && <FaUser style={{ fontSize: '48px', color: '#666' }} />}
+                            {!userInfo?.avatarUrl && <FaUser style={{ fontSize: '48px', color: '#71717a' }} />}
                             <label className={cls.profiel_change}>
                                 изменить фото
                                 <input
@@ -179,7 +183,7 @@ export const ProfilePage = () => {
                                 {userInfo?.role === 'ADMIN' ? 'Администратор' : 'Студент'}
                             </div>
                             <h1>{userInfo?.name || userInfo?.login}</h1>
-                            <div style={{ fontSize: '14px', color: '#9ca3af', marginTop: '4px' }}>
+                            <div style={{ fontSize: '14px', color: '#a1a1aa', marginTop: '4px' }}>
                                 @{userInfo?.login}
                             </div>
                         </div>
@@ -192,7 +196,7 @@ export const ProfilePage = () => {
                                     </button>
                                     <button
                                         onClick={() => setPasswordModalOpen(true)}
-                                        style={{ background: 'rgba(255,255,255,0.08)' }}
+                                        style={{ background: '#27272a' }}
                                     >
                                         <MdLockReset /> Сменить пароль
                                     </button>
@@ -217,64 +221,73 @@ export const ProfilePage = () => {
                     </div>
                 </div>
 
-                {/* Блок статистики и баллов */}
+                {/* Блок статистики и баллов (Цинк / Янтарь / Изумруд) */}
                 <div style={{ maxWidth: '1420px', margin: '30px auto', padding: '0 20px' }}>
                     <Row gutter={[20, 20]}>
                         <Col xs={24} sm={12} md={6}>
-                            <Card style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px' }}>
-                                <div style={{ color: '#9ca3af', fontSize: '13px' }}>Всего баллов</div>
-                                <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--primary, #a855f7)', marginTop: '4px' }}>
+                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Всего баллов</div>
+                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
                                     {stats.totalScore}
                                 </div>
-                            </Card>
+                            </div>
                         </Col>
                         <Col xs={24} sm={12} md={6}>
-                            <Card style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px' }}>
-                                <div style={{ color: '#9ca3af', fontSize: '13px' }}>Принятых заданий</div>
-                                <div style={{ fontSize: '28px', fontWeight: 700, color: '#10b981', marginTop: '4px' }}>
+                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Принятых заданий</div>
+                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#34d399', marginTop: '4px' }}>
                                     {stats.tasksAcceptedCount}
                                 </div>
-                            </Card>
+                            </div>
                         </Col>
                         <Col xs={24} sm={12} md={6}>
-                            <Card style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px' }}>
-                                <div style={{ color: '#9ca3af', fontSize: '13px' }}>Получено ачивок</div>
-                                <div style={{ fontSize: '28px', fontWeight: 700, color: '#f59e0b', marginTop: '4px' }}>
+                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Получено ачивок</div>
+                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
                                     {achievements.length}
                                 </div>
-                            </Card>
+                            </div>
                         </Col>
                         <Col xs={24} sm={12} md={6}>
-                            <Card style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px' }}>
-                                <div style={{ color: '#9ca3af', fontSize: '13px' }}>Текущий месяц</div>
-                                <div style={{ fontSize: '28px', fontWeight: 700, color: '#3b82f6', marginTop: '4px' }}>
+                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Текущий месяц</div>
+                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#f4f4f5', marginTop: '4px' }}>
                                     {userInfo?.currentMonth || 1}
                                 </div>
-                            </Card>
+                            </div>
                         </Col>
                     </Row>
                 </div>
 
-                {/* Блок достижений студента */}
+                {/* Блок достижений студента (Строго Zinc + Amber + Emerald) */}
                 <div style={{ maxWidth: '1420px', margin: '20px auto 60px auto', padding: '0 20px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                        <h2 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <FaTrophy style={{ color: '#f59e0b' }} /> Мои достижения ({achievements.length})
+                        <h2 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', color: '#f4f4f5' }}>
+                            <FaTrophy style={{ color: '#fbbf24' }} /> Мои достижения ({achievements.length})
                         </h2>
-                        <Button
-                            type="link"
+                        <button
+                            type="button"
                             onClick={() => navigate('/achievements')}
-                            style={{ color: 'var(--primary, #a855f7)' }}
+                            style={{
+                                background: '#18181b',
+                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                color: '#fbbf24',
+                                padding: '8px 16px',
+                                borderRadius: '12px',
+                                fontSize: '14px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                            }}
                         >
                             Все достижения каталога →
-                        </Button>
+                        </button>
                     </div>
 
                     {loading ? (
                         <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
                     ) : achievements.length === 0 ? (
-                        <div style={{ background: 'var(--card, #131935)', padding: '40px 20px', borderRadius: '14px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.08)' }}>
-                            <p style={{ color: '#9ca3af', fontSize: '16px', margin: 0 }}>
+                        <div style={{ background: '#18181b', padding: '40px 20px', borderRadius: '16px', textAlign: 'center', border: '1px solid #27272a' }}>
+                            <p style={{ color: '#a1a1aa', fontSize: '16px', margin: 0 }}>
                                 Вы пока не получили достижений. Сдавайте домашние задания вовремя, чтобы открыть первые награды!
                             </p>
                         </div>
@@ -282,26 +295,47 @@ export const ProfilePage = () => {
                         <Row gutter={[16, 16]}>
                             {achievements.map((ach) => (
                                 <Col xs={24} sm={12} md={8} lg={6} key={ach.id}>
-                                    <Card
-                                        hoverable
+                                    <div
                                         onClick={() => openAchievementDetail(ach)}
                                         style={{
-                                            background: 'var(--card, #131935)',
-                                            border: '1px solid rgba(168, 85, 247, 0.4)',
-                                            borderRadius: '14px',
+                                            background: '#18181b',
+                                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                                            borderRadius: '16px',
+                                            padding: '18px',
+                                            cursor: 'pointer',
+                                            transition: 'transform 0.2s ease, border-color 0.2s ease',
                                         }}
                                     >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                            <div style={{ fontSize: '32px' }}>{ach.iconUrl || '🏆'}</div>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                                            <div
+                                                style={{
+                                                    width: 44,
+                                                    height: 44,
+                                                    minWidth: 44,
+                                                    borderRadius: 12,
+                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                }}
+                                            >
+                                                <AchievementIcon name={ach.iconUrl} size={20} />
+                                            </div>
                                             <div>
-                                                <div style={{ fontWeight: 600, fontSize: '15px' }}>{ach.title}</div>
-                                                <div style={{ fontSize: '12px', color: '#9ca3af' }}>{ach.description}</div>
-                                                <div style={{ fontSize: '11px', color: '#10b981', marginTop: '4px' }}>
-                                                    ✓ {new Date(ach.awardedAt).toLocaleDateString('ru-RU')}
+                                                <div style={{ fontWeight: 700, fontSize: '15px', color: '#f4f4f5' }}>{ach.title}</div>
+                                                <div style={{ fontSize: '13px', color: '#a1a1aa', marginTop: 4 }}>{ach.description}</div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '10px' }}>
+                                                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24', background: 'rgba(245, 158, 11, 0.1)', padding: '2px 8px', borderRadius: 6 }}>
+                                                        +{ach.points || 10} pts
+                                                    </span>
+                                                    <span style={{ fontSize: '11px', color: '#34d399' }}>
+                                                        ✓ {new Date(ach.awardedAt).toLocaleDateString('ru-RU')}
+                                                    </span>
                                                 </div>
                                             </div>
                                         </div>
-                                    </Card>
+                                    </div>
                                 </Col>
                             ))}
                         </Row>
@@ -388,12 +422,26 @@ export const ProfilePage = () => {
                     <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
                 ) : (
                     <div style={{ textAlign: 'center', padding: '10px 0' }}>
-                        <div style={{ fontSize: '50px', marginBottom: '10px' }}>{selectedAch.iconUrl || '🏆'}</div>
+                        <div
+                            style={{
+                                width: 64,
+                                height: 64,
+                                margin: '0 auto 14px auto',
+                                borderRadius: 16,
+                                background: 'rgba(245, 158, 11, 0.12)',
+                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                        >
+                            <AchievementIcon name={selectedAch.iconUrl} size={30} />
+                        </div>
                         <h2 style={{ fontSize: '20px', fontWeight: 700 }}>{selectedAch.title}</h2>
-                        <p style={{ color: '#9ca3af', marginTop: '6px' }}>{selectedAch.description}</p>
-                        <div style={{ background: 'rgba(255,255,255,0.04)', padding: '12px', borderRadius: '10px', textAlign: 'left', marginTop: '14px' }}>
-                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>Критерий:</div>
-                            <div style={{ fontSize: '13px', color: '#fff', marginTop: '2px' }}>
+                        <p style={{ color: '#a1a1aa', marginTop: '6px' }}>{selectedAch.description}</p>
+                        <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', textAlign: 'left', marginTop: '14px' }}>
+                            <div style={{ fontSize: '12px', color: '#71717a' }}>Критерий:</div>
+                            <div style={{ fontSize: '13px', color: '#e4e4e7', marginTop: '2px' }}>
                                 {selectedAch.criteria || selectedAch.description}
                             </div>
                         </div>

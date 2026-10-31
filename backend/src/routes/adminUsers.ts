@@ -3,6 +3,7 @@ import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../utils/password.js';
+import { checkScoreThresholds } from '../services/achievementService.js';
 
 export const adminUsersRouter = Router();
 
@@ -340,7 +341,9 @@ adminUsersRouter.post('/:id/score-adjust', async (req: Request, res: Response): 
     },
   });
 
-  res.status(201).json({ adjustment });
+  const awardedAchievements = await checkScoreThresholds(id);
+
+  res.status(201).json({ adjustment, awardedAchievements });
 });
 
 // GET /api/v1/admin/users/:id/score-history — история корректировок баллов студента

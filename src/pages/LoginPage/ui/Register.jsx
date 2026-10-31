@@ -6,6 +6,7 @@ import { useFindUser } from '../../../store/userStore.js';
 import { IoEyeSharp } from 'react-icons/io5';
 import { FaEyeSlash } from 'react-icons/fa';
 import { api } from '../../../api/client.js';
+import { showAchievementToast } from '../../../components/AchievementToast.jsx';
 
 export const Register = () => {
     const navigate = useNavigate();
@@ -74,6 +75,16 @@ export const Register = () => {
                 toast.success('Регистрация успешна! Добро пожаловать!');
                 setTimeout(() => {
                     navigate('/lessons');
+                    if (res.data?.awardedAchievement) {
+                        setTimeout(() => {
+                            showAchievementToast({
+                                title: res.data.awardedAchievement.title,
+                                description: res.data.awardedAchievement.description,
+                                points: res.data.awardedAchievement.points,
+                                iconUrl: res.data.awardedAchievement.iconUrl,
+                            });
+                        }, 400);
+                    }
                 }, 800);
             }
         } catch (err) {

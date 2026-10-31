@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { awardAchievement as awardUniqueAchievement, checkScoreThresholds } from './achievementService.js';
 
 export interface AchievementDefinition {
   code: string;
@@ -12,93 +13,111 @@ export interface AchievementDefinition {
 
 export const DEFAULT_ACHIEVEMENTS: AchievementDefinition[] = [
   {
+    code: 'WELCOME',
+    title: 'Начало пути',
+    description: 'Добро пожаловать на платформу! Первый шаг в мир разработки сделан.',
+    iconUrl: 'Sparkles',
+    category: 'START',
+    criteria: 'Выдается автоматически при первой регистрации на платформе',
+    points: 5,
+  },
+  {
     code: 'FIRST_STEP',
-    title: 'Первый шаг',
-    description: 'Успешно принято первое домашнее задание',
-    iconUrl: '/icons/first-step.svg',
-    category: 'submissions',
+    title: 'Первый рубеж',
+    description: 'Успешно принято первое домашнее задание ментором.',
+    iconUrl: 'CheckCircle',
+    category: 'TASKS',
     criteria: 'Сдать 1 домашнее задание со статусом ACCEPTED',
     points: 10,
   },
   {
-    code: 'TASK_WARRIOR_10',
-    title: 'Воин кода 10',
-    description: 'Принято 10 домашних заданий',
-    iconUrl: '/icons/warrior-10.svg',
-    category: 'submissions',
-    criteria: 'Сдать 10 домашних заданий со статусом ACCEPTED',
+    code: 'SCORE_20',
+    title: 'Разгон',
+    description: 'Набрано 20 суммарных очков в рейтинге.',
+    iconUrl: 'Flame',
+    category: 'SCORES',
+    criteria: 'Набрать не менее 20 суммарных очков за задания и бонусы',
+    points: 15,
+  },
+  {
+    code: 'SCORE_50',
+    title: 'Турбо-режим',
+    description: 'Набрано 50 суммарных очков! Отличный темп обучения.',
+    iconUrl: 'Zap',
+    category: 'SCORES',
+    criteria: 'Набрать не менее 50 суммарных очков за задания и бонусы',
     points: 25,
   },
   {
-    code: 'TASK_WARRIOR_25',
-    title: 'Мастер кода 25',
-    description: 'Принято 25 домашних заданий',
-    iconUrl: '/icons/warrior-25.svg',
-    category: 'submissions',
-    criteria: 'Сдать 25 домашних заданий со статусом ACCEPTED',
+    code: 'EASTER_EGG',
+    title: 'Любопытный хакер',
+    description: 'Обнаружена скрытая пасхалка в интерфейсе платформы.',
+    iconUrl: 'Terminal',
+    category: 'SECRET',
+    criteria: 'Найти секретный интерактивный триггер в интерфейсе MertsPlatform',
+    points: 20,
+  },
+  {
+    code: 'TOP_STUDENT_MONTH',
+    title: 'Легенда месяца',
+    description: 'Особая награда лучшему студенту месяца от менторов.',
+    iconUrl: 'Crown',
+    category: 'SPECIAL',
+    criteria: 'Выдается администратором за выдающиеся результаты по итогам месяца',
     points: 50,
+  },
+  {
+    code: 'PERFECT_SCORE',
+    title: 'Снайпер кода',
+    description: 'Получен максимальный балл за задание со шкалой оценки.',
+    iconUrl: 'Target',
+    category: 'SCORES',
+    criteria: 'Получить 100% максимальных баллов за проверенное задание',
+    points: 20,
   },
   {
     code: 'BONUS_HUNTER',
     title: 'Охотник за бонусами',
-    description: 'Принято бонусное задание повышенной сложности',
-    iconUrl: '/icons/bonus.svg',
-    category: 'bonus',
+    description: 'Решено бонусное задание повышенной сложности.',
+    iconUrl: 'Trophy',
+    category: 'TASKS',
     criteria: 'Сдать хотя бы 1 бонусное задание со статусом ACCEPTED',
     points: 30,
   },
   {
-    code: 'PERFECT_SCORE',
-    title: 'Идеальный балл',
-    description: 'Получен максимальный балл за задание со шкалой оценки',
-    iconUrl: '/icons/perfect.svg',
-    category: 'score',
-    criteria: 'Получить 100% максимальных баллов за задание',
-    points: 20,
-  },
-  {
-    code: 'TOP_LEADER',
-    title: 'Лидер топа',
-    description: 'Попадание в топ-5 рейтинга платформы',
-    iconUrl: '/icons/top-leader.svg',
-    category: 'rating',
-    criteria: 'Занять место с 1 по 5 в ежемесячном рейтинге',
-    points: 50,
-  },
-  {
     code: 'STREAK_MASTER',
     title: 'Мастер дисциплины',
-    description: 'Сдал 5 заданий подряд с первой попытки',
-    iconUrl: '/icons/streak.svg',
-    category: 'consistency',
+    description: 'Сдано 5 заданий подряд с первой попытки.',
+    iconUrl: 'Shield',
+    category: 'TASKS',
     criteria: '5 принятых заданий без единой доработки (version 1)',
     points: 35,
   },
   {
     code: 'BUG_HUNTER',
     title: 'Охотник на баги',
-    description: 'Успешная доработка после ревизии ментора',
-    iconUrl: '/icons/bug-hunter.svg',
-    category: 'submissions',
+    description: 'Успешная доработка работы после ревью ментора.',
+    iconUrl: 'Bug',
+    category: 'TASKS',
     criteria: 'Исправить замечания ментора и перевести работу из REVISION в ACCEPTED',
     points: 15,
   },
   {
     code: 'SPEED_DEMON',
     title: 'Сверхзвуковой',
-    description: 'Сдача решения в первые 24 часа после открытия задания',
-    iconUrl: '/icons/speed.svg',
-    category: 'speed',
-    criteria: 'Отправить решение в течение суток после публикации',
+    description: 'Сдача решения в первые 24 часа после открытия задания.',
+    iconUrl: 'Rocket',
+    category: 'TASKS',
+    criteria: 'Отправить решение в течение суток после публикации задания',
     points: 25,
   },
   {
     code: 'MONTH_FINISHER',
     title: 'Герой месяца',
-    description: 'Все обязательные задания текущего месяца успешно приняты',
-    iconUrl: '/icons/month-hero.svg',
-    category: 'milestone',
-    criteria: '100% принятых задач программы месяца',
+    description: 'Все обязательные задания текущего месяца успешно приняты.',
+    iconUrl: 'Award',
+    category: 'SPECIAL',
+    criteria: '100% принятых задач программы текущего месяца',
     points: 100,
   },
 ];
@@ -125,30 +144,8 @@ export async function ensureDefaultAchievements(): Promise<void> {
 }
 
 export async function awardAchievement(userId: string, achievementCode: string): Promise<boolean> {
-  const achievement = await prisma.achievement.findUnique({
-    where: { code: achievementCode },
-  });
-
-  if (!achievement) return false;
-
-  try {
-    await prisma.userAchievement.upsert({
-      where: {
-        userId_achievementId: {
-          userId,
-          achievementId: achievement.id,
-        },
-      },
-      update: {},
-      create: {
-        userId,
-        achievementId: achievement.id,
-      },
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  const res = await awardUniqueAchievement(userId, achievementCode);
+  return res !== null;
 }
 
 /**
@@ -161,19 +158,13 @@ export async function checkAndAwardAcceptedSubmission(
 ): Promise<string[]> {
   const awarded: string[] = [];
 
-  const [acceptedCount, task, userAchievements, userTaskSubs] = await Promise.all([
-    prisma.submission.count({
-      where: {
-        userId,
-        status: 'ACCEPTED',
-      },
-    }),
+  // Проверяем пороги очков и FIRST_STEP через единый движок
+  const thresholdAwards = await checkScoreThresholds(userId);
+  awarded.push(...thresholdAwards);
+
+  const [task, userTaskSubs] = await Promise.all([
     prisma.task.findUnique({
       where: { id: taskId },
-    }),
-    prisma.userAchievement.findMany({
-      where: { userId },
-      include: { achievement: true },
     }),
     prisma.submission.findMany({
       where: { userId, taskId },
@@ -181,59 +172,28 @@ export async function checkAndAwardAcceptedSubmission(
     }),
   ]);
 
-  const hasCode = (code: string) =>
-    userAchievements.some((ua) => ua.achievement.code === code);
-
-  // 1. Первая сдача
-  if (acceptedCount >= 1 && !hasCode('FIRST_STEP')) {
-    if (await awardAchievement(userId, 'FIRST_STEP')) {
-      awarded.push('FIRST_STEP');
-    }
+  if (task?.isBonus) {
+    const bonusRes = await awardUniqueAchievement(userId, 'BONUS_HUNTER');
+    if (bonusRes) awarded.push(bonusRes.code);
   }
 
-  // 2. 10 заданий
-  if (acceptedCount >= 10 && !hasCode('TASK_WARRIOR_10')) {
-    if (await awardAchievement(userId, 'TASK_WARRIOR_10')) {
-      awarded.push('TASK_WARRIOR_10');
-    }
-  }
-
-  // 3. 25 заданий
-  if (acceptedCount >= 25 && !hasCode('TASK_WARRIOR_25')) {
-    if (await awardAchievement(userId, 'TASK_WARRIOR_25')) {
-      awarded.push('TASK_WARRIOR_25');
-    }
-  }
-
-  // 4. Бонусное задание
-  if (task?.isBonus && !hasCode('BONUS_HUNTER')) {
-    if (await awardAchievement(userId, 'BONUS_HUNTER')) {
-      awarded.push('BONUS_HUNTER');
-    }
-  }
-
-  // 5. Идеальный балл
   if (
     task?.hasScore &&
     task.maxScore &&
     score !== null &&
-    score >= task.maxScore &&
-    !hasCode('PERFECT_SCORE')
+    score >= task.maxScore
   ) {
-    if (await awardAchievement(userId, 'PERFECT_SCORE')) {
-      awarded.push('PERFECT_SCORE');
-    }
+    const perfectRes = await awardUniqueAchievement(userId, 'PERFECT_SCORE');
+    if (perfectRes) awarded.push(perfectRes.code);
   }
 
-  // 8. BUG_HUNTER (если перед принятием была версия со статусом REVISION)
-  if (userTaskSubs.length > 1 && !hasCode('BUG_HUNTER')) {
+  if (userTaskSubs.length > 1) {
     const hadRevision = userTaskSubs.some((s) => s.status === 'REVISION');
     if (hadRevision) {
-      if (await awardAchievement(userId, 'BUG_HUNTER')) {
-        awarded.push('BUG_HUNTER');
-      }
+      const bugRes = await awardUniqueAchievement(userId, 'BUG_HUNTER');
+      if (bugRes) awarded.push(bugRes.code);
     }
   }
 
-  return awarded;
+  return Array.from(new Set(awarded));
 }

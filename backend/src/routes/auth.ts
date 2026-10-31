@@ -9,6 +9,7 @@ import {
   getRefreshTokenCookieOptions,
 } from '../utils/tokens.js';
 import { config } from '../config.js';
+import { awardAchievement } from '../services/achievementService.js';
 
 export const authRouter = Router();
 
@@ -84,6 +85,8 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
       },
     });
 
+    const welcomeAchievement = await awardAchievement(user.id, 'WELCOME');
+
     const tokenPayload = { userId: user.id, role: user.role };
     const accessToken = generateAccessToken(tokenPayload);
     const refreshToken = generateRefreshToken(tokenPayload);
@@ -114,6 +117,7 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
         bannerUrl: user.bannerUrl,
         createdAt: user.createdAt,
       },
+      awardedAchievement: welcomeAchievement,
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {

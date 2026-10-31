@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { prisma } from '../prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
+import { awardAchievement } from '../services/achievementService.js';
+import { DEFAULT_ACHIEVEMENTS } from '../services/achievements.js';
 
 export const meRouter = Router();
 
@@ -287,14 +289,31 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
 
   res.json({
     total: userAchievements.length,
-    achievements: userAchievements.map((ua) => ({
-      id: ua.achievement.id,
-      code: ua.achievement.code,
-      title: ua.achievement.title,
-      description: ua.achievement.description,
-      iconUrl: ua.achievement.iconUrl,
-      category: ua.achievement.category,
-      awardedAt: ua.awardedAt,
-    })),
+    achievements: userAchievements.map((ua) => {
+      const meta = DEFAULT_ACHIEVEMENTS.find((d) => d.code === ua.achievement.code);
+      return {
+        id: ua.achievement.id,
+        code: ua.achievement.code,
+        title: ua.achievement.title,
+        description: ua.achievement.description,
+        iconUrl: ua.achievement.iconUrl,
+        category: ua.achievement.category,
+        points: meta?.points ?? 10,
+        criteria: meta?.criteria ?? ua.achievement.description,
+        awardedAt: ua.awardedAt,
+      };
+    }),
+  });
+});
+
+// POST /api/v1/me/claim-easter-egg — начисление секретной ачивки за пасхалку
+meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const achievement = await awardAchievement(userId, 'EASTER_EGG');
+
+  res.json({
+    success: true,
+    achievement,
+    alreadyUnlocked: achievement === null,
   });
 });
