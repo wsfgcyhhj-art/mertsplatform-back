@@ -1,0 +1,140 @@
+.header {
+    height: 100%;
+    width: 61px;
+    overflow: hidden;
+    transition: width 0.5s ease;
+    background: var(--card);
+
+    &:hover {
+        width: 320px;
+    }
+    z-index: 1000;
+
+    position: fixed;
+
+}
+
+
+.header_items {
+    display: flex;
+    flex-direction: column;
+}
+
+.feuters {
+    min-width: 40px;
+    width: 100%;
+}
+.feut_items {
+    display: flex;
+    flex-direction: column;
+    gap: 25px;
+    margin-top: 67px;
+}
+
+.feut_item {
+    width: 250px;
+    height: 55px;
+    padding: 10px;
+    border-radius: 10px;
+    margin: 0 auto;
+    transition: all 0.5s ease;
+    text-align: center;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 10px;
+    position: relative;
+    &:hover  {
+        cursor: pointer;
+        background: var(--primary);
+        color: black;
+        .imgs {
+            left: 20px;
+        }
+    }
+}
+.imgs {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    left: 10px;
+    transition: all 1s ease;
+}
+
+.logo {
+    width: 80px;
+    height: 30px;
+    background: grey;
+    margin: 10px auto;
+}
+
+.header_footer {
+    width: 250px;
+    margin: 50px auto;
+}
+.support {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: all 1s ease;
+    border-radius: 10px;
+    &:hover  {
+        cursor: pointer;
+        background: var(--primary    );
+        color: white;
+        box-shadow: 0 0 50px 0 rgba(34, 60, 80, 0.3);
+    }
+    h4 {
+        margin-left: 54px;
+        font-size: 17px;
+        font-weight: bold;
+        transition: all 1s ease;
+        &:hover {
+            cursor: pointer;
+            transform: translateY(-3px);
+        }
+    }
+
+}
+.supp_img {
+    width: 25px;
+    height: 25px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    left: 16px;
+    transition: all 1s ease;
+}
+.exit {
+    margin-top: 100px;
+}
+.exit_item {
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: all 1s ease;
+    border-radius: 10px;
+    &:hover  {
+        cursor: pointer;
+        background: var(--error    );
+        color: white;
+        box-shadow: 0 0 50px 0 rgba(34, 60, 80, 0.3);
+    }
+}
+.l {
+    width: 100%;
+    height: 100%;
+}
+a {
+    text-decoration: none;
+    color: inherit;
+}

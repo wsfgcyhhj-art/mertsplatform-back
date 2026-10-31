@@ -1,0 +1,95 @@
+.lessons {
+    max-width: 1800px;
+    margin: 15px 10px 0 0  ;
+    padding: 0 20px;
+
+}
+.lessons_container {
+    width: 1420px;
+    margin: 0 auto;
+}
+
+@media (min-width: 1920px) {
+    .lessons_container {
+        width: 1700px; // или 1800px
+    }
+    .lessons {
+        margin: 95px 20px 0 50px  ;
+    }
+
+}
+.title {
+    padding: 10px;
+    width: 100%;
+    height: 70px;
+    .lesson_of_lesson {
+        margin-top: 6px;
+        width: 105px;
+        height: 25px;
+        background:  rgba(200, 100, 347, 0.3);;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--primary);
+        transition: box-shadow 1s ease;
+        &:hover {
+            box-shadow: 0 0 50px #A855F7;
+            cursor: pointer;
+        }
+    }
+    .less_title {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 25px;
+    }
+}
+.video {
+    width: 100%;
+    height: 550px;
+    background: #000;
+}
+.video_paginasion {
+    width: 100%;
+    height: 100px;
+    background: var(--card);
+    margin-top: 20px;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    border-radius: 5px;
+
+    .paginasion_btn {
+        width: 320px;
+        height: 80px;
+        border-radius: 10px;
+        background: var(--card);
+        border: 1px solid var(--bg);
+        transition: all 1s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        gap: 30px;
+        color: var(--text);
+        cursor: pointer;
+        &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            color: var(--text);
+        }
+        &:hover {
+            background: var(--primary);
+        }
+    }
+    .paginasion_info {
+        width: 200px;
+        height: 100px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+    }
+}

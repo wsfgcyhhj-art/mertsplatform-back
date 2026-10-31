@@ -1,0 +1,5 @@
+django>=5.2
+psycopg2-binary>=2.9.0
+dj-database-url>=2.1.0
+django-unfold>=0.110.0
+django-cors-headers>=4.3.0

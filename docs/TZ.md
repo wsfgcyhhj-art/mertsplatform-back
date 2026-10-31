@@ -1,0 +1,187 @@
+# ТЗ: Merts Platform v2 (Backend)
+
+Стек: Node.js (TypeScript, NestJS или Express), PostgreSQL, Prisma.
+Клиент: React + Vite, Axios.
+Пользователи: ~50 человек.
+
+## Ключевые правила
+- groupNumber и groupId имеют строковый тип (String).
+- Студент видит уроки и задания строго своего месяца (where month = user.currentMonth).
+- В solutionLink принимаются только ссылки на github.com.
+- Роли: STUDENT, ADMIN.
+- Статусы заданий: SENT -> IN_REVIEW -> REVISION / ACCEPTED.
+- Поддержка бонусных заданий (флаг isBonus у Task).
+- Система ачивок (Achievement, UserAchievement).
+- Ручные баллы ментором (ScoreAdjustment: бонусы/штрафы с причиной).
+- Рейтинг, топ-5 и сброс месяца в архив (MonthlyScoreArchive).
+
+## Схема Prisma
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  STUDENT
+  ADMIN
+}
+
+enum SubmissionStatus {
+  SENT
+  IN_REVIEW
+  REVISION
+  ACCEPTED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  login        String        @unique
+  passwordHash String        @map("password_hash")
+  role         Role          @default(STUDENT)
+  name         String?
+  telegram     String?
+  groupNumber  String?       @map("group_number")
+  groupId      String?       @map("group_id")
+  currentMonth Int           @default(1) @map("current_month")
+  avatarUrl    String?       @map("avatar_url")
+  bannerUrl    String?       @map("banner_url")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  submissions      Submission[]
+  reviews          Submission[]          @relation("MentorReviews")
+  sessions         Session[]
+  userAchievements UserAchievement[]
+  scoreAdjustments ScoreAdjustment[]     @relation("StudentAdjustments")
+  givenAdjustments ScoreAdjustment[]     @relation("AdminAdjustments")
+  monthlyArchives  MonthlyScoreArchive[]
+
+  @@index([groupNumber, currentMonth])
+  @@index([groupId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  refreshToken String   @unique @map("refresh_token")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Lesson {
+  id        String   @id @default(uuid())
+  title     String
+  videoLink String   @map("video_link")
+  youtubeId String   @map("youtube_id")
+  month     Int
+  order     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([month, order])
+}
+
+model Task {
+  id             String       @id @default(uuid())
+  title          String
+  description    String
+  topic          String
+  month          Int
+  order          Int          @default(0)
+  exampleLink    String?      @map("example_link")
+  attachmentLink String?      @map("attachment_link")
+  hasScore       Boolean      @default(false) @map("has_score")
+  maxScore       Int?         @map("max_score")
+  isBonus        Boolean      @default(false) @map("is_bonus")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  submissions    Submission[]
+
+  @@index([month, order])
+}
+
+model Submission {
+  id              String           @id @default(uuid())
+  userId          String           @map("user_id")
+  taskId          String           @map("task_id")
+  reviewerId      String?          @map("reviewer_id")
+  version         Int              @default(1)
+  comment         String?
+  solutionLink    String           @map("solution_link")
+  status          SubmissionStatus @default(SENT)
+  score           Int?
+  reviewerComment String?          @map("reviewer_comment")
+  reviewedAt      DateTime?        @map("reviewed_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task     Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reviewer User? @relation("MentorReviews", fields: [reviewerId], references: [id])
+
+  @@index([userId, taskId])
+  @@index([status, createdAt])
+}
+
+model ScoreAdjustment {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  adminId   String   @map("admin_id")
+  amount    Int
+  reason    String
+  month     Int
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User @relation("StudentAdjustments", fields: [userId], references: [id], onDelete: Cascade)
+  admin User @relation("AdminAdjustments", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([userId, month])
+}
+
+model Achievement {
+  id          String            @id @default(uuid())
+  code        String            @unique
+  title       String
+  description String
+  iconUrl     String            @map("icon_url")
+  category    String            @default("general")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  userAchievements UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid())
+  userId        String      @map("user_id")
+  achievementId String      @map("achievement_id")
+  awardedAt     DateTime    @default(now()) @map("awarded_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+}
+
+model MonthlyScoreArchive {
+  id                 String   @id @default(uuid())
+  userId             String   @map("user_id")
+  month              Int
+  finalScore         Int      @map("final_score")
+  tasksAcceptedCount Int      @map("tasks_accepted_count")
+  finalRank          Int      @map("final_rank")
+  archivedAt         DateTime @default(now()) @map("archived_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, month])
+}
+```

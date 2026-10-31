@@ -1,0 +1,29 @@
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: #0B1220;
+    color: #F1F5F9;
+    text-decoration: none;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+}
+
+
+
+:root {
+    --bg: #030712;
+    --card: rgb(17, 24, 39);
+    --primary: rgba(168, 85, 247, 0.72);
+
+    --text: #F9FAFB;
+
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --error: #EF4444;
+}

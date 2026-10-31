@@ -1,0 +1,171 @@
+.main {
+    width: 1420px;
+    margin: 20px auto;
+}
+.main_container {
+    width: 100%;
+    .title {
+        width: 98%;
+        padding: 10px;
+        border-bottom: 1px solid #ccc;
+        margin: 0 auto;
+    }
+}
+.mainStudyInfo {
+    margin-top: 15px;
+    width: 100%;
+    padding: 10px;
+
+    .mainStudyInfo_items {
+        width: 100%;
+        gap: 50px;
+        .continue {
+            width: 100%;
+            background-size: cover  ;
+            background-position:center center;
+            background-repeat: no-repeat;
+            height: 450px;
+            border-radius: 10px;
+            padding: 95px;
+            .continue_title {
+                h2 {
+                    font-size: 54px;
+                    width: 100%;
+                }
+                span {
+                    color: #a855f7;
+                    width: 50%;
+                }
+                p {
+                    font-size: 20px;
+                    width: 50%;
+
+                }
+                height: 130px;
+                display: flex;
+                flex-direction: column;
+                gap: 25px;
+            }
+            .continue_footer {
+                width: 350px;
+                font-size: 17px;
+                line-height: 30px;
+                text-align: justify;
+                color: silver;
+                transition: all 1s ease;
+                &:hover {
+                    color: var(--text);
+                }
+                a {
+                    text-decoration: none;
+                }
+                button {
+                    width: 350px;
+                    height: 55px;
+                    margin-top: 20px;
+                    border: 3xp solid var(--text);
+                    border-radius: 5px;
+                    background: #19202f;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 20px;
+                    font-size: 18px;
+                    font-weight: 550;
+                    color: #fff;
+                    transition: all 0.5s ease;
+                    &:hover {
+                        box-shadow: 0 0 50px #A855F7;
+                        cursor: pointer;
+                        background: var(--primary);
+                    }
+                }
+            }
+        }
+    }
+}
+.s{
+    margin-top: 10px;
+    width: 95px;
+    height: 25px;
+    border-radius: 10px;
+    background: rgba(70, 50, 86, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--primary);
+    transition: box-shadow 1s ease;
+
+    &:hover {
+        box-shadow: 0 0 50px #A855F7;
+        cursor: pointer;
+    }
+}
+
+.team {
+    margin-top: 40px;
+    background: var(--card);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    .team_content {
+        width: 100%;
+        height: 300px;
+        padding: 40px 90px;
+        .team_title {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            h2 {
+                font-size: 30px;
+                width: 400px;
+            }
+            p {
+                font-size: 17px;
+                width: 350px;
+                line-height: 25px;
+                text-align: justify;
+                color: #C0C0C0;
+            }
+        }
+
+    }
+    button {
+        width: 350px;
+        height: 45px;
+        margin-top: 20px;
+        border: none;
+        border-radius: 5px;
+        background: #19202f;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        font-size: 18px;
+        font-weight: 550;
+        color: #fff;
+        transition: all 0.5s ease;
+        &:hover {
+            box-shadow: 0 0 50px #A855F7;
+            cursor: pointer;
+            background: var(--primary);
+        }
+    }
+    .imgUlars {
+        width: 270px;
+        height: 270px;
+        background-size: cover;
+        background-position: center center;
+        background-repeat: no-repeat;
+        border-radius: 50%;
+        position: absolute;
+        right: 200px;
+        transition: all 1s ease;
+        &:hover {
+            box-shadow: 0 0 50px #A855F7;
+            cursor: pointer;
+        }
+    }
+}

@@ -1,0 +1,218 @@
+import { Router, Request, Response } from 'express';
+import { Role, SubmissionStatus, Prisma } from '@prisma/client';
+import { prisma } from '../prisma.js';
+import { authenticate, requireRole } from '../middleware/auth.js';
+import { checkAndAwardAcceptedSubmission } from '../services/achievements.js';
+
+// GET /api/v1/admin/submissions — очередь работ на проверку для ментора
+export const adminSubmissionsRouter = Router();
+adminSubmissionsRouter.use(authenticate, requireRole(Role.ADMIN));
+
+adminSubmissionsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
+  const { status, groupNumber, month } = req.query;
+
+  const where: Prisma.SubmissionWhereInput = {};
+
+  if (status && typeof status === 'string' && Object.values(SubmissionStatus).includes(status as SubmissionStatus)) {
+    where.status = status as SubmissionStatus;
+  }
+
+  if (groupNumber && typeof groupNumber === 'string' && groupNumber.trim()) {
+    where.user = {
+      is: {
+        groupNumber: groupNumber.trim(),
+      },
+    };
+  }
+
+  if (month && typeof month === 'string' && month.trim()) {
+    const monthNum = parseInt(month.trim(), 10);
+    if (!isNaN(monthNum)) {
+      where.task = {
+        is: {
+          month: monthNum,
+        },
+      };
+    }
+  }
+
+  const submissions = await prisma.submission.findMany({
+    where,
+    orderBy: { createdAt: 'asc' },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
+          groupNumber: true,
+          currentMonth: true,
+          telegram: true,
+        },
+      },
+      task: {
+        select: {
+          id: true,
+          title: true,
+          topic: true,
+          month: true,
+          order: true,
+          hasScore: true,
+          maxScore: true,
+          isBonus: true,
+        },
+      },
+      reviewer: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
+        },
+      },
+    },
+  });
+
+  res.json({ submissions });
+});
+
+// GET /api/v1/admin/submissions/:id — просмотр с историей сдач
+adminSubmissionsRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  const submission = await prisma.submission.findUnique({
+    where: { id },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
+          groupNumber: true,
+          currentMonth: true,
+          telegram: true,
+          avatarUrl: true,
+        },
+      },
+      task: true,
+      reviewer: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
+        },
+      },
+    },
+  });
+
+  if (!submission) {
+    res.status(404).json({
+      statusCode: 404,
+      error: 'Not Found',
+      message: 'Submission not found',
+    });
+    return;
+  }
+
+  // История всех сдач этого студента по этому заданию
+  const history = await prisma.submission.findMany({
+    where: {
+      taskId: submission.taskId,
+      userId: submission.userId,
+    },
+    orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+    include: {
+      reviewer: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  res.json({
+    submission,
+    history,
+  });
+});
+
+// PATCH /api/v1/admin/submissions/:id/review — вердикт ментора
+adminSubmissionsRouter.patch('/:id/review', async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const reviewer = req.user!;
+  const { status, score, reviewerComment } = req.body;
+
+  if (
+    !status ||
+    !['ACCEPTED', 'REVISION', 'IN_REVIEW'].includes(status)
+  ) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: "Status must be 'ACCEPTED', 'REVISION' or 'IN_REVIEW'",
+    });
+    return;
+  }
+
+  const existing = await prisma.submission.findUnique({
+    where: { id },
+    include: { task: true },
+  });
+
+  if (!existing) {
+    res.status(404).json({
+      statusCode: 404,
+      error: 'Not Found',
+      message: 'Submission not found',
+    });
+    return;
+  }
+
+  const updateData: Prisma.SubmissionUpdateInput = {
+    status: status as SubmissionStatus,
+    reviewer: { connect: { id: reviewer.id } },
+    reviewedAt: new Date(),
+  };
+
+  if (score !== undefined) {
+    const scoreNum = score !== null ? Number(score) : null;
+    updateData.score = scoreNum !== null && !isNaN(scoreNum) ? scoreNum : null;
+  }
+
+  if (reviewerComment !== undefined) {
+    updateData.reviewerComment =
+      typeof reviewerComment === 'string' && reviewerComment.trim()
+        ? reviewerComment.trim()
+        : null;
+  }
+
+  const updatedSubmission = await prisma.submission.update({
+    where: { id },
+    data: updateData,
+    include: {
+      task: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          login: true,
+        },
+      },
+    },
+  });
+
+  // Автоматическая выдача ачивок при переходе в ACCEPTED
+  let newAchievements: string[] = [];
+  if (status === 'ACCEPTED') {
+    newAchievements = await checkAndAwardAcceptedSubmission(
+      updatedSubmission.userId,
+      updatedSubmission.taskId,
+      updatedSubmission.score
+    );
+  }
+
+  res.json({
+    submission: updatedSubmission,
+    awardedAchievements: newAchievements,
+  });
+});
