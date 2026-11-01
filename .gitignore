@@ -29,6 +29,8 @@ backend/.env.*
 # Python / Django
 venv/
 django_admin/venv/
+staticfiles/
+django_admin/staticfiles/
 __pycache__/
 *.py[cod]
 *$py.class
