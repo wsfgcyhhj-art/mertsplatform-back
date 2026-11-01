@@ -101,9 +101,11 @@ model Submission {
   comment         String?
   solutionLink    String           @map("solution_link")
   status          SubmissionStatus @default(SENT)
-  score           Int?
-  reviewerComment String?          @map("reviewer_comment")
-  reviewedAt      DateTime?        @map("reviewed_at")
+  score               Int?
+  reviewerComment     String?          @map("reviewer_comment")
+  mentorTelegramMsgId String?          @map("mentor_telegram_msg_id")
+  voiceFeedbackUrl    String?          @map("voice_feedback_url")
+  reviewedAt          DateTime?        @map("reviewed_at")
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
 

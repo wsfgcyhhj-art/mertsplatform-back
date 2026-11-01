@@ -18,6 +18,7 @@ export const config = {
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'your_bot_username').replace(/^@/, ''),
+    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'MertsPlatform_bot').replace(/^@/, ''),
+    courseChatId: process.env.TELEGRAM_COURSE_CHAT_ID || '',
   },
 };

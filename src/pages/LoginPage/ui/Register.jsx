@@ -71,6 +71,7 @@ export const Register = () => {
             });
 
             if (res.data?.user && res.data?.accessToken) {
+                localStorage.setItem('accessToken', res.data.accessToken);
                 addUser(res.data.user, res.data.accessToken);
                 toast.success('Регистрация успешна! Добро пожаловать!');
                 setTimeout(() => {

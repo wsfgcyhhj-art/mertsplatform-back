@@ -3,6 +3,7 @@ import { Role, SubmissionStatus } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { isValidGithubUrl } from '../utils/github.js';
+import { notifyMentorsNewSubmission } from '../services/telegramService.js';
 
 export const tasksRouter = Router();
 
@@ -55,6 +56,7 @@ tasksRouter.get('/', async (req: Request, res: Response): Promise<void> => {
             solutionLink: latest.solutionLink,
             comment: latest.comment,
             reviewerComment: latest.reviewerComment,
+            voiceFeedbackUrl: latest.voiceFeedbackUrl,
             reviewedAt: latest.reviewedAt,
             createdAt: latest.createdAt,
           }
@@ -157,6 +159,9 @@ tasksRouter.post('/:id/submissions', async (req: Request, res: Response): Promis
       status: SubmissionStatus.SENT,
     },
   });
+
+  // Отправка уведомления ментору в Telegram с Inline-кнопками ревью
+  await notifyMentorsNewSubmission(submission.id);
 
   res.status(201).json({ submission });
 });

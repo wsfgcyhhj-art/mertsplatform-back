@@ -126,6 +126,8 @@ class Submission(models.Model):
     status = models.CharField('Статус', max_length=32, choices=SubmissionStatusChoices.choices, default=SubmissionStatusChoices.SENT)
     score = models.IntegerField('Баллы', blank=True, null=True)
     reviewer_comment = models.TextField('Комментарий ревьюера', blank=True, null=True)
+    mentor_telegram_msg_id = models.CharField('ID сообщения ментора в TG', max_length=255, blank=True, null=True)
+    voice_feedback_url = models.CharField('Голосовой фидбек (file_id / URL)', max_length=500, blank=True, null=True)
     reviewed_at = models.DateTimeField('Дата проверки', blank=True, null=True)
     created_at = models.DateTimeField('Дата отправки', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)

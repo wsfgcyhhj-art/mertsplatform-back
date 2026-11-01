@@ -34,6 +34,7 @@ export const Login = () => {
             });
 
             if (res.data?.user && res.data?.accessToken) {
+                localStorage.setItem('accessToken', res.data.accessToken);
                 addUser(res.data.user, res.data.accessToken);
                 toast.success('Успешный вход!');
                 setTimeout(() => {

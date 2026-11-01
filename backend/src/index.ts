@@ -17,6 +17,7 @@ import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { setupSwagger } from './swagger.js';
 import { ensureDefaultAchievements } from './services/achievements.js';
 import { initTelegramBot } from './services/telegramService.js';
+import { initWeeklyDigestCron } from './services/cronService.js';
 
 const app = express();
 
@@ -67,6 +68,9 @@ if (process.env.NODE_ENV !== 'test') {
 
   // Инициализация Telegram-бота (с graceful fallback)
   initTelegramBot();
+
+  // Инициализация крона еженедельного дайджеста (каждый понедельник в 10:00)
+  initWeeklyDigestCron();
 
   app.listen(config.port, () => {
     console.log(`Server listening on port ${config.port}`);

@@ -3,11 +3,12 @@ import cls from "../styles/profile.module.scss";
 import { useFindUser } from "../../../store/userStore.js";
 import { MdEdit, MdLockReset, MdRefresh, MdLinkOff } from "react-icons/md";
 import { Modal, Input, message, Row, Col, Spin } from 'antd';
+import { toast } from "react-toastify";
 import { FaUser, FaTrophy } from "react-icons/fa";
 import { RiTelegram2Line } from "react-icons/ri";
 import { FaPeopleGroup } from "react-icons/fa6";
 import { ProfileBanner } from "./ProfileBanner.jsx";
-import { api } from "../../../api/client.js";
+import { api, API_BASE_URL, extractAuthToken } from "../../../api/client.js";
 import { useNavigate } from "react-router-dom";
 import { AchievementIcon } from "../../../components/AchievementToast.jsx";
 
@@ -44,16 +45,33 @@ export const ProfilePage = () => {
     const [tgPolling, setTgPolling] = useState(false);
     const [refreshingTgStatus, setRefreshingTgStatus] = useState(false);
 
+    const getAuthToken = useCallback(() => {
+        return (
+            localStorage.getItem('accessToken') ||
+            localStorage.getItem('token') ||
+            sessionStorage.getItem('accessToken') ||
+            extractAuthToken()
+        );
+    }, []);
+
     const loadProfileData = useCallback(async () => {
         try {
             setLoading(true);
+            const token = getAuthToken();
+            const authHeaders = token
+                ? {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`,
+                  }
+                : undefined;
+
             const [meRes, achRes] = await Promise.all([
-                api.get('/me'),
-                api.get('/me/achievements'),
+                api.get('/me', { headers: authHeaders }),
+                api.get('/me/achievements', { headers: authHeaders }),
             ]);
 
             if (meRes.data?.user) {
-                addUser(meRes.data.user);
+                addUser(meRes.data.user, token);
                 setName(meRes.data.user.name || '');
                 setTelegram(meRes.data.user.telegram || '');
             }
@@ -75,7 +93,7 @@ export const ProfilePage = () => {
         } finally {
             setLoading(false);
         }
-    }, [addUser]);
+    }, [addUser, getAuthToken]);
 
     useEffect(() => {
         loadProfileData();
@@ -91,16 +109,43 @@ export const ProfilePage = () => {
         let attempts = 0;
         const intervalId = setInterval(async () => {
             attempts += 1;
+            const token =
+                localStorage.getItem('accessToken') ||
+                localStorage.getItem('token') ||
+                sessionStorage.getItem('accessToken') ||
+                extractAuthToken();
+
+            if (!token) {
+                setTgPolling(false);
+                return;
+            }
+
             try {
-                const res = await api.get('/me');
-                const connected = Boolean(res.data?.isTelegramConnected ?? res.data?.user?.isTelegramConnected);
-                const tgUser = res.data?.telegramUsername ?? res.data?.user?.telegramUsername ?? null;
-                if (connected) {
-                    setIsTelegramConnected(true);
-                    setTelegramUsername(tgUser);
+                const response = await fetch(`${API_BASE_URL}/me`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                    },
+                    credentials: 'include',
+                });
+
+                if (response.status === 401) {
                     setTgPolling(false);
-                    if (res.data?.user) addUser(res.data.user);
-                    message.success('Telegram успешно подключен!');
+                    return;
+                }
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const connected = Boolean(data?.isTelegramConnected ?? data?.user?.isTelegramConnected);
+                    const tgUser = data?.telegramUsername ?? data?.user?.telegramUsername ?? null;
+                    if (connected) {
+                        setIsTelegramConnected(true);
+                        setTelegramUsername(tgUser);
+                        setTgPolling(false);
+                        if (data?.user) addUser(data.user, token);
+                        message.success('Telegram успешно подключен!');
+                    }
                 }
             } catch {
                 // Игнорируем сетевые ошибки при фоновом поллинге
@@ -114,50 +159,145 @@ export const ProfilePage = () => {
     }, [tgPolling, isTelegramConnected, addUser]);
 
     const handleConnectTelegram = async () => {
+        const token =
+            localStorage.getItem('accessToken') ||
+            localStorage.getItem('token') ||
+            sessionStorage.getItem('accessToken') ||
+            extractAuthToken();
+
+        if (!token) {
+            toast.error('Сессия истекла, пожалуйста, войдите снова');
+            message.error('Сессия истекла, пожалуйста, войдите снова');
+            navigate('/login');
+            return;
+        }
+
         try {
             setTgConnecting(true);
-            const res = await api.post('/me/telegram/connect');
-            const link = res.data?.link;
-            if (link) {
-                window.open(link, '_blank', 'noopener,noreferrer');
+            const response = await fetch(`${API_BASE_URL}/me/telegram/connect`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                credentials: 'include',
+            });
+
+            if (response.status === 401) {
+                toast.error('Необходима повторная авторизация');
+                message.error('Необходима повторная авторизация');
+                return;
+            }
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data?.message || data?.error || 'Не удалось сгенерировать ссылку для Telegram');
+            }
+
+            if (data?.link) {
+                window.open(data.link, '_blank', 'noopener,noreferrer');
                 setTgPolling(true);
                 message.info('Перейдите в открывшийся Telegram-бот и нажмите «Запустить» (/start)');
             }
         } catch (err) {
-            message.error(err.response?.data?.message || err.response?.data?.error || 'Не удалось сгенерировать ссылку для Telegram');
+            message.error(err.message || 'Не удалось сгенерировать ссылку для Telegram');
         } finally {
             setTgConnecting(false);
         }
     };
 
     const handleDisconnectTelegram = async () => {
+        const token =
+            localStorage.getItem('accessToken') ||
+            localStorage.getItem('token') ||
+            sessionStorage.getItem('accessToken') ||
+            extractAuthToken();
+
+        if (!token) {
+            toast.error('Сессия истекла, пожалуйста, войдите снова');
+            message.error('Сессия истекла, пожалуйста, войдите снова');
+            navigate('/login');
+            return;
+        }
+
         try {
             setTgDisconnecting(true);
-            await api.delete('/me/telegram/disconnect');
+            const response = await fetch(`${API_BASE_URL}/me/telegram/disconnect`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                credentials: 'include',
+            });
+
+            if (response.status === 401) {
+                toast.error('Необходима повторная авторизация');
+                message.error('Необходима повторная авторизация');
+                return;
+            }
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data?.message || data?.error || 'Не удалось отвязать Telegram');
+            }
+
             setIsTelegramConnected(false);
             setTelegramUsername(null);
             setTgPolling(false);
             if (userInfo) {
-                addUser({ ...userInfo, isTelegramConnected: false, telegramUsername: null });
+                addUser({ ...userInfo, isTelegramConnected: false, telegramUsername: null }, token);
             }
             message.success('Telegram-уведомления отключены');
         } catch (err) {
-            message.error(err.response?.data?.message || err.response?.data?.error || 'Не удалось отвязать Telegram');
+            message.error(err.message || 'Не удалось отвязать Telegram');
         } finally {
             setTgDisconnecting(false);
         }
     };
 
     const handleCheckTelegramStatus = async () => {
+        const token =
+            localStorage.getItem('accessToken') ||
+            localStorage.getItem('token') ||
+            sessionStorage.getItem('accessToken') ||
+            extractAuthToken();
+
+        if (!token) {
+            toast.error('Сессия истекла, пожалуйста, войдите снова');
+            message.error('Сессия истекла, пожалуйста, войдите снова');
+            navigate('/login');
+            return;
+        }
+
         try {
             setRefreshingTgStatus(true);
-            const res = await api.get('/me');
-            const connected = Boolean(res.data?.isTelegramConnected ?? res.data?.user?.isTelegramConnected);
-            const tgUser = res.data?.telegramUsername ?? res.data?.user?.telegramUsername ?? null;
+            const response = await fetch(`${API_BASE_URL}/me`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                credentials: 'include',
+            });
+
+            if (response.status === 401) {
+                toast.error('Необходима повторная авторизация');
+                message.error('Необходима повторная авторизация');
+                return;
+            }
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data?.message || data?.error || 'Не удалось проверить статус подключения');
+            }
+
+            const connected = Boolean(data?.isTelegramConnected ?? data?.user?.isTelegramConnected);
+            const tgUser = data?.telegramUsername ?? data?.user?.telegramUsername ?? null;
             setIsTelegramConnected(connected);
             setTelegramUsername(tgUser);
-            if (res.data?.user) {
-                addUser(res.data.user);
+            if (data?.user) {
+                addUser(data.user, token);
             }
             if (connected) {
                 setTgPolling(false);
@@ -165,8 +305,8 @@ export const ProfilePage = () => {
             } else {
                 message.info('Привязка пока не завершена. Нажмите /start в боте и проверьте снова.');
             }
-        } catch {
-            message.error('Не удалось проверить статус подключения');
+        } catch (err) {
+            message.error(err.message || 'Не удалось проверить статус подключения');
         } finally {
             setRefreshingTgStatus(false);
         }
@@ -175,13 +315,14 @@ export const ProfilePage = () => {
     const handleSaveProfile = async () => {
         try {
             setSavingProfile(true);
+            const token = getAuthToken();
             const res = await api.patch('/me', {
                 name: name.trim() || undefined,
                 telegram: telegram.trim() || undefined,
             });
 
             if (res.data?.user) {
-                addUser(res.data.user);
+                addUser(res.data.user, token);
                 message.success('Профиль успешно обновлен!');
                 setEditModalOpen(false);
             }
@@ -200,9 +341,10 @@ export const ProfilePage = () => {
         reader.onload = async () => {
             const base64 = reader.result;
             try {
+                const token = getAuthToken();
                 const res = await api.patch('/me', { avatarUrl: base64 });
                 if (res.data?.user) {
-                    addUser(res.data.user);
+                    addUser(res.data.user, token);
                     message.success('Аватар обновлен!');
                 }
             } catch {
