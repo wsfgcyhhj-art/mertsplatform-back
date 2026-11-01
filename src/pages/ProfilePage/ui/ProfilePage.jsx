@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import cls from "../styles/profile.module.scss";
 import { useFindUser } from "../../../store/userStore.js";
-import { MdEdit, MdLockReset } from "react-icons/md";
+import { MdEdit, MdLockReset, MdRefresh, MdLinkOff } from "react-icons/md";
 import { Modal, Input, message, Row, Col, Spin } from 'antd';
 import { FaUser, FaTrophy } from "react-icons/fa";
 import { RiTelegram2Line } from "react-icons/ri";
@@ -36,6 +36,14 @@ export const ProfilePage = () => {
     const [selectedAch, setSelectedAch] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
 
+    // Состояние привязки Telegram-бота
+    const [isTelegramConnected, setIsTelegramConnected] = useState(Boolean(userInfo?.isTelegramConnected));
+    const [telegramUsername, setTelegramUsername] = useState(userInfo?.telegramUsername || null);
+    const [tgConnecting, setTgConnecting] = useState(false);
+    const [tgDisconnecting, setTgDisconnecting] = useState(false);
+    const [tgPolling, setTgPolling] = useState(false);
+    const [refreshingTgStatus, setRefreshingTgStatus] = useState(false);
+
     const loadProfileData = useCallback(async () => {
         try {
             setLoading(true);
@@ -48,6 +56,13 @@ export const ProfilePage = () => {
                 addUser(meRes.data.user);
                 setName(meRes.data.user.name || '');
                 setTelegram(meRes.data.user.telegram || '');
+            }
+            const connected = Boolean(meRes.data?.isTelegramConnected ?? meRes.data?.user?.isTelegramConnected);
+            const tgUser = meRes.data?.telegramUsername ?? meRes.data?.user?.telegramUsername ?? null;
+            setIsTelegramConnected(connected);
+            setTelegramUsername(tgUser);
+            if (connected) {
+                setTgPolling(false);
             }
             if (meRes.data?.stats) {
                 setStats(meRes.data.stats);
@@ -68,6 +83,94 @@ export const ProfilePage = () => {
         window.addEventListener('merts:refresh-achievements', onRefresh);
         return () => window.removeEventListener('merts:refresh-achievements', onRefresh);
     }, [loadProfileData]);
+
+    // Поллинг статуса привязки Telegram после перехода в бота
+    useEffect(() => {
+        if (!tgPolling || isTelegramConnected) return undefined;
+
+        let attempts = 0;
+        const intervalId = setInterval(async () => {
+            attempts += 1;
+            try {
+                const res = await api.get('/me');
+                const connected = Boolean(res.data?.isTelegramConnected ?? res.data?.user?.isTelegramConnected);
+                const tgUser = res.data?.telegramUsername ?? res.data?.user?.telegramUsername ?? null;
+                if (connected) {
+                    setIsTelegramConnected(true);
+                    setTelegramUsername(tgUser);
+                    setTgPolling(false);
+                    if (res.data?.user) addUser(res.data.user);
+                    message.success('Telegram успешно подключен!');
+                }
+            } catch {
+                // Игнорируем сетевые ошибки при фоновом поллинге
+            }
+            if (attempts >= 30) {
+                setTgPolling(false);
+            }
+        }, 4000);
+
+        return () => clearInterval(intervalId);
+    }, [tgPolling, isTelegramConnected, addUser]);
+
+    const handleConnectTelegram = async () => {
+        try {
+            setTgConnecting(true);
+            const res = await api.post('/me/telegram/connect');
+            const link = res.data?.link;
+            if (link) {
+                window.open(link, '_blank', 'noopener,noreferrer');
+                setTgPolling(true);
+                message.info('Перейдите в открывшийся Telegram-бот и нажмите «Запустить» (/start)');
+            }
+        } catch (err) {
+            message.error(err.response?.data?.message || err.response?.data?.error || 'Не удалось сгенерировать ссылку для Telegram');
+        } finally {
+            setTgConnecting(false);
+        }
+    };
+
+    const handleDisconnectTelegram = async () => {
+        try {
+            setTgDisconnecting(true);
+            await api.delete('/me/telegram/disconnect');
+            setIsTelegramConnected(false);
+            setTelegramUsername(null);
+            setTgPolling(false);
+            if (userInfo) {
+                addUser({ ...userInfo, isTelegramConnected: false, telegramUsername: null });
+            }
+            message.success('Telegram-уведомления отключены');
+        } catch (err) {
+            message.error(err.response?.data?.message || err.response?.data?.error || 'Не удалось отвязать Telegram');
+        } finally {
+            setTgDisconnecting(false);
+        }
+    };
+
+    const handleCheckTelegramStatus = async () => {
+        try {
+            setRefreshingTgStatus(true);
+            const res = await api.get('/me');
+            const connected = Boolean(res.data?.isTelegramConnected ?? res.data?.user?.isTelegramConnected);
+            const tgUser = res.data?.telegramUsername ?? res.data?.user?.telegramUsername ?? null;
+            setIsTelegramConnected(connected);
+            setTelegramUsername(tgUser);
+            if (res.data?.user) {
+                addUser(res.data.user);
+            }
+            if (connected) {
+                setTgPolling(false);
+                message.success('Telegram подключен!');
+            } else {
+                message.info('Привязка пока не завершена. Нажмите /start в боте и проверьте снова.');
+            }
+        } catch {
+            message.error('Не удалось проверить статус подключения');
+        } finally {
+            setRefreshingTgStatus(false);
+        }
+    };
 
     const handleSaveProfile = async () => {
         try {
@@ -151,195 +254,368 @@ export const ProfilePage = () => {
 
     return (
         <>
+            {/* 1. Обложка сверху */}
             <ProfileBanner />
+
             <div className={cls.profile}>
+                {/* 2. Шапка (Hero) профиля: Аватар + Имя + Никнейм + Роль слева, кнопки справа */}
                 <div className={cls.profile_info}>
                     <div className={cls.profile_infos} data-aos="fade-up">
-                        <div
-                            className={cls.profile_avatar}
-                            style={{
-                                backgroundImage: userInfo?.avatarUrl ? `url(${userInfo.avatarUrl})` : 'none',
-                                backgroundSize: 'cover',
-                                backgroundPosition: 'center',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}
-                        >
-                            {!userInfo?.avatarUrl && <FaUser style={{ fontSize: '48px', color: '#71717a' }} />}
-                            <label className={cls.profiel_change}>
-                                изменить фото
-                                <input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={handleAvatarUpload}
-                                    className={cls.file}
-                                />
-                            </label>
-                        </div>
-
-                        <div className={cls.profile_statistic_info}>
-                            <div className={cls.profile_student}>
-                                {userInfo?.role === 'ADMIN' ? 'Администратор' : 'Студент'}
+                        <div className={cls.profile_hero_left}>
+                            <div
+                                className={cls.profile_avatar}
+                                style={{
+                                    backgroundImage: userInfo?.avatarUrl ? `url(${userInfo.avatarUrl})` : 'none',
+                                    backgroundSize: 'cover',
+                                    backgroundPosition: 'center',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                }}
+                            >
+                                {!userInfo?.avatarUrl && <FaUser style={{ fontSize: '46px', color: '#71717a' }} />}
+                                <label className={cls.profiel_change}>
+                                    изменить фото
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        onChange={handleAvatarUpload}
+                                        className={cls.file}
+                                    />
+                                </label>
                             </div>
-                            <h1>{userInfo?.name || userInfo?.login}</h1>
-                            <div style={{ fontSize: '14px', color: '#a1a1aa', marginTop: '4px' }}>
-                                @{userInfo?.login}
+
+                            <div className={cls.profile_statistic_info}>
+                                <div className={cls.profile_student}>
+                                    {userInfo?.role === 'ADMIN' ? 'Администратор' : 'Студент'}
+                                </div>
+                                <h1>{userInfo?.name || userInfo?.login || 'Merts'}</h1>
+                                <div style={{ fontSize: '15px', color: '#a1a1aa', fontWeight: 500 }}>
+                                    @{userInfo?.login || 'ular'}
+                                </div>
+
+                                <div className={cls.custom_info} style={{ marginTop: '8px' }}>
+                                    <div className={cls.custom_info_content}>
+                                        <FaPeopleGroup style={{ color: '#fbbf24' }} />
+                                        Группа {userInfo?.groupNumber || '—'} (М{userInfo?.currentMonth || 1})
+                                    </div>
+                                    {userInfo?.telegram && (
+                                        <div className={cls.custom_info_content}>
+                                            <RiTelegram2Line style={{ color: '#34d399' }} />
+                                            {userInfo.telegram}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
                         <div className={cls.profile_custom}>
                             <div className={cls.profile_custom_infos}>
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button onClick={() => setEditModalOpen(true)}>
+                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditModalOpen(true)}
+                                        style={{
+                                            background: '#f59e0b',
+                                            color: '#09090b',
+                                            borderColor: '#f59e0b',
+                                            fontWeight: 700,
+                                        }}
+                                    >
                                         <MdEdit /> Редактировать
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => setPasswordModalOpen(true)}
-                                        style={{ background: '#27272a' }}
+                                        style={{ background: '#27272a', color: '#f4f4f5' }}
                                     >
                                         <MdLockReset /> Сменить пароль
                                     </button>
                                 </div>
-
-                                <div className={cls.custom_info}>
-                                    <div className={cls.custom_info_content}>
-                                        <FaUser />
-                                        {userInfo?.name || 'Имя не указано'}
-                                    </div>
-                                    <div className={cls.custom_info_content}>
-                                        <RiTelegram2Line />
-                                        {userInfo?.telegram || 'Не указан'}
-                                    </div>
-                                    <div className={cls.custom_info_content}>
-                                        <FaPeopleGroup />
-                                        Группа {userInfo?.groupNumber || '—'} (М{userInfo?.currentMonth || 1})
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Блок статистики и баллов (Цинк / Янтарь / Изумруд) */}
-                <div style={{ maxWidth: '1420px', margin: '30px auto', padding: '0 20px' }}>
-                    <Row gutter={[20, 20]}>
-                        <Col xs={24} sm={12} md={6}>
-                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
-                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Всего баллов</div>
-                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
-                                    {stats.totalScore}
-                                </div>
-                            </div>
-                        </Col>
-                        <Col xs={24} sm={12} md={6}>
-                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
-                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Принятых заданий</div>
-                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#34d399', marginTop: '4px' }}>
-                                    {stats.tasksAcceptedCount}
-                                </div>
-                            </div>
-                        </Col>
-                        <Col xs={24} sm={12} md={6}>
-                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
-                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Получено ачивок</div>
-                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
-                                    {achievements.length}
-                                </div>
-                            </div>
-                        </Col>
-                        <Col xs={24} sm={12} md={6}>
-                            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
-                                <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Текущий месяц</div>
-                                <div style={{ fontSize: '28px', fontWeight: 800, color: '#f4f4f5', marginTop: '4px' }}>
-                                    {userInfo?.currentMonth || 1}
-                                </div>
-                            </div>
-                        </Col>
-                    </Row>
+                {/* 3. Сетка статистики (4 плашки в один ряд) */}
+                <div className={cls.stats_grid}>
+                    <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                        <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Всего баллов</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
+                            {stats.totalScore}
+                        </div>
+                    </div>
+
+                    <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                        <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Принятых заданий</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#34d399', marginTop: '4px' }}>
+                            {stats.tasksAcceptedCount}
+                        </div>
+                    </div>
+
+                    <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                        <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Получено ачивок</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#fbbf24', marginTop: '4px' }}>
+                            {achievements.length}
+                        </div>
+                    </div>
+
+                    <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px 24px' }}>
+                        <div style={{ color: '#a1a1aa', fontSize: '13px' }}>Текущий месяц</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#f4f4f5', marginTop: '4px' }}>
+                            {userInfo?.currentMonth || 1}
+                        </div>
+                    </div>
                 </div>
 
-                {/* Блок достижений студента (Строго Zinc + Amber + Emerald) */}
-                <div style={{ maxWidth: '1420px', margin: '20px auto 60px auto', padding: '0 20px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                        <h2 style={{ fontSize: '22px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', color: '#f4f4f5' }}>
-                            <FaTrophy style={{ color: '#fbbf24' }} /> Мои достижения ({achievements.length})
-                        </h2>
-                        <button
-                            type="button"
-                            onClick={() => navigate('/achievements')}
+                {/* 4. Двухколоночный грид: слева (1 кол.) — Уведомления в Telegram, справа (2 кол.) — Мои достижения */}
+                <div className={`${cls.main_grid} grid grid-cols-1 lg:grid-cols-3 gap-6`}>
+                    {/* Левая колонка: Уведомления в Telegram */}
+                    <div className={`${cls.col_left} lg:col-span-1`}>
+                        <div
+                            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6"
                             style={{
                                 background: '#18181b',
-                                border: '1px solid rgba(245, 158, 11, 0.35)',
-                                color: '#fbbf24',
-                                padding: '8px 16px',
-                                borderRadius: '12px',
-                                fontSize: '14px',
-                                fontWeight: 600,
-                                cursor: 'pointer',
+                                border: isTelegramConnected
+                                    ? '1px solid rgba(16, 185, 129, 0.35)'
+                                    : '1px solid #27272a',
+                                borderRadius: '16px',
+                                padding: '24px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '18px',
                             }}
                         >
-                            Все достижения каталога →
-                        </button>
-                    </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div
+                                    style={{
+                                        width: '48px',
+                                        height: '48px',
+                                        minWidth: '48px',
+                                        borderRadius: '14px',
+                                        background: isTelegramConnected
+                                            ? 'rgba(16, 185, 129, 0.12)'
+                                            : 'rgba(245, 158, 11, 0.12)',
+                                        border: isTelegramConnected
+                                            ? '1px solid rgba(16, 185, 129, 0.35)'
+                                            : '1px solid rgba(245, 158, 11, 0.35)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: isTelegramConnected ? '#34d399' : '#fbbf24',
+                                        fontSize: '24px',
+                                    }}
+                                >
+                                    <RiTelegram2Line />
+                                </div>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#f4f4f5' }}>
+                                        Уведомления в Telegram
+                                    </h3>
+                                    {isTelegramConnected && (
+                                        <span
+                                            style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                marginTop: '6px',
+                                                padding: '3px 10px',
+                                                borderRadius: '999px',
+                                                fontSize: '12px',
+                                                fontWeight: 700,
+                                                color: '#34d399',
+                                                background: 'rgba(16, 185, 129, 0.12)',
+                                                border: '1px solid rgba(16, 185, 129, 0.35)',
+                                            }}
+                                        >
+                                            ● Подключен ({telegramUsername ? `@${telegramUsername.replace(/^@/, '')}` : 'активен'})
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
 
-                    {loading ? (
-                        <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
-                    ) : achievements.length === 0 ? (
-                        <div style={{ background: '#18181b', padding: '40px 20px', borderRadius: '16px', textAlign: 'center', border: '1px solid #27272a' }}>
-                            <p style={{ color: '#a1a1aa', fontSize: '16px', margin: 0 }}>
-                                Вы пока не получили достижений. Сдавайте домашние задания вовремя, чтобы открыть первые награды!
+                            <p style={{ margin: 0, fontSize: '14px', color: '#a1a1aa', lineHeight: 1.55 }}>
+                                Получайте мгновенные уведомления о проверке ДЗ и новых ачивках
                             </p>
-                        </div>
-                    ) : (
-                        <Row gutter={[16, 16]}>
-                            {achievements.map((ach) => (
-                                <Col xs={24} sm={12} md={8} lg={6} key={ach.id}>
-                                    <div
-                                        onClick={() => openAchievementDetail(ach)}
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {!isTelegramConnected ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={handleConnectTelegram}
+                                            disabled={tgConnecting}
+                                            style={{
+                                                width: '100%',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '8px',
+                                                background: '#f59e0b',
+                                                color: '#09090b',
+                                                border: 'none',
+                                                borderRadius: '12px',
+                                                padding: '12px 18px',
+                                                fontSize: '14px',
+                                                fontWeight: 700,
+                                                cursor: tgConnecting ? 'not-allowed' : 'pointer',
+                                                opacity: tgConnecting ? 0.7 : 1,
+                                            }}
+                                        >
+                                            <RiTelegram2Line style={{ fontSize: '18px' }} />
+                                            {tgConnecting ? 'Генерация ссылки...' : 'Подключить Telegram'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleCheckTelegramStatus}
+                                            disabled={refreshingTgStatus}
+                                            style={{
+                                                width: '100%',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px',
+                                                background: '#27272a',
+                                                color: '#e4e4e7',
+                                                border: '1px solid #3f3f46',
+                                                borderRadius: '12px',
+                                                padding: '10px 14px',
+                                                fontSize: '13px',
+                                                fontWeight: 600,
+                                                cursor: refreshingTgStatus ? 'not-allowed' : 'pointer',
+                                            }}
+                                        >
+                                            <MdRefresh style={{ fontSize: '16px' }} />
+                                            {refreshingTgStatus
+                                                ? 'Проверка...'
+                                                : tgPolling
+                                                ? 'Ожидание бота... (Обновить)'
+                                                : 'Обновить статус'}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleDisconnectTelegram}
+                                        disabled={tgDisconnecting}
                                         style={{
-                                            background: '#18181b',
-                                            border: '1px solid rgba(245, 158, 11, 0.3)',
-                                            borderRadius: '16px',
-                                            padding: '18px',
-                                            cursor: 'pointer',
-                                            transition: 'transform 0.2s ease, border-color 0.2s ease',
+                                            width: '100%',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '8px',
+                                            background: '#27272a',
+                                            color: '#f4f4f5',
+                                            border: '1px solid #3f3f46',
+                                            borderRadius: '12px',
+                                            padding: '11px 16px',
+                                            fontSize: '14px',
+                                            fontWeight: 600,
+                                            cursor: tgDisconnecting ? 'not-allowed' : 'pointer',
+                                            opacity: tgDisconnecting ? 0.7 : 1,
                                         }}
                                     >
-                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                                        <MdLinkOff style={{ fontSize: '16px', color: '#fbbf24' }} />
+                                        {tgDisconnecting ? 'Отвязка...' : 'Отвязать'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Правая колонка: Мои достижения */}
+                    <div className={`${cls.col_right} lg:col-span-2`}>
+                        <div
+                            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6"
+                            style={{
+                                background: '#18181b',
+                                border: '1px solid #27272a',
+                                borderRadius: '16px',
+                                padding: '24px',
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '20px' }}>
+                                <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', color: '#f4f4f5' }}>
+                                    <FaTrophy style={{ color: '#fbbf24' }} /> Мои достижения ({achievements.length})
+                                </h2>
+                                <button
+                                    type="button"
+                                    onClick={() => navigate('/achievements')}
+                                    style={{
+                                        background: '#09090b',
+                                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                                        color: '#fbbf24',
+                                        padding: '8px 16px',
+                                        borderRadius: '12px',
+                                        fontSize: '13px',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    Все достижения каталога →
+                                </button>
+                            </div>
+
+                            {loading ? (
+                                <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
+                            ) : achievements.length === 0 ? (
+                                <div style={{ background: '#09090b', padding: '36px 20px', borderRadius: '14px', textAlign: 'center', border: '1px solid #27272a' }}>
+                                    <p style={{ color: '#a1a1aa', fontSize: '15px', margin: 0 }}>
+                                        Вы пока не получили достижений. Сдавайте домашние задания вовремя, чтобы открыть первые награды!
+                                    </p>
+                                </div>
+                            ) : (
+                                <Row gutter={[16, 16]}>
+                                    {achievements.map((ach) => (
+                                        <Col xs={24} sm={12} key={ach.id}>
                                             <div
+                                                onClick={() => openAchievementDetail(ach)}
                                                 style={{
-                                                    width: 44,
-                                                    height: 44,
-                                                    minWidth: 44,
-                                                    borderRadius: 12,
-                                                    background: 'rgba(245, 158, 11, 0.1)',
+                                                    background: '#09090b',
                                                     border: '1px solid rgba(245, 158, 11, 0.3)',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
+                                                    borderRadius: '14px',
+                                                    padding: '16px',
+                                                    cursor: 'pointer',
+                                                    transition: 'transform 0.2s ease, border-color 0.2s ease',
+                                                    height: '100%',
                                                 }}
                                             >
-                                                <AchievementIcon name={ach.iconUrl} size={20} />
-                                            </div>
-                                            <div>
-                                                <div style={{ fontWeight: 700, fontSize: '15px', color: '#f4f4f5' }}>{ach.title}</div>
-                                                <div style={{ fontSize: '13px', color: '#a1a1aa', marginTop: 4 }}>{ach.description}</div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '10px' }}>
-                                                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24', background: 'rgba(245, 158, 11, 0.1)', padding: '2px 8px', borderRadius: 6 }}>
-                                                        +{ach.points || 10} pts
-                                                    </span>
-                                                    <span style={{ fontSize: '11px', color: '#34d399' }}>
-                                                        ✓ {new Date(ach.awardedAt).toLocaleDateString('ru-RU')}
-                                                    </span>
+                                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                                                    <div
+                                                        style={{
+                                                            width: 44,
+                                                            height: 44,
+                                                            minWidth: 44,
+                                                            borderRadius: 12,
+                                                            background: 'rgba(245, 158, 11, 0.1)',
+                                                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                        }}
+                                                    >
+                                                        <AchievementIcon name={ach.iconUrl} size={20} />
+                                                    </div>
+                                                    <div>
+                                                        <div style={{ fontWeight: 700, fontSize: '15px', color: '#f4f4f5' }}>{ach.title}</div>
+                                                        <div style={{ fontSize: '13px', color: '#a1a1aa', marginTop: 4 }}>{ach.description}</div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '10px' }}>
+                                                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24', background: 'rgba(245, 158, 11, 0.1)', padding: '2px 8px', borderRadius: 6 }}>
+                                                                +{ach.points || 10} pts
+                                                            </span>
+                                                            <span style={{ fontSize: '11px', color: '#34d399' }}>
+                                                                ✓ {new Date(ach.awardedAt).toLocaleDateString('ru-RU')}
+                                                            </span>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    </div>
-                                </Col>
-                            ))}
-                        </Row>
-                    )}
+                                        </Col>
+                                    ))}
+                                </Row>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
 

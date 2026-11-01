@@ -24,9 +24,12 @@ model User {
   login        String        @unique
   passwordHash String        @map("password_hash")
   role         Role          @default(STUDENT)
-  name         String?
-  telegram     String?
-  groupNumber  String?       @map("group_number")
+  name             String?
+  telegram         String?
+  telegramChatId   String?       @unique @map("telegram_chat_id")
+  telegramAuthCode String?       @unique @map("telegram_auth_code")
+  telegramUsername String?       @map("telegram_username")
+  groupNumber      String?       @map("group_number")
   groupId      String?       @map("group_id")
   currentMonth Int           @default(1) @map("current_month")
   avatarUrl    String?       @map("avatar_url")

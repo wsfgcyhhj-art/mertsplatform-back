@@ -41,27 +41,34 @@ export async function authenticate(
     return;
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: payload.userId },
-    select: {
-      id: true,
-      login: true,
-      role: true,
-      name: true,
-      telegram: true,
-      groupNumber: true,
-      groupId: true,
-      currentMonth: true,
-    },
-  });
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: {
+        id: true,
+        login: true,
+        role: true,
+        name: true,
+        telegram: true,
+        groupNumber: true,
+        groupId: true,
+        currentMonth: true,
+      },
+    });
 
-  if (!user) {
-    res.status(401).json({ error: 'User not found or account deactivated' });
-    return;
+    if (!user) {
+      res.status(401).json({ error: 'User not found or account deactivated' });
+      return;
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error('[Auth Middleware] Database connection error:', err);
+    res.status(503).json({
+      error: 'База данных временно недоступна, повторите попытку',
+    });
   }
-
-  req.user = user;
-  next();
 }
 
 export function requireRole(...roles: Role[]) {

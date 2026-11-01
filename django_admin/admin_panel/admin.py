@@ -88,9 +88,9 @@ class TaskAdmin(ModelAdmin):
 @admin.register(User)
 class UserAdmin(ModelAdmin):
     list_fullwidth = True
-    list_display = ('login', 'name', 'telegram', 'group_number', 'current_month', 'role')
+    list_display = ('login', 'name', 'telegram', 'telegram_username', 'group_number', 'current_month', 'role')
     list_filter = ('role', 'current_month', 'group_number')
-    search_fields = ('login', 'name', 'telegram', 'group_number')
+    search_fields = ('login', 'name', 'telegram', 'telegram_username', 'group_number')
     ordering = ('-created_at',)
 
 

@@ -1,5 +1,7 @@
+import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { prisma } from '../prisma.js';
+import { config } from '../config.js';
 import { authenticate } from '../middleware/auth.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
 import { awardAchievement } from '../services/achievementService.js';
@@ -19,6 +21,8 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
         role: true,
         name: true,
         telegram: true,
+        telegramChatId: true,
+        telegramUsername: true,
         groupNumber: true,
         groupId: true,
         currentMonth: true,
@@ -59,8 +63,17 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
   const adjustmentsScore = adjustments._sum.amount || 0;
   const totalScore = submissionsScore + adjustmentsScore;
 
+  const isTelegramConnected = Boolean(user.telegramChatId);
+  const { telegramChatId: _telegramChatId, ...safeUser } = user;
+
   res.json({
-    user,
+    user: {
+      ...safeUser,
+      isTelegramConnected,
+      telegramUsername: user.telegramUsername,
+    },
+    isTelegramConnected,
+    telegramUsername: user.telegramUsername,
     stats: {
       totalScore,
       tasksAcceptedCount,
@@ -316,4 +329,61 @@ meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Respo
     achievement,
     alreadyUnlocked: achievement === null,
   });
+});
+
+// POST /api/v1/me/telegram/connect — генерация одноразового кода и ссылки для привязки Telegram-бота
+meRouter.post('/telegram/connect', authenticate, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.id;
+    const code = crypto.randomBytes(8).toString('hex');
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { telegramAuthCode: code },
+    });
+
+    const envBot =
+      process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_BOT_USERNAME !== 'your_bot_username'
+        ? process.env.TELEGRAM_BOT_USERNAME
+        : '';
+    const botName = (envBot || 'MertsPlatform_bot').replace(/^@/, '');
+
+    res.json({
+      link: `https://t.me/${botName}?start=${code}`,
+    });
+  } catch (err) {
+    console.error('[Telegram Connect] Error generating auth code:', err);
+    res.status(503).json({
+      error: 'База данных временно недоступна, повторите попытку',
+      message: 'Не удалось сгенерировать ссылку привязки Telegram',
+    });
+  }
+});
+
+// DELETE /api/v1/me/telegram/disconnect — отвязка Telegram-бота от профиля
+meRouter.delete('/telegram/disconnect', authenticate, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.id;
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        telegramChatId: null,
+        telegramUsername: null,
+        telegramAuthCode: null,
+      },
+    });
+
+    res.json({
+      success: true,
+      isTelegramConnected: false,
+      telegramUsername: null,
+    });
+  } catch (err) {
+    console.error('[Telegram Disconnect] Error disconnecting telegram:', err);
+    res.status(503).json({
+      error: 'База данных временно недоступна, повторите попытку',
+      message: 'Не удалось отвязать Telegram',
+    });
+  }
 });

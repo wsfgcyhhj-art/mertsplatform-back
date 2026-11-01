@@ -16,4 +16,8 @@ export const config = {
     name: 'refreshToken',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in ms
   },
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'your_bot_username').replace(/^@/, ''),
+  },
 };

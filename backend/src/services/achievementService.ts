@@ -1,5 +1,6 @@
 import { prisma } from '../prisma.js';
 import { DEFAULT_ACHIEVEMENTS, ensureDefaultAchievements } from './achievements.js';
+import { sendTelegramNotification, escapeTelegramHtml } from './telegramService.js';
 
 export interface AwardedAchievementResult {
   id: string;
@@ -60,6 +61,15 @@ export async function awardAchievement(
     });
 
     const meta = DEFAULT_ACHIEVEMENTS.find((a) => a.code === achievement!.code);
+    const points = meta?.points ?? 10;
+
+    const tgMessage = [
+      '🏆 <b>Получена новая ачивка!</b>',
+      `«<b>${escapeTelegramHtml(achievement.title)}</b>» (+${points} очков)`,
+      `<i>${escapeTelegramHtml(achievement.description)}</i>`,
+    ].join('\n');
+
+    await sendTelegramNotification(userId, tgMessage);
 
     return {
       id: achievement.id,
@@ -68,7 +78,7 @@ export async function awardAchievement(
       description: achievement.description,
       iconUrl: achievement.iconUrl,
       category: achievement.category,
-      points: meta?.points ?? 10,
+      points,
       criteria: meta?.criteria ?? achievement.description,
       awardedAt: created.awardedAt,
     };

@@ -16,6 +16,7 @@ import { achievementsRouter } from './routes/achievements.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { setupSwagger } from './swagger.js';
 import { ensureDefaultAchievements } from './services/achievements.js';
+import { initTelegramBot } from './services/telegramService.js';
 
 const app = express();
 
@@ -63,6 +64,9 @@ if (process.env.NODE_ENV !== 'test') {
   ensureDefaultAchievements().catch(() => {
     // В случае отсутствия БД при локальном старте не падаем
   });
+
+  // Инициализация Telegram-бота (с graceful fallback)
+  initTelegramBot();
 
   app.listen(config.port, () => {
     console.log(`Server listening on port ${config.port}`);

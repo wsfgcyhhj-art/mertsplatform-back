@@ -3,6 +3,7 @@ import { Role, SubmissionStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { checkAndAwardAcceptedSubmission } from '../services/achievements.js';
+import { sendTelegramNotification, escapeTelegramHtml } from '../services/telegramService.js';
 
 // GET /api/v1/admin/submissions — очередь работ на проверку для ментора
 export const adminSubmissionsRouter = Router();
@@ -210,6 +211,22 @@ adminSubmissionsRouter.patch('/:id/review', async (req: Request, res: Response):
       updatedSubmission.score
     );
   }
+
+  // Персональное уведомление студенту в Telegram о проверке ДЗ
+  const statusLabel = status === 'ACCEPTED' ? '✅ Принято' : '🔄 На доработку';
+  const displayScore = updatedSubmission.score ?? 0;
+  const maxScore = updatedSubmission.task.maxScore ?? 10;
+  const feedback = updatedSubmission.reviewerComment;
+  const lines = [
+    '📝 <b>Ментор проверил ваше ДЗ!</b>',
+    `Задание: <b>${escapeTelegramHtml(updatedSubmission.task.title)}</b>`,
+    `Статус: <b>${statusLabel}</b>`,
+    `Баллы: <b>${displayScore} / ${maxScore}</b>`,
+  ];
+  if (feedback) {
+    lines.push(`Комментарий: <i>${escapeTelegramHtml(feedback)}</i>`);
+  }
+  await sendTelegramNotification(updatedSubmission.userId, lines.join('\n'));
 
   res.json({
     submission: updatedSubmission,
