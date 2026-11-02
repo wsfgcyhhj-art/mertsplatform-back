@@ -36,6 +36,16 @@ class User(models.Model):
     banner_url = models.TextField('URL баннера', blank=True, null=True)
     streak_count = models.IntegerField('Стрик (дней)', default=0)
     last_active_date = models.DateTimeField('Последняя активность', blank=True, null=True)
+    mentor = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='students',
+        db_column='mentor_id',
+        limit_choices_to={'role': RoleChoices.ADMIN},
+        verbose_name='Персональный ментор',
+    )
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)
 

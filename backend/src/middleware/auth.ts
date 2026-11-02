@@ -27,13 +27,20 @@ export async function authenticate(
   res: Response,
   next: NextFunction
 ): Promise<void> {
+  let token: string | null = null;
+
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (typeof req.query.token === 'string' && req.query.token.trim()) {
+    token = req.query.token.trim();
+  }
+
+  if (!token) {
     res.status(401).json({ error: 'Authorization token required' });
     return;
   }
 
-  const token = authHeader.split(' ')[1];
   const payload = verifyAccessToken(token);
 
   if (!payload) {

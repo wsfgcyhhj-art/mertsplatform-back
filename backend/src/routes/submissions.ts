@@ -3,7 +3,62 @@ import { Role, SubmissionStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { checkAndAwardAcceptedSubmission } from '../services/achievements.js';
-import { sendTelegramNotification, escapeTelegramHtml } from '../services/telegramService.js';
+import {
+  sendTelegramNotification,
+  escapeTelegramHtml,
+  getTelegramFileStream,
+} from '../services/telegramService.js';
+
+// Общий роутер для работы с решениями (доступен студенту-автору и менторам)
+export const submissionsRouter = Router();
+
+// GET /api/v1/submissions/:id/voice — безопасный стриминг аудиофайла голосового фидбека
+submissionsRouter.get('/:id/voice', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const user = req.user!;
+
+  const submission = await prisma.submission.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      voiceFeedbackUrl: true,
+    },
+  });
+
+  if (!submission || !submission.voiceFeedbackUrl) {
+    res.status(404).json({
+      statusCode: 404,
+      error: 'Not Found',
+      message: 'Голосовое сообщение не найдено',
+    });
+    return;
+  }
+
+  // Доступ только автору решения или администратору/ментору
+  if (user.role !== Role.ADMIN && user.id !== submission.userId) {
+    res.status(403).json({
+      statusCode: 403,
+      error: 'Forbidden',
+      message: 'У вас нет доступа к этому аудиофайлу',
+    });
+    return;
+  }
+
+  const audioStream = await getTelegramFileStream(submission.voiceFeedbackUrl);
+  if (!audioStream) {
+    res.status(404).json({
+      statusCode: 404,
+      error: 'Not Found',
+      message: 'Не удалось получить аудиофайл из Telegram',
+    });
+    return;
+  }
+
+  res.setHeader('Content-Type', audioStream.contentType || 'audio/ogg');
+  res.setHeader('Accept-Ranges', 'bytes');
+  audioStream.stream.pipe(res);
+});
 
 // GET /api/v1/admin/submissions — очередь работ на проверку для ментора
 export const adminSubmissionsRouter = Router();

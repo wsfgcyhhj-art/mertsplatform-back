@@ -36,9 +36,12 @@ model User {
   bannerUrl    String?       @map("banner_url")
   streakCount  Int           @default(0) @map("streak_count")
   lastActiveDate DateTime?   @map("last_active_date")
+  mentorId     String?       @map("mentor_id")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
+  mentor           User?                 @relation("StudentMentor", fields: [mentorId], references: [id], onDelete: SetNull)
+  students         User[]                @relation("StudentMentor")
   submissions      Submission[]
   reviews          Submission[]          @relation("MentorReviews")
   sessions         Session[]
@@ -49,6 +52,7 @@ model User {
 
   @@index([groupNumber, currentMonth])
   @@index([groupId])
+  @@index([mentorId])
 }
 
 model Session {

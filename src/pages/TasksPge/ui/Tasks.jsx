@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import cls from "../styles/task.module.scss";
 import { IoCheckmarkDoneCircleOutline, IoEyeSharp } from "react-icons/io5";
-import { FaGithub, FaHtml5, FaClock, FaExclamationTriangle } from "react-icons/fa";
+import { FaGithub, FaHtml5, FaClock, FaExclamationTriangle, FaMicrophone } from "react-icons/fa";
 import { IoLogoCss3, IoLogoJavascript } from "react-icons/io";
 import { Modal, Input, Button, Tag, Spin, message, Alert } from "antd";
-import { api } from "../../../api/client.js";
+import { api, API_BASE_URL, extractAuthToken } from "../../../api/client.js";
 import { useFindUser } from "../../../store/userStore.js";
 
 export const TaskS = () => {
@@ -387,6 +387,34 @@ export const TaskS = () => {
                                         {subItem.reviewerComment && (
                                             <div style={{ marginTop: '8px', padding: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', fontSize: '13px' }}>
                                                 <strong>Ментор:</strong> {subItem.reviewerComment}
+                                            </div>
+                                        )}
+
+                                        {subItem.voiceFeedbackUrl && (
+                                            <div
+                                                style={{
+                                                    marginTop: '10px',
+                                                    padding: '10px 14px',
+                                                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.12), rgba(239, 68, 68, 0.08))',
+                                                    border: '1px solid rgba(168, 85, 247, 0.3)',
+                                                    borderRadius: '10px',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '8px',
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#e9d5ff', fontSize: '13px', fontWeight: 600 }}>
+                                                    <FaMicrophone style={{ color: '#c084fc' }} />
+                                                    <span>Голосовой фидбек ментора</span>
+                                                </div>
+                                                <audio
+                                                    controls
+                                                    preload="none"
+                                                    style={{ width: '100%', height: '36px', outline: 'none' }}
+                                                    src={`${API_BASE_URL}/submissions/${subItem.id}/voice?token=${extractAuthToken() || ''}`}
+                                                >
+                                                    Ваш браузер не поддерживает воспроизведение аудио.
+                                                </audio>
                                             </div>
                                         )}
 

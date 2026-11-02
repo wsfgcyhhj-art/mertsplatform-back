@@ -490,3 +490,84 @@ test('Lessons Group Isolation: student sees only own group lessons and past/curr
     }
   }
 });
+
+test('Telegram Bot 2.0: personal mentor assignment, strict authorization, two-phase revision, and voice endpoint access', async () => {
+  const mentorChatId = `mentor_chat_${uniqueSuffix}`;
+  await prisma.user.update({
+    where: { id: adminUserId },
+    data: { telegramChatId: mentorChatId },
+  });
+
+  // Прикрепляем персонального ментора к студенту
+  await prisma.user.update({
+    where: { id: studentUserId },
+    data: { mentorId: adminUserId },
+  });
+
+  const sub = await prisma.submission.create({
+    data: {
+      userId: studentUserId,
+      taskId: testTaskId,
+      version: 999,
+      solutionLink: 'https://github.com/student/test-voice-repo',
+      status: 'SENT',
+    },
+  });
+
+  try {
+    // 1. Попытка ревью от постороннего пользователя без прав ментора -> ⛔ Доступ запрещен
+    const strangerResult = await processMentorCallbackDecision({
+      action: 'reject',
+      submissionId: sub.id,
+      mentorChatId: 'unauthorized_stranger_chat',
+    });
+    assert.equal(strangerResult.ok, false);
+    assert.ok(strangerResult.error?.includes('Доступ запрещен'));
+
+    // 2. Двухфазный переход: авторизованный ментор нажимает «На доработку» -> статус IN_REVIEW
+    const mentorRejectResult = await processMentorCallbackDecision({
+      action: 'reject',
+      submissionId: sub.id,
+      mentorChatId,
+    });
+    assert.equal(mentorRejectResult.ok, true);
+    assert.equal(mentorRejectResult.status, 'IN_REVIEW');
+
+    const subInReview = await prisma.submission.findUnique({ where: { id: sub.id } });
+    assert.equal(subInReview?.status, 'IN_REVIEW');
+    assert.equal(subInReview?.reviewerId, adminUserId);
+
+    // 3. Ментор присылает замечания (текст + войс) через Reply -> статус REVISION
+    const fakeReplyMsgId = `reply_msg_${uniqueSuffix}`;
+    await prisma.submission.update({
+      where: { id: sub.id },
+      data: { mentorTelegramMsgId: fakeReplyMsgId },
+    });
+
+    const replyResult = await processMentorReplyFeedback({
+      replyToMessageId: fakeReplyMsgId,
+      mentorChatId,
+      textFeedback: 'Перепиши компонент без утечки памяти',
+      voiceFileId: 'voice_file_test_abc123',
+    });
+    assert.equal(replyResult.ok, true);
+    assert.equal(replyResult.status, 'REVISION');
+
+    // 4. Проверка защищенного эндпоинта голосового фидбека GET /api/v1/submissions/:id/voice
+    // 4.1. Без токена -> 401
+    const resNoToken = await fetch(`${baseUrl}/submissions/${sub.id}/voice`);
+    assert.equal(resNoToken.status, 401);
+
+    // 4.2. С токеном студента, но когда голосовой файл недоступен в Telegram API (mock/test id) -> 404 с сообщением
+    const resVoice = await fetch(`${baseUrl}/submissions/${sub.id}/voice`, {
+      headers: { Authorization: `Bearer ${studentToken}` },
+    });
+    assert.equal(resVoice.status, 404);
+
+    // 4.3. Доступ через query param ?token= (для нативного HTML5 <audio>)
+    const resVoiceQuery = await fetch(`${baseUrl}/submissions/${sub.id}/voice?token=${studentToken}`);
+    assert.equal(resVoiceQuery.status, 404); // 404 (токен валиден, файл не найден в боте)
+  } finally {
+    await prisma.submission.deleteMany({ where: { id: sub.id } });
+  }
+});

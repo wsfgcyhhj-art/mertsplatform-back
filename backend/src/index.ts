@@ -10,7 +10,7 @@ import { adminLessonsRouter } from './routes/adminLessons.js';
 import { adminTasksRouter } from './routes/adminTasks.js';
 import { lessonsRouter } from './routes/lessons.js';
 import { tasksRouter } from './routes/tasks.js';
-import { adminSubmissionsRouter } from './routes/submissions.js';
+import { adminSubmissionsRouter, submissionsRouter } from './routes/submissions.js';
 import { leaderboardRouter, adminLeaderboardRouter } from './routes/leaderboard.js';
 import { achievementsRouter } from './routes/achievements.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
@@ -44,6 +44,7 @@ app.use('/api/v1/admin/submissions', adminSubmissionsRouter);
 app.use('/api/v1/admin/leaderboard', adminLeaderboardRouter);
 app.use('/api/v1/lessons', lessonsRouter);
 app.use('/api/v1/tasks', tasksRouter);
+app.use('/api/v1/submissions', submissionsRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
 app.use('/api/v1/achievements', achievementsRouter);
 

@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { Telegraf } from 'telegraf';
 import { Role, SubmissionStatus } from '@prisma/client';
 import { prisma } from '../prisma.js';
@@ -124,6 +125,13 @@ export async function notifyMentorsNewSubmission(
           id: true,
           name: true,
           login: true,
+          groupNumber: true,
+          mentor: {
+            select: {
+              id: true,
+              telegramChatId: true,
+            },
+          },
         },
       },
       task: {
@@ -140,16 +148,23 @@ export async function notifyMentorsNewSubmission(
     return null;
   }
 
-  const mentors = await prisma.user.findMany({
-    where: {
-      role: Role.ADMIN,
-      telegramChatId: { not: null },
-    },
-    select: {
-      id: true,
-      telegramChatId: true,
-    },
-  });
+  // Если у студента есть персональный ментор с привязанным Telegram — отправляем только ему.
+  // Иначе — фолбэк на всех активных менторов платформы.
+  let mentors: { id: string; telegramChatId: string | null }[] = [];
+  if (submission.user.mentor?.telegramChatId) {
+    mentors = [submission.user.mentor];
+  } else {
+    mentors = await prisma.user.findMany({
+      where: {
+        role: Role.ADMIN,
+        telegramChatId: { not: null },
+      },
+      select: {
+        id: true,
+        telegramChatId: true,
+      },
+    });
+  }
 
   if (mentors.length === 0) {
     return null;
@@ -164,14 +179,15 @@ export async function notifyMentorsNewSubmission(
   const studentLogin = escapeTelegramHtml(submission.user.login);
   const taskTitle = escapeTelegramHtml(submission.task.title);
   const repoUrl = escapeTelegramHtml(submission.solutionLink);
+  const groupBadge = submission.user.groupNumber ? ` (Группа ${escapeTelegramHtml(submission.user.groupNumber)})` : '';
 
   const text = [
     '📬 <b>Новое ДЗ на проверку!</b>',
-    `Студент: <b>${studentDisplayName} (@${studentLogin})</b>`,
+    `Студент: <b>${studentDisplayName} (@${studentLogin})</b>${groupBadge}`,
     `Задание: <b>${taskTitle}</b>`,
     `Репозиторий: <a href="${repoUrl}">${repoUrl}</a>`,
     '',
-    '<i>Нажмите кнопку ниже или ответьте (Reply) на это сообщение с текстом/войсом замечаний.</i>',
+    '<i>Нажмите кнопку действия ниже или ответьте (Reply) на это сообщение с замечаниями.</i>',
   ].join('\n');
 
   let lastMsgId: string | null = null;
@@ -183,6 +199,12 @@ export async function notifyMentorsNewSubmission(
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
+            [
+              {
+                text: '🔗 Открыть GitHub',
+                url: submission.solutionLink,
+              },
+            ],
             [
               {
                 text: '✅ Принять (макс. балл)',
@@ -240,14 +262,28 @@ export async function processMentorCallbackDecision(params: {
     return { ok: false, error: 'Сдача ДЗ не найдена' };
   }
 
-  const mentor = mentorChatId
-    ? await prisma.user.findUnique({
-        where: { telegramChatId: String(mentorChatId) },
-        select: { id: true },
-      })
-    : null;
+  // Строгая авторизация: если передан mentorChatId, ментор обязан существовать в БД и иметь роль ADMIN
+  let mentor: { id: string; login: string; name: string | null } | null = null;
+  if (mentorChatId) {
+    mentor = await prisma.user.findFirst({
+      where: {
+        telegramChatId: String(mentorChatId),
+        role: Role.ADMIN,
+      },
+      select: { id: true, login: true, name: true },
+    });
+
+    if (!mentor) {
+      return { ok: false, error: '⛔ Доступ запрещен: вы не являетесь ментором платформы' };
+    }
+  }
 
   if (action === 'accept') {
+    // Идемпотентность: защита от повторного клика
+    if (submission.status === SubmissionStatus.ACCEPTED) {
+      return { ok: false, error: '⚠️ Это задание уже принято ранее' };
+    }
+
     const maxScore = submission.task.maxScore ?? 10;
     const updated = await prisma.submission.update({
       where: { id: submission.id },
@@ -270,44 +306,37 @@ export async function processMentorCallbackDecision(params: {
       `Задание: <b>${escapeTelegramHtml(submission.task.title)}</b>`,
       'Статус: <b>✅ Принято</b>',
       `Баллы: <b>${maxScore} / ${maxScore}</b>`,
+      ...(mentor ? [`Проверил: <b>@${escapeTelegramHtml(mentor.login)}</b>`] : []),
     ].join('\n');
 
     await sendTelegramNotification(submission.userId, studentMsg);
 
+    const mentorSuffix = mentor ? ` ментором @${mentor.login}` : '';
     return {
       ok: true,
       status: SubmissionStatus.ACCEPTED,
       score: maxScore,
-      statusText: `✅ Принято (${maxScore} / ${maxScore} баллов)`,
+      statusText: `✅ Принято (${maxScore} / ${maxScore} баллов)${mentorSuffix}`,
     };
   }
 
-  // action === 'reject' -> REVISION (На доработку)
+  // action === 'reject' -> ДВУХФАЗНЫЙ СЦЕНАРИЙ:
+  // 1. Статус переводится в IN_REVIEW («В процессе проверки»)
+  // 2. Закрепляется ментор (если передан)
+  // 3. Ментор досылает замечания (текст/войс) через Reply, после чего статус переходит в REVISION
   await prisma.submission.update({
     where: { id: submission.id },
     data: {
-      status: SubmissionStatus.REVISION,
-      reviewedAt: new Date(),
+      status: SubmissionStatus.IN_REVIEW,
       ...(mentor ? { reviewer: { connect: { id: mentor.id } } } : {}),
     },
   });
 
-  const maxScore = submission.task.maxScore ?? 10;
-  const studentMsg = [
-    '📝 <b>Ментор проверил ваше ДЗ!</b>',
-    `Задание: <b>${escapeTelegramHtml(submission.task.title)}</b>`,
-    'Статус: <b>🔄 На доработку</b>',
-    `Баллы: <b>${submission.score ?? 0} / ${maxScore}</b>`,
-    '<i>Ментор скоро пришлет комментарий с замечаниями.</i>',
-  ].join('\n');
-
-  await sendTelegramNotification(submission.userId, studentMsg);
-
+  const mentorSuffix = mentor ? ` ментором @${mentor.login}` : '';
   return {
     ok: true,
-    status: SubmissionStatus.REVISION,
-    score: submission.score ?? 0,
-    statusText: '🔄 Отправлено на доработку',
+    status: SubmissionStatus.IN_REVIEW,
+    statusText: `⏳ В процессе проверки${mentorSuffix}`,
   };
 }
 
@@ -339,20 +368,23 @@ export async function processMentorReplyFeedback(params: {
     return { ok: false, error: 'Не найдена сдача ДЗ, привязанная к этому сообщению' };
   }
 
-  const mentor = mentorChatId
-    ? await prisma.user.findUnique({
-        where: { telegramChatId: String(mentorChatId) },
-        select: { id: true },
-      })
-    : null;
+  // Строгая проверка прав ментора: если передан mentorChatId, проверяем роль ADMIN в БД
+  let mentor: { id: string; login: string; name: string | null } | null = null;
+  if (mentorChatId) {
+    mentor = await prisma.user.findFirst({
+      where: {
+        telegramChatId: String(mentorChatId),
+        role: Role.ADMIN,
+      },
+      select: { id: true, login: true, name: true },
+    });
 
-  // Умная связка: если ментор делает Reply на ещё не проверенную работу (SENT / IN_REVIEW),
-  // автоматически переводим её в REVISION («На доработку»). Если уже ACCEPTED/REVISION — сохраняем статус.
-  const nextStatus =
-    submission.status === SubmissionStatus.ACCEPTED
-      ? SubmissionStatus.ACCEPTED
-      : SubmissionStatus.REVISION;
+    if (!mentor) {
+      return { ok: false, error: '⛔ Только авторизованный ментор платформы может отправлять фидбек' };
+    }
+  }
 
+  // При получении замечаний работа переводится в REVISION («На доработку»)
   const updateData: {
     status: SubmissionStatus;
     reviewedAt: Date;
@@ -360,13 +392,10 @@ export async function processMentorReplyFeedback(params: {
     voiceFeedbackUrl?: string;
     reviewerId?: string;
   } = {
-    status: nextStatus,
+    status: SubmissionStatus.REVISION,
     reviewedAt: new Date(),
+    ...(mentor ? { reviewerId: mentor.id } : {}),
   };
-
-  if (mentor?.id) {
-    updateData.reviewerId = mentor.id;
-  }
 
   if (textFeedback && textFeedback.trim()) {
     updateData.reviewerComment = textFeedback.trim();
@@ -381,18 +410,16 @@ export async function processMentorReplyFeedback(params: {
     data: updateData,
   });
 
-  const statusLabel =
-    updated.status === SubmissionStatus.ACCEPTED ? '✅ Принято' : '🔄 На доработку';
   const maxScore = submission.task.maxScore ?? 10;
   const displayScore = updated.score ?? 0;
 
   if (textFeedback && textFeedback.trim()) {
     const msg = [
-      '📝 <b>Ментор проверил ваше ДЗ!</b>',
+      '📝 <b>Ментор проверил ваше ДЗ и отправил на доработку!</b>',
       `Задание: <b>${escapeTelegramHtml(submission.task.title)}</b>`,
-      `Статус: <b>${statusLabel}</b>`,
+      'Статус: <b>🔄 На доработку</b>',
       `Баллы: <b>${displayScore} / ${maxScore}</b>`,
-      `Комментарий: <i>${escapeTelegramHtml(textFeedback.trim())}</i>`,
+      `Замечания ментора: <i>${escapeTelegramHtml(textFeedback.trim())}</i>`,
     ].join('\n');
 
     await sendTelegramNotification(submission.userId, msg);
@@ -400,9 +427,9 @@ export async function processMentorReplyFeedback(params: {
 
   if (voiceFileId && voiceFileId.trim()) {
     const caption = [
-      '🎙 <b>Ментор оставил голосовой фидбек к вашей работе!</b>',
+      '🎙 <b>Ментор оставил голосовой фидбек к вашей работе (на доработку)</b>',
       `Задание: <b>${escapeTelegramHtml(submission.task.title)}</b>`,
-      `Статус: <b>${statusLabel}</b>`,
+      'Статус: <b>🔄 На доработку</b>',
     ].join('\n');
 
     const voiceSent = await sendTelegramVoiceNotification(
@@ -421,6 +448,37 @@ export async function processMentorReplyFeedback(params: {
     submissionId: updated.id,
     status: updated.status,
   };
+}
+
+/**
+ * Получает потоковый доступ к аудиофайлу из Telegram API по его file_id для воспроизведения в веб-интерфейсе.
+ */
+export async function getTelegramFileStream(fileId: string): Promise<{
+  stream: NodeJS.ReadableStream;
+  contentType: string;
+} | null> {
+  const activeBot = getActiveBotInstance();
+  if (!activeBot || !fileId) {
+    return null;
+  }
+
+  try {
+    const fileLink = await activeBot.telegram.getFileLink(fileId);
+    const response = await fetch(fileLink.href);
+    if (!response.ok || !response.body) {
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') || 'audio/ogg';
+    const nodeStream = (response.body as any).pipe
+      ? (response.body as any)
+      : Readable.fromWeb(response.body as any);
+
+    return { stream: nodeStream, contentType };
+  } catch (err) {
+    console.warn(`[Telegram] Failed to get file stream for ${fileId}:`, (err as Error)?.message || err);
+    return null;
+  }
 }
 
 export function initTelegramBot(): Telegraf | null {
@@ -508,7 +566,7 @@ export function initTelegramBot(): Telegraf | null {
       try {
         const action = ctx.match[1] as 'accept' | 'reject';
         const submissionId = ctx.match[2];
-        const mentorChatId = ctx.chat?.id ? String(ctx.chat.id) : undefined;
+        const mentorChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
 
         const result = await processMentorCallbackDecision({
           action,
@@ -517,13 +575,13 @@ export function initTelegramBot(): Telegraf | null {
         });
 
         if (!result.ok) {
-          await ctx.answerCbQuery(result.error || 'Ошибка обработки');
+          await ctx.answerCbQuery(result.error || 'Ошибка обработки', { show_alert: true });
           return;
         }
 
-        await ctx.answerCbQuery(result.statusText || 'Готово');
+        await ctx.answerCbQuery(action === 'accept' ? '✅ Принято!' : '⏳ Ожидание замечаний...');
 
-        // Редактируем исходное сообщение ментора (убираем кнопки и добавляем статус)
+        // Редактируем исходное сообщение ментора (убираем кнопки и фиксируем статус)
         const originalMsg = ctx.callbackQuery.message;
         if (originalMsg && 'text' in originalMsg) {
           const updatedText = `${originalMsg.text}\n\n${result.statusText}`;
@@ -556,7 +614,7 @@ export function initTelegramBot(): Telegraf | null {
         }
 
         const replyToMessageId = String(msg.reply_to_message.message_id);
-        const mentorChatId = ctx.chat?.id ? String(ctx.chat.id) : undefined;
+        const mentorChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
         const textFeedback = msg.text;
         const voiceFileId = msg.voice?.file_id;
 
@@ -575,8 +633,10 @@ export function initTelegramBot(): Telegraf | null {
           if (voiceFileId) {
             await ctx.reply('🎤 Голосовой фидбек сохранен и отправлен студенту!');
           } else {
-            await ctx.reply('✅ Комментарий сохранен и отправлен студенту!');
+            await ctx.reply('✅ Замечания сохранены и отправлены студенту!');
           }
+        } else if (result.error && !result.error.includes('Не найдена')) {
+          await ctx.reply(result.error);
         }
       } catch (err) {
         console.error('[Telegram] Error handling mentor reply message:', err);
