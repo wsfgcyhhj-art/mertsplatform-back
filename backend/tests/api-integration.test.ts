@@ -423,3 +423,70 @@ test('Telegram Bot 2.0: mentor inline callback, reply text/voice feedback, and w
   const broadcastResult = await runWeeklyDigestBroadcast();
   assert.ok(broadcastResult.message.includes('ИТОГИ НЕДЕЛИ MERTSPLATFORM'));
 });
+
+test('Lessons Group Isolation: student sees only own group lessons and past/current months', async () => {
+  let ownLessonId = '';
+  let otherGroupLessonId = '';
+
+  try {
+    // 1. Админ создает урок для группы тестового студента ('INT-99')
+    const resCreateOwn = await fetch(`${baseUrl}/admin/lessons`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        title: `Own Group Lesson ${uniqueSuffix}`,
+        videoLink: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        groupNumber: 'INT-99',
+        month: 1,
+        order: 1,
+      }),
+    });
+    assert.equal(resCreateOwn.status, 201);
+    const ownData = (await resCreateOwn.json()) as { lesson: { id: string; groupNumber: string } };
+    assert.equal(ownData.lesson.groupNumber, 'INT-99');
+    ownLessonId = ownData.lesson.id;
+
+    // 2. Админ создает урок для чужой группы ('OTHER-77')
+    const resCreateOther = await fetch(`${baseUrl}/admin/lessons`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        title: `Other Group Lesson ${uniqueSuffix}`,
+        videoLink: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        groupNumber: 'OTHER-77',
+        month: 1,
+        order: 1,
+      }),
+    });
+    assert.equal(resCreateOther.status, 201);
+    const otherData = (await resCreateOther.json()) as { lesson: { id: string } };
+    otherGroupLessonId = otherData.lesson.id;
+
+    // 3. Студент группы 'INT-99' запрашивает уроки: видит свой урок и НЕ видит урок чужой группы
+    const resStudentLessons = await fetch(`${baseUrl}/lessons?month=1`, {
+      headers: { Authorization: `Bearer ${studentToken}` },
+    });
+    assert.equal(resStudentLessons.status, 200);
+    const studentLessonsData = (await resStudentLessons.json()) as {
+      lessons: Array<{ id: string; groupNumber: string }>;
+    };
+    assert.ok(studentLessonsData.lessons.some((l) => l.id === ownLessonId));
+    assert.equal(
+      studentLessonsData.lessons.some((l) => l.id === otherGroupLessonId),
+      false
+    );
+  } finally {
+    if (ownLessonId) {
+      await prisma.lesson.deleteMany({ where: { id: ownLessonId } });
+    }
+    if (otherGroupLessonId) {
+      await prisma.lesson.deleteMany({ where: { id: otherGroupLessonId } });
+    }
+  }
+});

@@ -34,6 +34,8 @@ model User {
   currentMonth Int           @default(1) @map("current_month")
   avatarUrl    String?       @map("avatar_url")
   bannerUrl    String?       @map("banner_url")
+  streakCount  Int           @default(0) @map("streak_count")
+  lastActiveDate DateTime?   @map("last_active_date")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
@@ -60,16 +62,17 @@ model Session {
 }
 
 model Lesson {
-  id        String   @id @default(uuid())
-  title     String
-  videoLink String   @map("video_link")
-  youtubeId String   @map("youtube_id")
-  month     Int
-  order     Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          String   @id @default(uuid())
+  title       String
+  videoLink   String   @map("video_link")
+  youtubeId   String   @map("youtube_id")
+  groupNumber String   @default("ALL") @map("group_number")
+  month       Int
+  order       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  @@index([month, order])
+  @@index([groupNumber, month, order])
 }
 
 model Task {

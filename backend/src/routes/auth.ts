@@ -10,6 +10,7 @@ import {
 } from '../utils/tokens.js';
 import { config } from '../config.js';
 import { awardAchievement } from '../services/achievementService.js';
+import { updateStreak } from '../services/streakService.js';
 
 export const authRouter = Router();
 
@@ -115,6 +116,7 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
         currentMonth: user.currentMonth,
         avatarUrl: user.avatarUrl,
         bannerUrl: user.bannerUrl,
+        streakCount: 0,
         createdAt: user.createdAt,
       },
       awardedAchievement: welcomeAchievement,
@@ -184,6 +186,8 @@ authRouter.post('/login', async (req: Request, res: Response): Promise<void> => 
     },
   });
 
+  const streakCount = await updateStreak(user.id);
+
   res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
 
   res.json({
@@ -199,6 +203,7 @@ authRouter.post('/login', async (req: Request, res: Response): Promise<void> => 
       currentMonth: user.currentMonth,
       avatarUrl: user.avatarUrl,
       bannerUrl: user.bannerUrl,
+      streakCount,
     },
   });
 });

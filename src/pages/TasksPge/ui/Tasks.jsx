@@ -5,8 +5,10 @@ import { FaGithub, FaHtml5, FaClock, FaExclamationTriangle } from "react-icons/f
 import { IoLogoCss3, IoLogoJavascript } from "react-icons/io";
 import { Modal, Input, Button, Tag, Spin, message, Alert } from "antd";
 import { api } from "../../../api/client.js";
+import { useFindUser } from "../../../store/userStore.js";
 
 export const TaskS = () => {
+    const { userInfo, addUser } = useFindUser();
     const [tasks, setTasks] = useState([]);
     const [month, setMonth] = useState(1);
     const [loading, setLoading] = useState(true);
@@ -64,10 +66,13 @@ export const TaskS = () => {
 
         try {
             setSubmitting(true);
-            await api.post(`/tasks/${selectedTask.id}/submissions`, {
+            const res = await api.post(`/tasks/${selectedTask.id}/submissions`, {
                 solutionLink: trimmedLink,
                 comment: comment.trim() || undefined,
             });
+            if (res.data?.streakCount !== undefined && userInfo) {
+                addUser({ ...userInfo, streakCount: res.data.streakCount });
+            }
             message.success('Решение успешно отправлено на проверку!');
             setSubmitModalOpen(false);
             fetchTasks();

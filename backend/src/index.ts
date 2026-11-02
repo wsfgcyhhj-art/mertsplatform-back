@@ -23,10 +23,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      return callback(null, true);
-    },
+    origin: ['http://localhost:5173', 'http://localhost:3000', /\.vercel\.app$/],
     credentials: true,
   })
 );

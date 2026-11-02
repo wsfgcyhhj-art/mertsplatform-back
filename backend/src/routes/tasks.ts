@@ -4,6 +4,7 @@ import { prisma } from '../prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { isValidGithubUrl } from '../utils/github.js';
 import { notifyMentorsNewSubmission } from '../services/telegramService.js';
+import { updateStreak } from '../services/streakService.js';
 
 export const tasksRouter = Router();
 
@@ -163,5 +164,8 @@ tasksRouter.post('/:id/submissions', async (req: Request, res: Response): Promis
   // Отправка уведомления ментору в Telegram с Inline-кнопками ревью
   await notifyMentorsNewSubmission(submission.id);
 
-  res.status(201).json({ submission });
+  // Обновление стрика активности
+  const streakCount = await updateStreak(user.id);
+
+  res.status(201).json({ submission, streakCount });
 });

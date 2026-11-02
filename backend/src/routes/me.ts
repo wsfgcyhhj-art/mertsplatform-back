@@ -28,6 +28,8 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
         currentMonth: true,
         avatarUrl: true,
         bannerUrl: true,
+        streakCount: true,
+        lastActiveDate: true,
         createdAt: true,
       },
     }),
@@ -77,6 +79,7 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
     stats: {
       totalScore,
       tasksAcceptedCount,
+      streakCount: user.streakCount || 0,
     },
   });
 });

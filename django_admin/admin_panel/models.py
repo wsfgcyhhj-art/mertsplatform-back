@@ -34,6 +34,8 @@ class User(models.Model):
     current_month = models.IntegerField('Текущий месяц', default=1)
     avatar_url = models.TextField('URL аватара', blank=True, null=True)
     banner_url = models.TextField('URL баннера', blank=True, null=True)
+    streak_count = models.IntegerField('Стрик (дней)', default=0)
+    last_active_date = models.DateTimeField('Последняя активность', blank=True, null=True)
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)
 
@@ -57,6 +59,7 @@ class Lesson(models.Model):
     title = models.CharField('Название урока', max_length=255)
     video_link = models.CharField('Ссылка на видео', max_length=500)
     youtube_id = models.CharField('YouTube ID', max_length=128, blank=True)
+    group_number = models.CharField('Номер группы', max_length=64, default='1')
     month = models.IntegerField('Месяц', default=1)
     order = models.IntegerField('Порядок', default=1)
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
@@ -67,14 +70,14 @@ class Lesson(models.Model):
         db_table = 'Lesson'
         verbose_name = 'Видеоурок'
         verbose_name_plural = 'Видеоуроки'
-        ordering = ['month', 'order']
+        ordering = ['group_number', 'month', 'order']
 
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"[Месяц {self.month} | #{self.order}] {self.title}"
+        return f"[Группа {self.group_number} | Месяц {self.month} | #{self.order}] {self.title}"
 
 
 class Task(models.Model):

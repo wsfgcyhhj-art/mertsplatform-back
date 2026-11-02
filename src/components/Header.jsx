@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import cls from '../../src/components/header.module.scss';
 import { FaHome, FaNewspaper, FaTasks, FaTrophy, FaAward, FaTerminal } from "react-icons/fa";
 import { FaBookOpenReader, FaRegMessage } from "react-icons/fa6";
@@ -11,13 +11,50 @@ import { useFindUser } from "../store/userStore.js";
 import { api } from "../api/client.js";
 import { showAchievementToast } from "./AchievementToast.jsx";
 
+function getStreakWord(count) {
+    const abs = Math.abs(count) % 100;
+    const num = abs % 10;
+    if (abs > 10 && abs < 20) return 'дней';
+    if (num > 1 && num < 5) return 'дня';
+    if (num === 1) return 'день';
+    return 'дней';
+}
+
 export const Header = () => {
-    const { userInfo, removeUser } = useFindUser();
+    const { userInfo, addUser, removeUser } = useFindUser();
     const navigate = useNavigate();
 
     const clickCountRef = useRef(0);
     const timerRef = useRef(null);
     const claimingRef = useRef(false);
+
+    useEffect(() => {
+        let isMounted = true;
+        const fetchMe = async () => {
+            try {
+                const res = await api.get('/me');
+                if (isMounted && res.data?.user) {
+                    const resolvedStreak = res.data?.stats?.streakCount ?? res.data?.user?.streakCount ?? 0;
+                    addUser({
+                        ...(userInfo || {}),
+                        ...res.data.user,
+                        streakCount: resolvedStreak,
+                    });
+                }
+            } catch {
+                // Игнорируем сетевые ошибки фоновой синхронизации
+            }
+        };
+
+        const token = localStorage.getItem('accessToken');
+        if (token) {
+            fetchMe();
+        }
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
 
     const handleLogoEasterEgg = async () => {
         if (claimingRef.current) return;
@@ -143,6 +180,40 @@ export const Header = () => {
                     >
                         <FaTerminal size={16} />
                     </div>
+
+                    {userInfo && (
+                        <div
+                            title="Дней подряд в платформе"
+                            onClick={() => navigate('/profile')}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px',
+                                margin: '46px auto -52px auto',
+                                padding: '5px 10px',
+                                borderRadius: '20px',
+                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(245, 158, 11, 0.15))',
+                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                color: '#fbbf24',
+                                cursor: 'pointer',
+                                userSelect: 'none',
+                                fontSize: '13px',
+                                fontWeight: 700,
+                                transition: 'all 0.3s ease',
+                                width: 'fit-content',
+                                maxWidth: '220px',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 2px 8px rgba(245, 158, 11, 0.15)',
+                            }}
+                        >
+                            <span style={{ fontSize: '15px', lineHeight: 1 }}>🔥</span>
+                            <span>{userInfo?.streakCount || 0}</span>
+                            <span style={{ fontSize: '11px', color: '#fed7aa', fontWeight: 600 }}>
+                                {getStreakWord(userInfo?.streakCount || 0)}
+                            </span>
+                        </div>
+                    )}
 
                     <div className={cls.feut_items}>
                         {feutersItems?.map((i) => (

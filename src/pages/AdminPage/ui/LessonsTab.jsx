@@ -7,6 +7,8 @@ import {
   Input,
   InputNumber,
   Select,
+  AutoComplete,
+  Tag,
   Space,
   Popconfirm,
   message,
@@ -25,8 +27,10 @@ const { Text, Link } = Typography;
 
 export const LessonsTab = () => {
   const [lessons, setLessons] = useState([]);
+  const [availableGroups, setAvailableGroups] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [monthFilter, setMonthFilter] = useState(1);
+  const [monthFilter, setMonthFilter] = useState(undefined);
+  const [groupFilter, setGroupFilter] = useState(undefined);
 
   // Модалка создания/редактирования
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -42,8 +46,12 @@ export const LessonsTab = () => {
     try {
       const params = {};
       if (monthFilter) params.month = monthFilter;
+      if (groupFilter) params.groupNumber = groupFilter;
       const res = await api.get('/admin/lessons', { params });
       setLessons(res.data?.lessons || []);
+      if (Array.isArray(res.data?.availableGroups)) {
+        setAvailableGroups(res.data.availableGroups);
+      }
     } catch (err) {
       console.error(err);
       message.error('Не удалось загрузить уроки');
@@ -54,14 +62,15 @@ export const LessonsTab = () => {
 
   useEffect(() => {
     fetchLessons();
-  }, [monthFilter]);
+  }, [monthFilter, groupFilter]);
 
   const openCreateModal = () => {
     setEditingLesson(null);
     form.resetFields();
     form.setFieldsValue({
+      groupNumber: groupFilter || availableGroups[0] || '',
       month: monthFilter || 1,
-      order: lessons.length,
+      order: lessons.length + 1,
     });
     setIsModalOpen(true);
   };
@@ -72,6 +81,7 @@ export const LessonsTab = () => {
     form.setFieldsValue({
       title: lesson.title,
       videoLink: lesson.videoLink,
+      groupNumber: lesson.groupNumber,
       month: lesson.month,
       order: lesson.order,
     });
@@ -95,7 +105,7 @@ export const LessonsTab = () => {
       fetchLessons();
     } catch (err) {
       console.error(err);
-      message.error(err.response?.data?.message || 'Ошибка при сохранении урока');
+      message.error(err.response?.data?.message || err.response?.data?.error || 'Ошибка при сохранении урока');
     } finally {
       setSaving(false);
     }
@@ -120,10 +130,17 @@ export const LessonsTab = () => {
       width: 60,
     },
     {
+      title: 'Группа',
+      dataIndex: 'groupNumber',
+      key: 'groupNumber',
+      width: 110,
+      render: (grp) => <Tag color="purple">Группа {grp || '—'}</Tag>,
+    },
+    {
       title: 'Месяц',
       dataIndex: 'month',
       key: 'month',
-      width: 90,
+      width: 100,
       render: (m) => `Месяц ${m}`,
     },
     {
@@ -155,7 +172,7 @@ export const LessonsTab = () => {
     {
       title: 'Действия',
       key: 'actions',
-      width: 160,
+      width: 140,
       render: (_, r) => (
         <Space>
           <Button
@@ -179,10 +196,26 @@ export const LessonsTab = () => {
     },
   ];
 
+  const groupOptions = availableGroups.map((g) => ({
+    label: `Группа ${g}`,
+    value: g,
+  }));
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-        <Space>
+        <Space wrap>
+          <Select
+            style={{ width: 160 }}
+            placeholder="Все группы"
+            allowClear
+            value={groupFilter}
+            onChange={setGroupFilter}
+            options={[
+              { label: 'Все группы', value: undefined },
+              ...groupOptions,
+            ]}
+          />
           <Select
             style={{ width: 140 }}
             value={monthFilter}
@@ -194,6 +227,7 @@ export const LessonsTab = () => {
               { label: '3 месяц', value: 3 },
               { label: '4 месяц', value: 4 },
               { label: '5 месяц', value: 5 },
+              { label: '6 месяц', value: 6 },
             ]}
           />
           <Button icon={<ReloadOutlined />} onClick={fetchLessons}>
@@ -230,6 +264,22 @@ export const LessonsTab = () => {
             rules={[{ required: true, message: 'Введите название урока' }]}
           >
             <Input placeholder="Например: Архитектура React и хуки состояния" />
+          </Form.Item>
+
+          <Form.Item
+            label="Учебная группа (выберите из списка или введите новую)"
+            name="groupNumber"
+            rules={[{ required: true, message: 'Укажите номер группы (например: 15)' }]}
+          >
+            <AutoComplete
+              options={availableGroups.map((g) => ({ value: g, label: `Группа ${g}` }))}
+              placeholder="Выберите существующую группу или введите номер (напр. 15)"
+              filterOption={(inputValue, option) =>
+                String(option?.value ?? '')
+                  .toLowerCase()
+                  .includes(inputValue.toLowerCase())
+              }
+            />
           </Form.Item>
 
           <Form.Item

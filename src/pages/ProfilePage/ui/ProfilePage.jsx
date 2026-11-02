@@ -441,6 +441,18 @@ export const ProfilePage = () => {
                                         <FaPeopleGroup style={{ color: '#fbbf24' }} />
                                         Группа {userInfo?.groupNumber || '—'} (М{userInfo?.currentMonth || 1})
                                     </div>
+                                    <div
+                                        className={cls.custom_info_content}
+                                        title="Дней подряд в платформе"
+                                        style={{
+                                            border: '1px solid rgba(245, 158, 11, 0.35)',
+                                            background: 'rgba(245, 158, 11, 0.1)',
+                                            color: '#fbbf24',
+                                        }}
+                                    >
+                                        <span>🔥</span>
+                                        Стрик: {userInfo?.streakCount || 0} дн.
+                                    </div>
                                     {userInfo?.telegram && (
                                         <div className={cls.custom_info_content}>
                                             <RiTelegram2Line style={{ color: '#34d399' }} />

@@ -1,6 +1,8 @@
 import re
+from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from django.utils import timezone
 from unfold.admin import ModelAdmin
 from .models import (
@@ -62,17 +64,67 @@ class SubmissionAdmin(ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
+class DatalistTextInput(forms.TextInput):
+    def __init__(self, datalist_options=None, *args, **kwargs):
+        self.datalist_options = datalist_options or []
+        super().__init__(*args, **kwargs)
+
+    def render(self, name, value, attrs=None, renderer=None):
+        datalist_id = f"id_{name}_datalist"
+        attrs = dict(attrs or {})
+        attrs['list'] = datalist_id
+        attrs.setdefault('placeholder', 'Выберите из списка или введите номер группы (напр. 15)')
+        input_html = super().render(name, value, attrs, renderer)
+        options_html = ''.join(
+            f'<option value="{opt}"></option>' for opt in self.datalist_options if opt
+        )
+        return mark_safe(f'{input_html}<datalist id="{datalist_id}">{options_html}</datalist>')
+
+
 @admin.register(Lesson)
 class LessonAdmin(ModelAdmin):
     list_fullwidth = True
-    list_display = ('title', 'month', 'order', 'youtube_id')
-    list_filter = ('month',)
-    search_fields = ('title', 'youtube_id')
-    ordering = ('month', 'order')
+    list_display = ('title', 'group_number', 'month', 'order', 'youtube_id')
+    list_filter = ('group_number', 'month')
+    search_fields = ('title', 'group_number', 'youtube_id')
+    list_editable = ('group_number', 'month', 'order')
+    ordering = ('group_number', 'month', 'order')
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        try:
+            user_groups = (
+                User.objects.exclude(group_number__isnull=True)
+                .exclude(group_number='')
+                .values_list('group_number', flat=True)
+                .distinct()
+            )
+            lesson_groups = (
+                Lesson.objects.exclude(group_number__isnull=True)
+                .exclude(group_number='')
+                .values_list('group_number', flat=True)
+                .distinct()
+            )
+            groups = sorted({g.strip() for g in list(user_groups) + list(lesson_groups) if g and g.strip()})
+        except Exception:
+            groups = []
+
+        if 'group_number' in form.base_fields:
+            existing_attrs = form.base_fields['group_number'].widget.attrs
+            form.base_fields['group_number'].widget = DatalistTextInput(
+                datalist_options=groups,
+                attrs=existing_attrs,
+            )
+            form.base_fields['group_number'].help_text = (
+                'Выберите существующую группу из выпадающего списка или введите номер новой группы.'
+            )
+        return form
 
     def save_model(self, request, obj, form, change):
         if obj.video_link and not obj.youtube_id:
             obj.youtube_id = extract_youtube_id(obj.video_link)
+        if obj.group_number:
+            obj.group_number = obj.group_number.strip()
         super().save_model(request, obj, form, change)
 
 
@@ -88,7 +140,7 @@ class TaskAdmin(ModelAdmin):
 @admin.register(User)
 class UserAdmin(ModelAdmin):
     list_fullwidth = True
-    list_display = ('login', 'name', 'telegram', 'telegram_username', 'group_number', 'current_month', 'role')
+    list_display = ('login', 'name', 'telegram', 'telegram_username', 'group_number', 'current_month', 'streak_count', 'role')
     list_filter = ('role', 'current_month', 'group_number')
     search_fields = ('login', 'name', 'telegram', 'telegram_username', 'group_number')
     ordering = ('-created_at',)
