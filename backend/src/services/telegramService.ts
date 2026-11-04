@@ -108,6 +108,11 @@ export async function sendTelegramMessageToChatId(
   chatId: string,
   text: string
 ): Promise<boolean> {
+  // В тестовом окружении реальные сетевые сообщения в Telegram глушатся
+  if (process.env.NODE_ENV === 'test') {
+    return true;
+  }
+
   const activeBot = getActiveBotInstance();
   if (!activeBot || !chatId || chatId === 'your_channel_or_group_id' || !isValidTelegramChatId(chatId)) {
     return false;
@@ -159,6 +164,11 @@ export async function sendTelegramVoiceNotification(
   voiceFileId: string,
   caption?: string
 ): Promise<boolean> {
+  // В тестовом окружении реальные сетевые вызовы к Telegram глушатся
+  if (process.env.NODE_ENV === 'test') {
+    return true;
+  }
+
   const activeBot = getActiveBotInstance();
   if (!activeBot || !voiceFileId) {
     return false;
@@ -244,6 +254,16 @@ export async function notifyMentorsNewSubmission(
 
   if (mentors.length === 0) {
     return null;
+  }
+
+  // В тестовом окружении реальные сетевые сообщения в Telegram менторам глушатся
+  if (process.env.NODE_ENV === 'test') {
+    const mockMsgId = `mock_tg_msg_${Date.now()}`;
+    await prisma.submission.update({
+      where: { id: submission.id },
+      data: { mentorTelegramMsgId: mockMsgId },
+    });
+    return mockMsgId;
   }
 
   const activeBot = getActiveBotInstance();
