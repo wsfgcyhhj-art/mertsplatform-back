@@ -13,6 +13,7 @@ import { tasksRouter } from './routes/tasks.js';
 import { adminSubmissionsRouter, submissionsRouter } from './routes/submissions.js';
 import { leaderboardRouter, adminLeaderboardRouter } from './routes/leaderboard.js';
 import { achievementsRouter } from './routes/achievements.js';
+import { healthRouter, handleHealthCheck } from './routes/health.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { setupSwagger } from './swagger.js';
 import { ensureDefaultAchievements } from './services/achievements.js';
@@ -47,10 +48,11 @@ app.use('/api/v1/tasks', tasksRouter);
 app.use('/api/v1/submissions', submissionsRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
 app.use('/api/v1/achievements', achievementsRouter);
+app.use('/api/v1/health', healthRouter);
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'merts-backend' });
-});
+// Healthcheck endpoints for uptime monitoring (Render, UptimeRobot, k8s)
+app.get('/health', handleHealthCheck);
+app.get('/healthz', handleHealthCheck);
 
 // 404 & Global Error Middleware
 app.use(notFoundHandler);

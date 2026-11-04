@@ -9,6 +9,11 @@ import { runWeeklyDigestBroadcast } from './cronService.js';
 let bot: Telegraf | null = null;
 let isBotActive = false;
 
+export function getTelegramBotStatus(): 'active' | 'disabled' | 'starting' {
+  if (!isTelegramTokenConfigured()) return 'disabled';
+  return isBotActive ? 'active' : 'starting';
+}
+
 export function isTelegramTokenConfigured(token?: string): boolean {
   const raw = (token ?? config.telegram.botToken ?? '').trim();
   return Boolean(raw && raw !== 'your_bot_token_here');
