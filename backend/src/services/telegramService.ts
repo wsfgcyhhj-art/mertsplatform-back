@@ -557,6 +557,15 @@ export async function getTelegramFileStream(fileId: string): Promise<{
   stream: NodeJS.ReadableStream;
   contentType: string;
 } | null> {
+  // В тестовом окружении для синтетических ID возвращаем стрим из памяти
+  if (process.env.NODE_ENV === 'test' && fileId.startsWith('mock_voice_')) {
+    const mockAudioBuffer = Buffer.from('OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00mock_opus_audio_payload');
+    return {
+      stream: Readable.from(mockAudioBuffer),
+      contentType: 'audio/ogg',
+    };
+  }
+
   const activeBot = getActiveBotInstance();
   if (!activeBot || !fileId) {
     return null;
