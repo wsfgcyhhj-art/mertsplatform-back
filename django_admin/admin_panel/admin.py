@@ -137,14 +137,70 @@ class TaskAdmin(ModelAdmin):
     ordering = ('month', 'order')
 
 
+class UserAdminForm(forms.ModelForm):
+    telegram_chat_id = forms.CharField(
+        label='Telegram Chat ID',
+        required=False,
+        help_text='Числовой Chat ID ментора в Telegram для получения карточек сдачи ДЗ',
+        widget=forms.TextInput(attrs={'placeholder': 'например, 123456789 или -1001234567890'}),
+    )
+
+    class Meta:
+        model = User
+        fields = '__all__'
+
+    def clean_telegram_chat_id(self):
+        val = self.cleaned_data.get('telegram_chat_id')
+        if not val:
+            return None
+        val = val.strip()
+        if not re.match(r'^-?\d+$', val):
+            raise forms.ValidationError('Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов).')
+        return val
+
+
 @admin.register(User)
 class UserAdmin(ModelAdmin):
+    form = UserAdminForm
     list_fullwidth = True
-    list_display = ('login', 'name', 'mentor', 'telegram', 'telegram_username', 'group_number', 'current_month', 'streak_count', 'role')
+    list_display = (
+        'login',
+        'name',
+        'mentor',
+        'telegram',
+        'telegram_username',
+        'telegram_chat_id',
+        'group_number',
+        'current_month',
+        'streak_count',
+        'role',
+    )
     list_filter = ('role', 'mentor', 'current_month', 'group_number')
-    search_fields = ('login', 'name', 'telegram', 'telegram_username', 'group_number')
+    search_fields = ('login', 'name', 'telegram', 'telegram_username', 'telegram_chat_id', 'group_number')
     raw_id_fields = ('mentor',)
     ordering = ('-created_at',)
+    readonly_fields = ('id', 'created_at', 'updated_at')
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('login', 'name', 'role', 'password_hash'),
+        }),
+        ('Telegram и бот', {
+            'fields': ('telegram_chat_id', 'telegram', 'telegram_username', 'telegram_auth_code'),
+            'description': 'Настройки для бота Telegraf. Числовой Chat ID используется для роутинга карточек сдачи ДЗ менторам и отправки уведомлений.',
+        }),
+        ('Обучение и менторство', {
+            'fields': ('mentor', 'group_number', 'group_id', 'current_month', 'streak_count', 'last_active_date'),
+        }),
+        ('Оформление профиля', {
+            'fields': ('avatar_url', 'banner_url'),
+            'classes': ('collapse',),
+        }),
+        ('Системная информация', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',),
+        }),
+    )
 
 
 @admin.register(ScoreAdjustment)

@@ -21,6 +21,77 @@ export function escapeTelegramHtml(input: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/**
+ * Проверяет, что Telegram Chat ID состоит только из цифр (с поддержкой отрицательных значений для групп/супергрупп).
+ */
+export function isValidTelegramChatId(chatId?: string | number | null): boolean {
+  if (chatId === null || chatId === undefined) return false;
+  const str = String(chatId).trim();
+  return /^-?\d+$/.test(str);
+}
+
+/**
+ * Вспомогательный метод привязки Telegram Chat ID ментора с валидацией роли ADMIN и уникальности.
+ */
+export async function bindMentorTelegramChatId(
+  mentorLoginOrId: string,
+  telegramChatId: string | number
+): Promise<{
+  ok: boolean;
+  user?: { id: string; login: string; telegramChatId: string | null };
+  error?: string;
+}> {
+  const cleanChatId = String(telegramChatId).trim();
+  if (!isValidTelegramChatId(cleanChatId)) {
+    return {
+      ok: false,
+      error: 'Telegram Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов)',
+    };
+  }
+
+  const mentor = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { id: mentorLoginOrId },
+        { login: mentorLoginOrId },
+      ],
+    },
+  });
+
+  if (!mentor) {
+    return { ok: false, error: 'Пользователь не найден' };
+  }
+
+  if (mentor.role !== Role.ADMIN) {
+    return {
+      ok: false,
+      error: 'Пользователь не является ментором/администратором (роль должна быть ADMIN)',
+    };
+  }
+
+  const existingWithChatId = await prisma.user.findFirst({
+    where: {
+      telegramChatId: cleanChatId,
+      NOT: { id: mentor.id },
+    },
+  });
+
+  if (existingWithChatId) {
+    return {
+      ok: false,
+      error: `Этот Telegram Chat ID уже привязан к другому пользователю: @${existingWithChatId.login}`,
+    };
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: mentor.id },
+    data: { telegramChatId: cleanChatId },
+    select: { id: true, login: true, telegramChatId: true },
+  });
+
+  return { ok: true, user: updated };
+}
+
 function getActiveBotInstance(): Telegraf | null {
   if (!isTelegramTokenConfigured()) {
     return null;
@@ -33,7 +104,7 @@ export async function sendTelegramMessageToChatId(
   text: string
 ): Promise<boolean> {
   const activeBot = getActiveBotInstance();
-  if (!activeBot || !chatId || chatId === 'your_channel_or_group_id') {
+  if (!activeBot || !chatId || chatId === 'your_channel_or_group_id' || !isValidTelegramChatId(chatId)) {
     return false;
   }
 
@@ -67,7 +138,7 @@ export async function sendTelegramNotification(
       select: { telegramChatId: true },
     });
 
-    if (!user?.telegramChatId) {
+    if (!user?.telegramChatId || !isValidTelegramChatId(user.telegramChatId)) {
       return false;
     }
 
@@ -94,7 +165,7 @@ export async function sendTelegramVoiceNotification(
       select: { telegramChatId: true },
     });
 
-    if (!user?.telegramChatId) {
+    if (!user?.telegramChatId || !isValidTelegramChatId(user.telegramChatId)) {
       return false;
     }
 
@@ -194,6 +265,10 @@ export async function notifyMentorsNewSubmission(
 
   for (const mentor of mentors) {
     if (!mentor.telegramChatId) continue;
+    if (!isValidTelegramChatId(mentor.telegramChatId)) {
+      console.warn(`[Telegram] Skipping mentor ${mentor.id} with non-numeric telegramChatId: ${mentor.telegramChatId}`);
+      continue;
+    }
     try {
       const sent = await activeBot.telegram.sendMessage(mentor.telegramChatId, text, {
         parse_mode: 'HTML',

@@ -1,6 +1,12 @@
 import uuid
 from django.db import models
 from django.utils import timezone
+from django.core.validators import RegexValidator
+
+chat_id_validator = RegexValidator(
+    regex=r'^-?\d+$',
+    message='Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов).'
+)
 
 
 def generate_uuid() -> str:
@@ -26,7 +32,15 @@ class User(models.Model):
     role = models.CharField('Роль', max_length=32, choices=RoleChoices.choices, default=RoleChoices.STUDENT)
     name = models.CharField('Имя', max_length=255, blank=True, null=True)
     telegram = models.CharField('Telegram', max_length=255, blank=True, null=True)
-    telegram_chat_id = models.CharField('Telegram Chat ID', max_length=255, unique=True, blank=True, null=True)
+    telegram_chat_id = models.CharField(
+        'Telegram Chat ID',
+        max_length=255,
+        unique=True,
+        blank=True,
+        null=True,
+        validators=[chat_id_validator],
+        help_text='Числовой Chat ID ментора в Telegram для получения карточек сдачи ДЗ',
+    )
     telegram_auth_code = models.CharField('Telegram код привязки', max_length=255, unique=True, blank=True, null=True)
     telegram_username = models.CharField('Telegram Username', max_length=255, blank=True, null=True)
     group_number = models.CharField('Номер группы', max_length=64, blank=True, null=True)
@@ -58,6 +72,8 @@ class User(models.Model):
 
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
+        if self.telegram_chat_id:
+            self.telegram_chat_id = self.telegram_chat_id.strip() or None
         super().save(*args, **kwargs)
 
     def __str__(self):

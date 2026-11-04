@@ -4,6 +4,7 @@ import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../utils/password.js';
 import { checkScoreThresholds } from '../services/achievementService.js';
+import { isValidTelegramChatId } from '../services/telegramService.js';
 
 export const adminUsersRouter = Router();
 
@@ -16,9 +17,21 @@ const userSelectWithoutPassword = {
   role: true,
   name: true,
   telegram: true,
+  telegramChatId: true,
+  telegramUsername: true,
+  mentorId: true,
+  mentor: {
+    select: {
+      id: true,
+      name: true,
+      login: true,
+      telegramChatId: true,
+    },
+  },
   groupNumber: true,
   groupId: true,
   currentMonth: true,
+  streakCount: true,
   avatarUrl: true,
   bannerUrl: true,
   createdAt: true,
@@ -57,7 +70,18 @@ adminUsersRouter.get('/', async (req: Request, res: Response): Promise<void> => 
 
 // POST /api/v1/admin/users
 adminUsersRouter.post('/', async (req: Request, res: Response): Promise<void> => {
-  const { login, password, groupNumber, groupId, currentMonth, role, name, telegram } = req.body;
+  const {
+    login,
+    password,
+    groupNumber,
+    groupId,
+    currentMonth,
+    role,
+    name,
+    telegram,
+    telegramChatId,
+    mentorId,
+  } = req.body;
 
   if (!login || typeof login !== 'string' || !password || typeof password !== 'string') {
     res.status(400).json({ error: 'Login and password are required' });
@@ -78,6 +102,35 @@ adminUsersRouter.post('/', async (req: Request, res: Response): Promise<void> =>
     ? (telegram.trim().startsWith('@') ? telegram.trim() : `@${telegram.trim()}`)
     : null;
 
+  let cleanChatId: string | null = null;
+  if (telegramChatId !== undefined && telegramChatId !== null && String(telegramChatId).trim()) {
+    cleanChatId = String(telegramChatId).trim();
+    if (!isValidTelegramChatId(cleanChatId)) {
+      res.status(400).json({
+        error: 'Invalid telegramChatId',
+        message: 'Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов)',
+      });
+      return;
+    }
+    const existingChat = await prisma.user.findUnique({
+      where: { telegramChatId: cleanChatId },
+    });
+    if (existingChat) {
+      res.status(409).json({ error: 'telegramChatId is already in use by another user' });
+      return;
+    }
+  }
+
+  let cleanMentorId: string | null = null;
+  if (mentorId !== undefined && mentorId !== null && String(mentorId).trim()) {
+    cleanMentorId = String(mentorId).trim();
+    const mentorUser = await prisma.user.findUnique({ where: { id: cleanMentorId } });
+    if (!mentorUser || mentorUser.role !== Role.ADMIN) {
+      res.status(400).json({ error: 'Specified mentor must exist and have role ADMIN' });
+      return;
+    }
+  }
+
   try {
     const newUser = await prisma.user.create({
       data: {
@@ -86,6 +139,8 @@ adminUsersRouter.post('/', async (req: Request, res: Response): Promise<void> =>
         role: targetRole,
         name: typeof name === 'string' ? name.trim() : null,
         telegram: cleanTg,
+        telegramChatId: cleanChatId,
+        mentorId: cleanMentorId,
         groupNumber: groupNumber ? String(groupNumber).trim() : null,
         groupId: groupId ? String(groupId).trim() : (groupNumber ? String(groupNumber).trim() : null),
         currentMonth: isNaN(monthNum) ? 1 : monthNum,
@@ -192,7 +247,17 @@ adminUsersRouter.post('/bulk', async (req: Request, res: Response): Promise<void
 // PATCH /api/v1/admin/users/:id
 adminUsersRouter.patch('/:id', async (req: Request, res: Response): Promise<void> => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { groupNumber, groupId, currentMonth, role, password, name, telegram } = req.body;
+  const {
+    groupNumber,
+    groupId,
+    currentMonth,
+    role,
+    password,
+    name,
+    telegram,
+    telegramChatId,
+    mentorId,
+  } = req.body;
 
   const existingUser = await prisma.user.findUnique({
     where: { id },
@@ -204,6 +269,46 @@ adminUsersRouter.patch('/:id', async (req: Request, res: Response): Promise<void
   }
 
   const updateData: Prisma.UserUpdateInput = {};
+
+  if (telegramChatId !== undefined) {
+    if (telegramChatId === null || (typeof telegramChatId === 'string' && !telegramChatId.trim())) {
+      updateData.telegramChatId = null;
+    } else {
+      const cleanChatId = String(telegramChatId).trim();
+      if (!isValidTelegramChatId(cleanChatId)) {
+        res.status(400).json({
+          error: 'Invalid telegramChatId',
+          message: 'Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов)',
+        });
+        return;
+      }
+      const existingChat = await prisma.user.findFirst({
+        where: {
+          telegramChatId: cleanChatId,
+          NOT: { id },
+        },
+      });
+      if (existingChat) {
+        res.status(409).json({ error: 'telegramChatId is already in use by another user' });
+        return;
+      }
+      updateData.telegramChatId = cleanChatId;
+    }
+  }
+
+  if (mentorId !== undefined) {
+    if (mentorId === null || (typeof mentorId === 'string' && !mentorId.trim())) {
+      updateData.mentor = { disconnect: true };
+    } else {
+      const cleanMentorId = String(mentorId).trim();
+      const mentorUser = await prisma.user.findUnique({ where: { id: cleanMentorId } });
+      if (!mentorUser || mentorUser.role !== Role.ADMIN) {
+        res.status(400).json({ error: 'Specified mentor must exist and have role ADMIN' });
+        return;
+      }
+      updateData.mentor = { connect: { id: cleanMentorId } };
+    }
+  }
 
   if (groupNumber !== undefined) {
     updateData.groupNumber = groupNumber ? String(groupNumber).trim() : null;
