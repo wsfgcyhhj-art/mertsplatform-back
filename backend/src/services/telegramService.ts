@@ -556,6 +556,87 @@ export async function getTelegramFileStream(fileId: string): Promise<{
   }
 }
 
+/**
+ * Безопасно останавливает polling Telegram-бота и освобождает ресурсы.
+ */
+export async function stopTelegramBot(reason = 'SIGTERM'): Promise<void> {
+  if (!bot) {
+    return;
+  }
+  try {
+    if (isBotActive) {
+      console.log(`[Telegram] Stopping bot polling (reason: ${reason})...`);
+      isBotActive = false;
+      bot.stop(reason);
+      console.log('[Telegram] Bot polling stopped successfully.');
+    }
+  } catch (err: unknown) {
+    const msg = (err as Error)?.message || String(err);
+    if (!msg.includes('Bot is not running')) {
+      console.warn('[Telegram] Warning while stopping bot:', msg);
+    }
+  }
+}
+
+/**
+ * Запускает polling бота с Exponential Retry Backoff при ошибке 409 Conflict и сбоях сети.
+ * Это предотвращает крах бота при деплоях на Render, когда старый контейнер еще удерживает getUpdates.
+ */
+export async function launchBotWithRetry(
+  botInstance: Telegraf,
+  maxAttempts = 5,
+  initialDelayMs = 2000
+): Promise<boolean> {
+  let attempt = 0;
+  let delayMs = initialDelayMs;
+
+  while (attempt < maxAttempts) {
+    attempt++;
+    try {
+      try {
+        await botInstance.telegram.deleteWebhook({ drop_pending_updates: false });
+      } catch {
+        // Игнорируем сетевые ошибки на удалении вебхука
+      }
+
+      await botInstance.launch();
+      isBotActive = true;
+      console.log(`[Telegram] Bot successfully started polling (attempt ${attempt})`);
+      return true;
+    } catch (err: unknown) {
+      isBotActive = false;
+      const errorMsg = (err as Error)?.message || String(err);
+      const is409 = errorMsg.includes('409') || errorMsg.includes('Conflict');
+
+      if (is409 && attempt < maxAttempts) {
+        console.warn(
+          `[Telegram] 409 Conflict: previous bot instance is still active on Render. Waiting ${delayMs}ms before retry (attempt ${attempt}/${maxAttempts})...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        delayMs = Math.min(delayMs * 2, 16000);
+        continue;
+      }
+
+      console.warn(`[Telegram] Failed to launch bot polling on attempt ${attempt}:`, errorMsg);
+      if (
+        attempt < maxAttempts &&
+        (errorMsg.includes('ETIMEDOUT') ||
+          errorMsg.includes('ECONNRESET') ||
+          errorMsg.includes('ENOTFOUND'))
+      ) {
+        console.log(`[Telegram] Network timeout. Retrying in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        delayMs = Math.min(delayMs * 2, 16000);
+        continue;
+      }
+
+      break;
+    }
+  }
+
+  return false;
+}
+
 export function initTelegramBot(): Telegraf | null {
   const token = config.telegram.botToken.trim();
 
@@ -566,8 +647,22 @@ export function initTelegramBot(): Telegraf | null {
     return null;
   }
 
+  // Синглтон-гард: если бот уже был создан, останавливаем предыдущий
+  if (bot && isBotActive) {
+    stopTelegramBot('REINIT').catch(() => {});
+  }
+
   try {
     bot = new Telegraf(token);
+
+    // Глобальный перехватчик необработанных ошибок Telegraf
+    bot.catch((err, ctx) => {
+      const updateId = ctx?.update?.update_id ?? 'unknown';
+      console.error(
+        `[Telegram] Unhandled error while processing update ${updateId}:`,
+        (err as Error)?.message || err
+      );
+    });
 
     bot.start(async (ctx) => {
       try {
@@ -718,23 +813,16 @@ export function initTelegramBot(): Telegraf | null {
       }
     });
 
-    bot
-      .launch()
-      .then(() => {
-        isBotActive = true;
-        console.log('[Telegram] Bot successfully started polling');
-      })
-      .catch((err) => {
-        isBotActive = false;
-        console.warn('[Telegram] Failed to launch bot polling (continuing without bot):', err?.message || err);
-      });
+    // Асинхронный запуск с retry backoff при 409 Conflict
+    launchBotWithRetry(bot).catch((err) => {
+      console.warn('[Telegram] Background polling failed:', (err as Error)?.message || err);
+    });
 
-    process.once('SIGINT', () => {
-      if (bot && isBotActive) bot.stop('SIGINT');
-    });
-    process.once('SIGTERM', () => {
-      if (bot && isBotActive) bot.stop('SIGTERM');
-    });
+    const onSignal = (sig: string) => {
+      stopTelegramBot(sig).catch(() => {});
+    };
+    process.once('SIGINT', () => onSignal('SIGINT'));
+    process.once('SIGTERM', () => onSignal('SIGTERM'));
 
     return bot;
   } catch (err) {

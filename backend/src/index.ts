@@ -16,8 +16,8 @@ import { achievementsRouter } from './routes/achievements.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { setupSwagger } from './swagger.js';
 import { ensureDefaultAchievements } from './services/achievements.js';
-import { initTelegramBot } from './services/telegramService.js';
-import { initWeeklyDigestCron } from './services/cronService.js';
+import { initTelegramBot, stopTelegramBot } from './services/telegramService.js';
+import { initWeeklyDigestCron, stopWeeklyDigestCron } from './services/cronService.js';
 
 const app = express();
 
@@ -70,8 +70,54 @@ if (process.env.NODE_ENV !== 'test') {
   // Инициализация крона еженедельного дайджеста (каждый понедельник в 10:00)
   initWeeklyDigestCron();
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log(`Server listening on port ${config.port}`);
     console.log(`Swagger documentation available at http://localhost:${config.port}/api/docs`);
   });
+
+  // Централизованный Graceful Shutdown для Render / Docker / Dev
+  const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
+  let isShuttingDown = false;
+
+  for (const signal of signals) {
+    process.on(signal, async () => {
+      if (isShuttingDown) return;
+      isShuttingDown = true;
+      console.log(`[Server] Received ${signal}. Starting graceful shutdown...`);
+
+      // Страховочный таймаут принудительного выхода (10s)
+      const forceExitTimer = setTimeout(() => {
+        console.error('[Server] Graceful shutdown timed out (10s). Forcing process exit.');
+        process.exit(1);
+      }, 10000);
+      forceExitTimer.unref();
+
+      try {
+        // 1. Остановка приема новых HTTP-запросов
+        await new Promise<void>((resolve) => {
+          server.close((err) => {
+            if (err) console.warn('[Server] Error while closing HTTP server:', err);
+            else console.log('[Server] HTTP server stopped accepting connections.');
+            resolve();
+          });
+        });
+
+        // 2. Остановка Telegram-бота (отмена polling соединения)
+        await stopTelegramBot(signal);
+
+        // 3. Остановка запланированных крон-задач
+        stopWeeklyDigestCron();
+
+        // 4. Отключение пула соединений Prisma
+        await prisma.$disconnect();
+        console.log('[Server] Prisma disconnected.');
+
+        console.log('[Server] Graceful shutdown completed cleanly.');
+        process.exit(0);
+      } catch (err) {
+        console.error('[Server] Error during graceful shutdown:', err);
+        process.exit(1);
+      }
+    });
+  }
 }

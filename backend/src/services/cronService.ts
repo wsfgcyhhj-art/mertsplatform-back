@@ -196,10 +196,23 @@ export async function runWeeklyDigestBroadcast(): Promise<{
   }
 }
 
+let digestTask: ReturnType<typeof cron.schedule> | null = null;
+
 export function initWeeklyDigestCron(): void {
+  if (digestTask) {
+    digestTask.stop();
+  }
   // Каждый понедельник в 10:00 (0 10 * * 1)
-  cron.schedule('0 10 * * 1', async () => {
+  digestTask = cron.schedule('0 10 * * 1', async () => {
     console.log('[Cron] Running weekly digest broadcast (0 10 * * 1)...');
     await runWeeklyDigestBroadcast();
   });
+}
+
+export function stopWeeklyDigestCron(): void {
+  if (digestTask) {
+    digestTask.stop();
+    digestTask = null;
+    console.log('[Cron] Weekly digest cron stopped.');
+  }
 }
