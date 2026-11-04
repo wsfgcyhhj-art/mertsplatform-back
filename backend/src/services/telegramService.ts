@@ -722,17 +722,39 @@ export function initTelegramBot(): Telegraf | null {
       }
     });
 
-    // Команда /digest для запуска еженедельного дайджеста вручную
+    // Команда /digest для запуска еженедельного дайджеста вручную (только для менторов/админов)
     bot.command('digest', async (ctx) => {
       try {
-        const result = await runWeeklyDigestBroadcast();
+        const callerChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
+        if (!callerChatId) {
+          await ctx.reply('❌ Не удалось определить ваш Telegram Chat ID.');
+          return;
+        }
+
+        const callerUser = await prisma.user.findFirst({
+          where: {
+            telegramChatId: callerChatId,
+            role: Role.ADMIN,
+          },
+        });
+
+        if (!callerUser) {
+          await ctx.reply('⛔ Команда /digest доступна только администраторам и менторам курса.');
+          return;
+        }
+
+        await ctx.reply('⏳ Формирую и рассылаю еженедельный дайджест...');
+        const result = await runWeeklyDigestBroadcast({ force: true });
         if (result.message) {
           await ctx.reply(
             `✅ Дайджест сформирован и разослан (${result.sentToUsersCount} получателям).`
           );
+        } else {
+          await ctx.reply('⚠️ Не удалось разослать дайджест или список получателей пуст.');
         }
       } catch (err) {
         console.error('[Telegram] Error handling /digest command:', err);
+        await ctx.reply('❌ Произошла ошибка при запуске дайджеста.');
       }
     });
 

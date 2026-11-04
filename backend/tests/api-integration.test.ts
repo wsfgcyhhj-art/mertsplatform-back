@@ -413,15 +413,25 @@ test('Telegram Bot 2.0: mentor inline callback, reply text/voice feedback, and w
   assert.equal(acceptResult.status, 'ACCEPTED');
   assert.equal(acceptResult.score, 25);
 
-  // 3. Проверка формирования еженедельного дайджеста Топ-3 и безопасной рассылки
+  // 3. Проверка формирования еженедельного дайджеста Топ-3 и безопасной рассылки с идемпотентностью
   const digestText = await buildWeeklyDigestMessage();
   assert.ok(digestText.includes('ИТОГИ НЕДЕЛИ MERTSPLATFORM'));
   assert.ok(digestText.includes('🥇 1 место'));
   assert.ok(digestText.includes('🥈 2 место'));
   assert.ok(digestText.includes('🥉 3 место'));
 
-  const broadcastResult = await runWeeklyDigestBroadcast();
+  const broadcastResult = await runWeeklyDigestBroadcast({ force: true });
   assert.ok(broadcastResult.message.includes('ИТОГИ НЕДЕЛИ MERTSPLATFORM'));
+  assert.equal(broadcastResult.skippedDueToDuplicate, false);
+
+  // Повторный запуск без force блокируется защитой от дубликатов
+  const duplicateResult = await runWeeklyDigestBroadcast({ force: false });
+  assert.equal(duplicateResult.skippedDueToDuplicate, true);
+  assert.equal(duplicateResult.sentToUsersCount, 0);
+
+  // Принудительный запуск с force: true проходит успешно
+  const forcedResult = await runWeeklyDigestBroadcast({ force: true });
+  assert.equal(forcedResult.skippedDueToDuplicate, false);
 });
 
 test('Lessons Group Isolation: student sees only own group lessons and past/current months', async () => {

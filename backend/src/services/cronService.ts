@@ -146,15 +146,57 @@ export async function buildWeeklyDigestMessage(): Promise<string> {
 }
 
 /**
+ * Вычисляет ключ текущей недели в формате ISO 8601 (YYYY-Www), например: "2026-W45".
+ */
+export function getIsoWeekKey(d: Date = new Date()): string {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+let lastBroadcastWeekKey: string | null = null;
+
+export function getLastBroadcastWeekKey(): string | null {
+  return lastBroadcastWeekKey;
+}
+
+export function resetBroadcastWeekKeyForTesting(): void {
+  lastBroadcastWeekKey = null;
+}
+
+/**
  * Рассылает еженедельный дайджест:
  * 1) В общий чат курса (TELEGRAM_COURSE_CHAT_ID), если он настроен.
  * 2) Персонально каждому студенту (и пользователю), у которого привязан Telegram (telegramChatId != null).
+ * 
+ * Поддерживает идемпотентность: повторный вызов за ту же неделю блокируется, если force !== true.
  */
-export async function runWeeklyDigestBroadcast(): Promise<{
+export async function runWeeklyDigestBroadcast(options?: {
+  force?: boolean;
+}): Promise<{
   message: string;
   sentToCourseChat: boolean;
   sentToUsersCount: number;
+  skippedDueToDuplicate?: boolean;
 }> {
+  const isForce = Boolean(options?.force);
+  const currentWeekKey = getIsoWeekKey();
+
+  if (!isForce && lastBroadcastWeekKey === currentWeekKey) {
+    console.log(
+      `[Cron Digest] Weekly digest for ${currentWeekKey} was already broadcast. Skipping duplicate run.`
+    );
+    return {
+      message: '',
+      sentToCourseChat: false,
+      sentToUsersCount: 0,
+      skippedDueToDuplicate: true,
+    };
+  }
+
   try {
     const message = await buildWeeklyDigestMessage();
 
@@ -181,10 +223,14 @@ export async function runWeeklyDigestBroadcast(): Promise<{
       }
     }
 
+    // Фиксируем успешную отправку за текущую неделю
+    lastBroadcastWeekKey = currentWeekKey;
+
     return {
       message,
       sentToCourseChat,
       sentToUsersCount,
+      skippedDueToDuplicate: false,
     };
   } catch (err) {
     console.error('[Cron Digest] Failed to broadcast weekly digest:', err);
@@ -205,7 +251,7 @@ export function initWeeklyDigestCron(): void {
   // Каждый понедельник в 10:00 (0 10 * * 1)
   digestTask = cron.schedule('0 10 * * 1', async () => {
     console.log('[Cron] Running weekly digest broadcast (0 10 * * 1)...');
-    await runWeeklyDigestBroadcast();
+    await runWeeklyDigestBroadcast({ force: false });
   });
 }
 
