@@ -146,6 +146,37 @@ test('Gamification & Auth: registering a new student awards WELCOME achievement 
   studentToken = data.accessToken;
 });
 
+test('Auth: registration with simplified 3-field payload (login, password, groupNumber)', async () => {
+  const simplifiedLogin = `test_simple_${uniqueSuffix}`;
+  const res = await fetch(`${baseUrl}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      login: simplifiedLogin,
+      password: 'password123',
+      groupNumber: '38',
+    }),
+  });
+
+  assert.equal(res.status, 201);
+  const data = (await res.json()) as {
+    accessToken: string;
+    user: { id: string; login: string; name: string; groupNumber: string; groupId: string; currentMonth: number };
+  };
+
+  assert.ok(data.accessToken);
+  assert.equal(data.user.login, simplifiedLogin);
+  assert.equal(data.user.name, simplifiedLogin); // Fallback to login
+  assert.equal(data.user.groupNumber, '38');
+  assert.equal(data.user.groupId, '38'); // Fallback to groupNumber
+  assert.equal(data.user.currentMonth, 1); // Default to month 1
+
+  // Clean up
+  await prisma.session.deleteMany({ where: { userId: data.user.id } });
+  await prisma.userAchievement.deleteMany({ where: { userId: data.user.id } });
+  await prisma.user.delete({ where: { id: data.user.id } });
+});
+
 test('Auth & Middleware: student role is forbidden from accessing /api/v1/admin/* (403)', async () => {
   const resAdminSubs = await fetch(`${baseUrl}/admin/submissions`, {
     headers: { Authorization: `Bearer ${studentToken}` },

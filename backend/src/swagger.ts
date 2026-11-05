@@ -134,13 +134,13 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['login', 'password', 'name', 'telegram', 'groupNumber', 'groupId'],
+                required: ['login', 'password', 'groupNumber'],
                 properties: {
                   login: { type: 'string' },
                   password: { type: 'string' },
+                  groupNumber: { type: 'string' },
                   name: { type: 'string' },
                   telegram: { type: 'string' },
-                  groupNumber: { type: 'string' },
                   groupId: { type: 'string' },
                   currentMonth: { type: 'integer', default: 1 },
                 },

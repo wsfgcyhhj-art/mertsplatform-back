@@ -15,11 +15,7 @@ export const Register = () => {
     const [form, setForm] = useState({
         login: '',
         password: '',
-        name: '',
-        telegram: '',
         groupNumber: '',
-        groupId: 'standard',
-        currentMonth: 1,
     });
     const [togglePassword, setTogglePassword] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -28,7 +24,7 @@ export const Register = () => {
         const { name, value } = e.target;
         setForm((prev) => ({
             ...prev,
-            [name]: name === 'currentMonth' ? Number(value) || 1 : value,
+            [name]: value,
         }));
     };
 
@@ -37,12 +33,9 @@ export const Register = () => {
 
         const cleanLogin = form.login.trim();
         const cleanPassword = form.password.trim();
-        const cleanName = form.name.trim();
-        const cleanTelegram = form.telegram.trim();
         const cleanGroupNumber = form.groupNumber.trim();
-        const cleanGroupId = form.groupId.trim() || 'standard';
 
-        if (!cleanLogin || !cleanPassword || !cleanName || !cleanTelegram || !cleanGroupNumber) {
+        if (!cleanLogin || !cleanPassword || !cleanGroupNumber) {
             toast.warning('Заполните все обязательные поля!');
             return;
         }
@@ -63,11 +56,7 @@ export const Register = () => {
             const res = await api.post('/auth/register', {
                 login: cleanLogin,
                 password: cleanPassword,
-                name: cleanName,
-                telegram: cleanTelegram,
                 groupNumber: cleanGroupNumber,
-                groupId: cleanGroupId,
-                currentMonth: form.currentMonth || 1,
             });
 
             if (res.data?.user && res.data?.accessToken) {
@@ -128,53 +117,12 @@ export const Register = () => {
 
                         <input
                             type="text"
-                            name="name"
-                            placeholder="Ваше имя и фамилия *"
-                            value={form.name}
+                            name="groupNumber"
+                            placeholder="Номер группы (напр. 38) *"
+                            value={form.groupNumber}
                             onChange={handleChange}
                             required
                         />
-
-                        <input
-                            type="text"
-                            name="telegram"
-                            placeholder="Telegram (@username) *"
-                            value={form.telegram}
-                            onChange={handleChange}
-                            required
-                        />
-
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <input
-                                type="text"
-                                name="groupNumber"
-                                placeholder="Номер группы (напр. 38) *"
-                                value={form.groupNumber}
-                                onChange={handleChange}
-                                required
-                                style={{ flex: 1 }}
-                            />
-                            <input
-                                type="text"
-                                name="groupId"
-                                placeholder="ID группы (напр. standard)"
-                                value={form.groupId}
-                                onChange={handleChange}
-                                style={{ flex: 1 }}
-                            />
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <label style={{ fontSize: '13px', color: 'rgba(249, 250, 251, 0.7)' }}>Текущий месяц обучения:</label>
-                            <input
-                                type="number"
-                                name="currentMonth"
-                                min="1"
-                                max="12"
-                                value={form.currentMonth}
-                                onChange={handleChange}
-                            />
-                        </div>
 
                         <button type="submit" disabled={loading}>
                             {loading ? 'Регистрация...' : 'Зарегистрироваться'}

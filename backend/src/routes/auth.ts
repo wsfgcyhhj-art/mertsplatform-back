@@ -18,19 +18,16 @@ export const authRouter = Router();
 authRouter.post('/register', async (req: Request, res: Response): Promise<void> => {
   const { login, password, name, telegram, groupNumber, groupId, currentMonth } = req.body;
 
-  // Проверка обязательных полей
+  // Проверка обязательных полей (только login, password, groupNumber)
   if (
     !login || typeof login !== 'string' || !login.trim() ||
     !password || typeof password !== 'string' || !password.trim() ||
-    !name || typeof name !== 'string' || !name.trim() ||
-    !telegram || typeof telegram !== 'string' || !telegram.trim() ||
-    !groupNumber || typeof groupNumber !== 'string' || !groupNumber.trim() ||
-    !groupId || typeof groupId !== 'string' || !groupId.trim()
+    !groupNumber || typeof groupNumber !== 'string' || !groupNumber.trim()
   ) {
     res.status(400).json({
       statusCode: 400,
       error: 'Bad Request',
-      message: 'All fields are required: login, password, name, telegram, groupNumber, groupId',
+      message: 'All fields are required: login, password, groupNumber',
     });
     return;
   }
@@ -54,7 +51,13 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const cleanTg = telegram.trim().startsWith('@') ? telegram.trim() : `@${telegram.trim()}`;
+  const cleanGroupNumber = groupNumber.trim();
+  // Опциональные поля с безопасными дефолтами
+  const cleanName = typeof name === 'string' && name.trim() ? name.trim() : cleanLogin;
+  const cleanTg = typeof telegram === 'string' && telegram.trim()
+    ? (telegram.trim().startsWith('@') ? telegram.trim() : `@${telegram.trim()}`)
+    : null;
+  const cleanGroupId = typeof groupId === 'string' && groupId.trim() ? groupId.trim() : cleanGroupNumber;
   const monthNum = currentMonth !== undefined ? Number(currentMonth) : 1;
 
   const existingUser = await prisma.user.findUnique({
@@ -77,10 +80,10 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
       data: {
         login: cleanLogin,
         passwordHash,
-        name: name.trim(),
+        name: cleanName,
         telegram: cleanTg,
-        groupNumber: groupNumber.trim(),
-        groupId: groupId.trim(),
+        groupNumber: cleanGroupNumber,
+        groupId: cleanGroupId,
         currentMonth: isNaN(monthNum) || monthNum < 1 ? 1 : monthNum,
         role: Role.STUDENT,
       },
