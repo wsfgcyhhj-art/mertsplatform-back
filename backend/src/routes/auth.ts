@@ -11,11 +11,12 @@ import {
 import { config } from '../config.js';
 import { awardAchievement } from '../services/achievementService.js';
 import { updateStreak } from '../services/streakService.js';
+import { authLimiter } from '../middleware/rateLimiter.js';
 
 export const authRouter = Router();
 
 // POST /api/v1/auth/register — Регистрация студентов
-authRouter.post('/register', async (req: Request, res: Response): Promise<void> => {
+authRouter.post('/register', authLimiter, async (req: Request, res: Response): Promise<void> => {
   const { login, password, name, telegram, groupNumber, groupId, currentMonth } = req.body;
 
   // Проверка обязательных полей (только login, password, groupNumber)
@@ -42,11 +43,11 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  if (password.length < 4) {
+  if (password.length < 8) {
     res.status(400).json({
       statusCode: 400,
       error: 'Bad Request',
-      message: 'Password must be at least 4 characters long',
+      message: 'Password must be at least 8 characters long',
     });
     return;
   }
@@ -141,7 +142,7 @@ authRouter.post('/register', async (req: Request, res: Response): Promise<void> 
   }
 });
 
-authRouter.post('/login', async (req: Request, res: Response): Promise<void> => {
+authRouter.post('/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
   const { login, password } = req.body;
 
   if (!login || typeof login !== 'string' || !password || typeof password !== 'string') {

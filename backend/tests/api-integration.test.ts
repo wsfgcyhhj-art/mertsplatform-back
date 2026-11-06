@@ -177,6 +177,29 @@ test('Auth: registration with simplified 3-field payload (login, password, group
   await prisma.user.delete({ where: { id: data.user.id } });
 });
 
+test('Security & Auth: rejects registration with short password (< 8 chars)', async () => {
+  const shortPassLogin = `test_short_${uniqueSuffix}`;
+  const res = await fetch(`${baseUrl}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      login: shortPassLogin,
+      password: '1234567', // 7 chars, must be >= 8
+      groupNumber: '38',
+    }),
+  });
+
+  assert.equal(res.status, 400);
+  const data = (await res.json()) as { message: string };
+  assert.equal(data.message, 'Password must be at least 8 characters long');
+});
+
+test('Security: helmet headers are present on responses', async () => {
+  const res = await fetch(`${baseUrl}/health`);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.ok(res.headers.get('x-frame-options') || res.headers.get('content-security-policy'));
+});
+
 test('Auth & Middleware: student role is forbidden from accessing /api/v1/admin/* (403)', async () => {
   const resAdminSubs = await fetch(`${baseUrl}/admin/submissions`, {
     headers: { Authorization: `Bearer ${studentToken}` },

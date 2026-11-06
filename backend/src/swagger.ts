@@ -136,8 +136,8 @@ export const swaggerDocument = {
                 type: 'object',
                 required: ['login', 'password', 'groupNumber'],
                 properties: {
-                  login: { type: 'string' },
-                  password: { type: 'string' },
+                  login: { type: 'string', minLength: 3 },
+                  password: { type: 'string', minLength: 8 },
                   groupNumber: { type: 'string' },
                   name: { type: 'string' },
                   telegram: { type: 'string' },
@@ -167,8 +167,8 @@ export const swaggerDocument = {
                 type: 'object',
                 required: ['login', 'password'],
                 properties: {
-                  login: { type: 'string' },
-                  password: { type: 'string' },
+                  login: { type: 'string', minLength: 3 },
+                  password: { type: 'string', minLength: 8 },
                 },
               },
             },

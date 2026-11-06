@@ -45,8 +45,8 @@ export const Register = () => {
             return;
         }
 
-        if (cleanPassword.length < 4) {
-            toast.warning('Пароль должен быть не менее 4 символов');
+        if (cleanPassword.length < 8) {
+            toast.warning('Пароль должен быть не менее 8 символов');
             return;
         }
 

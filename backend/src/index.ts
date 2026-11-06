@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config.js';
@@ -22,9 +23,16 @@ import { initWeeklyDigestCron, stopWeeklyDigestCron } from './services/cronServi
 
 const app = express();
 
+// Безопасные HTTP-заголовки (X-Content-Type-Options, X-Frame-Options, HSTS, etc.)
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000', /\.vercel\.app$/],
+    origin: config.corsOrigins,
     credentials: true,
   })
 );
