@@ -1,5 +1,6 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import jwt from 'jsonwebtoken';
@@ -198,6 +199,55 @@ test('Security: helmet headers are present on responses', async () => {
   const res = await fetch(`${baseUrl}/health`);
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   assert.ok(res.headers.get('x-frame-options') || res.headers.get('content-security-policy'));
+});
+
+test('Auth: client-side SHA-256 password hashing flow for register and login', async () => {
+  const clientHashLogin = `test_sha256_${uniqueSuffix}`;
+  const rawPassword = 'mySecurePassword2026!';
+  const sha256Password = crypto.createHash('sha256').update(rawPassword).digest('hex');
+
+  // 1. Регистрация с 64-символьным SHA-256 хешем
+  const resReg = await fetch(`${baseUrl}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      login: clientHashLogin,
+      password: sha256Password,
+      groupNumber: '42',
+    }),
+  });
+  assert.equal(resReg.status, 201);
+  const regData = (await resReg.json()) as { accessToken: string; user: { id: string } };
+  assert.ok(regData.accessToken);
+
+  // 2. Вход с 64-символьным SHA-256 хешем
+  const resLogin = await fetch(`${baseUrl}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      login: clientHashLogin,
+      password: sha256Password,
+    }),
+  });
+  assert.equal(resLogin.status, 200);
+  const loginData = (await resLogin.json()) as { accessToken: string };
+  assert.ok(loginData.accessToken);
+
+  // 3. Отказ при неверном хеше/пароле
+  const resBadLogin = await fetch(`${baseUrl}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      login: clientHashLogin,
+      password: crypto.createHash('sha256').update('wrongPassword123').digest('hex'),
+    }),
+  });
+  assert.equal(resBadLogin.status, 401);
+
+  // Очистка
+  await prisma.session.deleteMany({ where: { userId: regData.user.id } });
+  await prisma.userAchievement.deleteMany({ where: { userId: regData.user.id } });
+  await prisma.user.delete({ where: { id: regData.user.id } });
 });
 
 test('Auth & Middleware: student role is forbidden from accessing /api/v1/admin/* (403)', async () => {

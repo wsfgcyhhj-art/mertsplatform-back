@@ -6,6 +6,7 @@ import { useFindUser } from "../../../store/userStore.js";
 import { IoEyeSharp } from "react-icons/io5";
 import { FaEyeSlash } from "react-icons/fa";
 import { api } from "../../../api/client.js";
+import { hashPasswordClient } from "../../../utils/crypto.js";
 
 export const Login = () => {
     const navigate = useNavigate();
@@ -28,9 +29,11 @@ export const Login = () => {
         setLoading(true);
 
         try {
+            const hashedPassword = await hashPasswordClient(cleanPassword);
+
             const res = await api.post('/auth/login', {
                 login: cleanLogin,
-                password: cleanPassword
+                password: hashedPassword
             });
 
             if (res.data?.user && res.data?.accessToken) {

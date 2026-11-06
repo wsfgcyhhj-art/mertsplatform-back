@@ -7,6 +7,7 @@ import { IoEyeSharp } from 'react-icons/io5';
 import { FaEyeSlash } from 'react-icons/fa';
 import { api } from '../../../api/client.js';
 import { showAchievementToast } from '../../../components/AchievementToast.jsx';
+import { hashPasswordClient } from '../../../utils/crypto.js';
 
 export const Register = () => {
     const navigate = useNavigate();
@@ -53,9 +54,11 @@ export const Register = () => {
         setLoading(true);
 
         try {
+            const hashedPassword = await hashPasswordClient(cleanPassword);
+
             const res = await api.post('/auth/register', {
                 login: cleanLogin,
-                password: cleanPassword,
+                password: hashedPassword,
                 groupNumber: cleanGroupNumber,
             });
 

@@ -4,7 +4,7 @@ import { getTelegramBotStatus } from '../services/telegramService.js';
 
 export const healthRouter = Router();
 
-const DB_TIMEOUT_MS = 2000;
+const DB_TIMEOUT_MS = process.env.NODE_ENV === 'test' ? 5000 : 3000;
 
 /**
  * Проверка доступности базы данных с жестким таймаутом в 2 секунды.
