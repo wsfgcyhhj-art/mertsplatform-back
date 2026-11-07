@@ -205,28 +205,223 @@ export const swaggerDocument = {
           200: { description: 'Данные профиля и счетчики баллов/задач' },
         },
       },
+    },
+    '/users/me/avatar': {
       patch: {
-        summary: 'Полное редактирование профиля и смена пароля',
+        summary: 'Обновление аватарки текущего пользователя',
+        description: 'Обновляет URL или Base64 Data URL аватарки текущего пользователя. Для удаления передайте null.',
+        tags: ['Users'],
         requestBody: {
+          required: true,
           content: {
             'application/json': {
               schema: {
                 type: 'object',
+                required: ['avatarUrl'],
                 properties: {
-                  name: { type: 'string' },
-                  telegram: { type: 'string' },
-                  avatarUrl: { type: 'string', nullable: true },
-                  bannerUrl: { type: 'string', nullable: true },
-                  currentPassword: { type: 'string' },
-                  newPassword: { type: 'string' },
+                  avatarUrl: {
+                    type: 'string',
+                    nullable: true,
+                    example: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde',
+                    description: 'Прямая ссылка на аватар, Data URL (base64) или null для сброса',
+                  },
                 },
               },
             },
           },
         },
         responses: {
-          200: { description: 'Обновленный профиль' },
-          400: { description: 'Неверный текущий пароль или ошибка валидации' },
+          200: {
+            description: 'Аватар успешно обновлен',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'Некорректные входные данные',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                example: {
+                  statusCode: 400,
+                  error: 'Bad Request',
+                  message: 'avatarUrl must be a string or null',
+                },
+              },
+            },
+          },
+          401: {
+            description: 'Пользователь не авторизован',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                example: {
+                  statusCode: 401,
+                  error: 'Unauthorized',
+                  message: 'Unauthorized',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/users/me/banner': {
+      patch: {
+        summary: 'Обновление баннера профиля пользователя',
+        description: 'Обновляет изображение шапки/баннера профиля пользователя. Для удаления передайте null.',
+        tags: ['Users'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['bannerUrl'],
+                properties: {
+                  bannerUrl: {
+                    type: 'string',
+                    nullable: true,
+                    example: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809',
+                    description: 'Прямая ссылка на баннер, Data URL (base64) или null для сброса',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Баннер успешно обновлен',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'Некорректные входные данные',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                example: {
+                  statusCode: 400,
+                  error: 'Bad Request',
+                  message: 'bannerUrl must be a string or null',
+                },
+              },
+            },
+          },
+          401: {
+            description: 'Пользователь не авторизован',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                example: {
+                  statusCode: 401,
+                  error: 'Unauthorized',
+                  message: 'Unauthorized',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/users/me/profile': {
+      patch: {
+        summary: 'Частичное обновление профиля пользователя',
+        description: 'Обновляет отображаемое имя (name) и/или Telegram-юзернейм (telegram). Изменение группы студентом строго запрещено.',
+        tags: ['Users'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    nullable: true,
+                    example: 'Алексей Иванов',
+                    description: 'Имя и фамилия студента',
+                  },
+                  telegram: {
+                    type: 'string',
+                    nullable: true,
+                    example: '@alex_ivanov',
+                    description: 'Telegram username (с @ или без, от 5 до 32 символов) или null для сброса',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Профиль успешно обновлен',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                  },
+                },
+              },
+            },
+          },
+          400: {
+            description: 'Ошибка валидации или попытка изменить группу студентом',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                examples: {
+                  groupForbidden: {
+                    summary: 'Попытка сменить группу',
+                    value: {
+                      statusCode: 400,
+                      error: 'Bad Request',
+                      message: 'Изменение группы студентом запрещено',
+                    },
+                  },
+                  invalidTelegram: {
+                    summary: 'Некорректный Telegram username',
+                    value: {
+                      statusCode: 400,
+                      error: 'Bad Request',
+                      message: 'Некорректный формат Telegram username (от 5 до 32 символов: @username)',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          401: {
+            description: 'Пользователь не авторизован',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+                example: {
+                  statusCode: 401,
+                  error: 'Unauthorized',
+                  message: 'Unauthorized',
+                },
+              },
+            },
+          },
         },
       },
     },

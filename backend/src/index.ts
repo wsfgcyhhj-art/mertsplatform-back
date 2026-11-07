@@ -46,6 +46,7 @@ setupSwagger(app);
 // API v1 routes
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/me', meRouter);
+app.use('/api/v1/users/me', meRouter);
 app.use('/api/v1/admin/users', adminUsersRouter);
 app.use('/api/v1/admin/lessons', adminLessonsRouter);
 app.use('/api/v1/admin/tasks', adminTasksRouter);

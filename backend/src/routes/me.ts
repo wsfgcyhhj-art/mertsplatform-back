@@ -84,140 +84,173 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
   });
 });
 
-meRouter.patch('/', authenticate, async (req: Request, res: Response): Promise<void> => {
+const safeUserSelect = {
+  id: true,
+  login: true,
+  role: true,
+  name: true,
+  telegram: true,
+  telegramUsername: true,
+  groupNumber: true,
+  groupId: true,
+  currentMonth: true,
+  avatarUrl: true,
+  bannerUrl: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+// PATCH /api/v1/users/me/avatar — обновление только аватарки
+meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
-  const { name, telegram, avatarUrl, bannerUrl, currentPassword, newPassword } = req.body;
+  const { avatarUrl } = req.body;
+
+  if (avatarUrl === undefined) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Поле avatarUrl обязательно для обновления аватара (передайте URL, Base64 или null)',
+    });
+    return;
+  }
+
+  if (avatarUrl !== null && typeof avatarUrl !== 'string') {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'avatarUrl must be a string or null',
+    });
+    return;
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      avatarUrl: avatarUrl ? String(avatarUrl).trim() : null,
+    },
+    select: safeUserSelect,
+  });
+
+  res.json({ user: updatedUser });
+});
+
+// PATCH /api/v1/users/me/banner — обновление только баннера профиля
+meRouter.patch('/banner', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { bannerUrl } = req.body;
+
+  if (bannerUrl === undefined) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Поле bannerUrl обязательно для обновления баннера (передайте URL, Base64 или null)',
+    });
+    return;
+  }
+
+  if (bannerUrl !== null && typeof bannerUrl !== 'string') {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'bannerUrl must be a string or null',
+    });
+    return;
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      bannerUrl: bannerUrl ? String(bannerUrl).trim() : null,
+    },
+    select: safeUserSelect,
+  });
+
+  res.json({ user: updatedUser });
+});
+
+// PATCH /api/v1/users/me/profile — частичное обновление текстовых данных (name, telegram)
+meRouter.patch('/profile', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const body = req.body || {};
+
+  // Запрет изменения группы студентом
+  if ('groupNumber' in body || 'group' in body || 'groupId' in body) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Изменение группы студентом запрещено',
+    });
+    return;
+  }
+
+  if ('role' in body || 'login' in body || 'password' in body) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Изменение системных данных запрещено',
+    });
+    return;
+  }
+
+  const { name, telegram } = body;
+
+  if (name === undefined && telegram === undefined) {
+    res.status(400).json({
+      statusCode: 400,
+      error: 'Bad Request',
+      message: 'Необходимо передать хотя бы одно поле для обновления (name или telegram)',
+    });
+    return;
+  }
 
   const updateData: {
-    name?: string;
+    name?: string | null;
     telegram?: string | null;
-    avatarUrl?: string | null;
-    bannerUrl?: string | null;
-    passwordHash?: string;
   } = {};
 
   if (name !== undefined) {
-    if (typeof name !== 'string') {
+    if (name !== null && typeof name !== 'string') {
       res.status(400).json({
         statusCode: 400,
         error: 'Bad Request',
-        message: 'Name must be a string',
+        message: 'Name must be a string or null',
       });
       return;
     }
-    updateData.name = name.trim();
+    updateData.name = name ? String(name).trim() : null;
   }
 
   if (telegram !== undefined) {
-    if (typeof telegram !== 'string') {
+    if (telegram !== null && typeof telegram !== 'string') {
       res.status(400).json({
         statusCode: 400,
         error: 'Bad Request',
-        message: 'Telegram must be a string',
-      });
-      return;
-    }
-    const cleanTg = telegram.trim();
-    updateData.telegram = cleanTg.startsWith('@') ? cleanTg : cleanTg ? `@${cleanTg}` : null;
-  }
-
-  if (avatarUrl !== undefined) {
-    if (avatarUrl !== null && typeof avatarUrl !== 'string') {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'avatarUrl must be a string or null',
-      });
-      return;
-    }
-    updateData.avatarUrl = avatarUrl ? String(avatarUrl).trim() : null;
-  }
-
-  if (bannerUrl !== undefined) {
-    if (bannerUrl !== null && typeof bannerUrl !== 'string') {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'bannerUrl must be a string or null',
-      });
-      return;
-    }
-    updateData.bannerUrl = bannerUrl ? String(bannerUrl).trim() : null;
-  }
-
-  // Смена пароля
-  if (currentPassword !== undefined || newPassword !== undefined) {
-    if (!currentPassword || !newPassword) {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'Both currentPassword and newPassword are required to change password',
+        message: 'Telegram must be a string or null',
       });
       return;
     }
 
-    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'Passwords must be strings',
-      });
-      return;
+    if (telegram === null || !String(telegram).trim()) {
+      updateData.telegram = null;
+    } else {
+      const clean = String(telegram).trim();
+      const formatted = clean.startsWith('@') ? clean : `@${clean}`;
+      if (!/^@[a-zA-Z0-9_]{4,32}$/.test(formatted)) {
+        res.status(400).json({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: 'Некорректный формат Telegram username (от 5 до 32 символов: @username)',
+        });
+        return;
+      }
+      updateData.telegram = formatted;
     }
-
-    if (newPassword.length < 4) {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'New password must be at least 4 characters long',
-      });
-      return;
-    }
-
-    const userWithPassword = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { passwordHash: true },
-    });
-
-    if (!userWithPassword) {
-      res.status(404).json({
-        statusCode: 404,
-        error: 'Not Found',
-        message: 'User not found',
-      });
-      return;
-    }
-
-    const isMatch = await comparePassword(currentPassword, userWithPassword.passwordHash);
-    if (!isMatch) {
-      res.status(400).json({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: 'Current password does not match',
-      });
-      return;
-    }
-
-    updateData.passwordHash = await hashPassword(newPassword);
   }
 
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: updateData,
-    select: {
-      id: true,
-      login: true,
-      role: true,
-      name: true,
-      telegram: true,
-      groupNumber: true,
-      groupId: true,
-      currentMonth: true,
-      avatarUrl: true,
-      bannerUrl: true,
-      createdAt: true,
-      updatedAt: true,
-    },
+    select: safeUserSelect,
   });
 
   res.json({ user: updatedUser });

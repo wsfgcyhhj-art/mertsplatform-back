@@ -316,7 +316,7 @@ export const ProfilePage = () => {
         try {
             setSavingProfile(true);
             const token = getAuthToken();
-            const res = await api.patch('/me', {
+            const res = await api.patch('/users/me/profile', {
                 name: name.trim() || undefined,
                 telegram: telegram.trim() || undefined,
             });
@@ -342,7 +342,7 @@ export const ProfilePage = () => {
             const base64 = reader.result;
             try {
                 const token = getAuthToken();
-                const res = await api.patch('/me', { avatarUrl: base64 });
+                const res = await api.patch('/users/me/avatar', { avatarUrl: base64 });
                 if (res.data?.user) {
                     addUser(res.data.user, token);
                     message.success('Аватар обновлен!');
