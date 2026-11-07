@@ -591,6 +591,230 @@ export async function getTelegramFileStream(fileId: string): Promise<{
 }
 
 /**
+ * Формирует адаптивную справку (/help) в зависимости от роли пользователя (Admin/Mentor или Student).
+ */
+export async function getBotHelpMessage(chatId: string): Promise<string> {
+  const cleanChatId = String(chatId).trim();
+  const user = await prisma.user.findFirst({
+    where: { telegramChatId: cleanChatId },
+    select: { id: true, login: true, name: true, role: true },
+  });
+
+  if (!user) {
+    return [
+      '👋 <b>Добро пожаловать в бот MertsPlatform!</b>',
+      '',
+      'Ваш Telegram-аккаунт еще не привязан к профилю на платформе.',
+      '',
+      '<b>Как привязать аккаунт:</b>',
+      '1. Авторизуйтесь на сайте MertsPlatform',
+      '2. Перейдите в раздел <b>Профиль</b>',
+      '3. Нажмите кнопку <b>«Подключить Telegram»</b> и отправьте полученную команду <code>/start &lt;код&gt;</code> в этот чат.',
+    ].join('\n');
+  }
+
+  if (user.role === Role.ADMIN) {
+    return [
+      '👨‍🏫 <b>Справка для ментора / администратора MertsPlatform</b>',
+      '',
+      '<b>Проверка домашних заданий:</b>',
+      '• При сдаче студентом ДЗ в этот чат приходит карточка с деталями и кнопками.',
+      '• Нажмите <b>[✅ Принять]</b>, чтобы зачесть работу с максимальным баллом.',
+      '• Нажмите <b>[🔄 На доработку]</b>, затем ответьте (<b>Reply</b>) на карточку текстом или голосовым сообщением (Voice).',
+      '• Ваш голосовой фидбек автоматически прикрепится к работе и будет доступен студенту в плеере платформы.',
+      '',
+      '<b>Доступные команды:</b>',
+      '• <code>/status</code> — оперативная сводка (работы на проверке, на доработке, принятые за месяц)',
+      '• <code>/queue</code> — интерактивная очередь последних 5 работ со статусом SENT',
+      '• <code>/digest</code> — ручной запуск еженедельного дайджеста успеваемости',
+      '• <code>/help</code> — показать эту справку',
+    ].join('\n');
+  }
+
+  return [
+    '🎓 <b>Справка для студента MertsPlatform</b>',
+    '',
+    '<b>Как сдавать домашние задания:</b>',
+    '1. Перейдите в веб-интерфейс платформы к нужному уроку.',
+    '2. Прикрепите ссылку на ваш репозиторий GitHub и нажмите «Отправить на проверку».',
+    '3. Ментор получит уведомление и проверит решение.',
+    '',
+    '<b>Голосовой фидбек:</b>',
+    '• Если ментор отправит работу на доработку с голосовым комментарием, вы получите аудиосообщение в этот бот, а также сможете прослушать его прямо на платформе.',
+    '',
+    '<b>Доступные команды:</b>',
+    '• <code>/status</code> — статус ваших сданных работ',
+    '• <code>/queue</code> — ваши работы, ожидающие проверки ментором',
+    '• <code>/help</code> — показать эту справку',
+  ].join('\n');
+}
+
+/**
+ * Формирует сводку (/status): общую для ментора или персональную для студента.
+ */
+export async function getBotStatusMessage(chatId: string): Promise<string> {
+  const cleanChatId = String(chatId).trim();
+  const user = await prisma.user.findFirst({
+    where: { telegramChatId: cleanChatId },
+    select: { id: true, login: true, name: true, role: true },
+  });
+
+  if (!user) {
+    return '⛔ <b>Доступ ограничен.</b> Пожалуйста, сначала привяжите Telegram-аккаунт через личный кабинет MertsPlatform.';
+  }
+
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  if (user.role === Role.ADMIN) {
+    const [sentCount, inReviewCount, revisionCount, acceptedThisMonth] = await Promise.all([
+      prisma.submission.count({ where: { status: SubmissionStatus.SENT } }),
+      prisma.submission.count({ where: { status: SubmissionStatus.IN_REVIEW } }),
+      prisma.submission.count({ where: { status: SubmissionStatus.REVISION } }),
+      prisma.submission.count({
+        where: {
+          status: SubmissionStatus.ACCEPTED,
+          OR: [
+            { reviewedAt: { gte: startOfMonth } },
+            { updatedAt: { gte: startOfMonth } },
+          ],
+        },
+      }),
+    ]);
+
+    const lines = [
+      '📊 <b>Оперативная сводка платформы</b>',
+      '',
+      `• 📥 На проверке (SENT): <b>${sentCount}</b>`,
+      `• ⏳ В процессе ревью (IN_REVIEW): <b>${inReviewCount}</b>`,
+      `• 🔄 На доработке (REVISION): <b>${revisionCount}</b>`,
+      `• ✅ Принято за текущий месяц: <b>${acceptedThisMonth}</b>`,
+      '',
+      sentCount > 0
+        ? '<i>Используйте команду <code>/queue</code> для просмотра очереди работ.</i>'
+        : '<i>Все сданные работы проверены! 🎉</i>',
+    ];
+
+    return lines.join('\n');
+  }
+
+  // Персональная сводка студента
+  const [sentCount, inReviewCount, revisionCount, acceptedThisMonth, totalAccepted] = await Promise.all([
+    prisma.submission.count({ where: { userId: user.id, status: SubmissionStatus.SENT } }),
+    prisma.submission.count({ where: { userId: user.id, status: SubmissionStatus.IN_REVIEW } }),
+    prisma.submission.count({ where: { userId: user.id, status: SubmissionStatus.REVISION } }),
+    prisma.submission.count({
+      where: {
+        userId: user.id,
+        status: SubmissionStatus.ACCEPTED,
+        OR: [
+          { reviewedAt: { gte: startOfMonth } },
+          { updatedAt: { gte: startOfMonth } },
+        ],
+      },
+    }),
+    prisma.submission.count({ where: { userId: user.id, status: SubmissionStatus.ACCEPTED } }),
+  ]);
+
+  const lines = [
+    `📊 <b>Ваша статистика сдачи ДЗ (@${escapeTelegramHtml(user.login)})</b>`,
+    '',
+    `• 📥 Ожидают проверки (SENT): <b>${sentCount}</b>`,
+    `• ⏳ На проверке у ментора (IN_REVIEW): <b>${inReviewCount}</b>`,
+    `• 🔄 Требуют доработки (REVISION): <b>${revisionCount}</b>`,
+    `• ✅ Принято за текущий месяц: <b>${acceptedThisMonth}</b>`,
+    `• 🏆 Всего принято за курс: <b>${totalAccepted}</b>`,
+  ];
+
+  if (revisionCount > 0) {
+    lines.push('', '⚠️ <i>У вас есть задания на доработке. Ознакомьтесь с замечаниями ментора и отправьте обновленное решение!</i>');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Формирует очередь работ (/queue): последние 5 работ SENT для ментора или список своих работ для студента.
+ */
+export async function getBotQueueMessage(chatId: string): Promise<string> {
+  const cleanChatId = String(chatId).trim();
+  const user = await prisma.user.findFirst({
+    where: { telegramChatId: cleanChatId },
+    select: { id: true, login: true, name: true, role: true },
+  });
+
+  if (!user) {
+    return '⛔ <b>Доступ ограничен.</b> Пожалуйста, сначала привяжите Telegram-аккаунт через личный кабинет MertsPlatform.';
+  }
+
+  if (user.role === Role.ADMIN) {
+    const [totalSent, queue] = await Promise.all([
+      prisma.submission.count({ where: { status: SubmissionStatus.SENT } }),
+      prisma.submission.findMany({
+        where: { status: SubmissionStatus.SENT },
+        orderBy: { createdAt: 'asc' },
+        take: 5,
+        include: {
+          user: { select: { login: true, name: true, groupNumber: true } },
+          task: { select: { title: true } },
+        },
+      }),
+    ]);
+
+    if (queue.length === 0) {
+      return '🎉 <b>Очередь пуста!</b> Нет сданных работ, ожидающих проверки. Отличная работа, менторы!';
+    }
+
+    const items = queue.map((sub, idx) => {
+      const studentName = escapeTelegramHtml(sub.user.name || sub.user.login);
+      const studentLogin = escapeTelegramHtml(sub.user.login);
+      const groupBadge = sub.user.groupNumber ? ` [Группа ${escapeTelegramHtml(sub.user.groupNumber)}]` : '';
+      const taskTitle = escapeTelegramHtml(sub.task.title);
+      const repoUrl = escapeTelegramHtml(sub.solutionLink);
+      return `${idx + 1}. <b>${studentName} (@${studentLogin})</b>${groupBadge}\n` +
+             `   📌 Задание: <b>${taskTitle}</b> (версия v${sub.version})\n` +
+             `   🔗 Решение: <a href="${repoUrl}">${repoUrl}</a>`;
+    });
+
+    return [
+      `📬 <b>Очередь сданных работ (показано ${queue.length} из ${totalSent}):</b>`,
+      '',
+      items.join('\n\n'),
+      '',
+      '<i>Для проверки откройте карточку задания в чате и нажмите «Принять» или «На доработку».</i>',
+    ].join('\n');
+  }
+
+  // Студент
+  const myQueue = await prisma.submission.findMany({
+    where: { userId: user.id, status: SubmissionStatus.SENT },
+    orderBy: { createdAt: 'asc' },
+    include: {
+      task: { select: { title: true } },
+    },
+  });
+
+  if (myQueue.length === 0) {
+    return 'ℹ️ <b>У вас нет сданных работ, ожидающих проверки ментором.</b>\n\nВы можете сдать новое задание через личный кабинет платформы.';
+  }
+
+  const items = myQueue.map((sub, idx) => {
+    const taskTitle = escapeTelegramHtml(sub.task.title);
+    const repoUrl = escapeTelegramHtml(sub.solutionLink);
+    const dateStr = sub.createdAt.toLocaleDateString('ru-RU');
+    return `${idx + 1}. 📌 <b>${taskTitle}</b> (версия v${sub.version})\n` +
+           `   📅 Отправлено: ${dateStr}\n` +
+           `   🔗 Решение: <a href="${repoUrl}">${repoUrl}</a>`;
+  });
+
+  return [
+    `📥 <b>Ваши работы в очереди на проверку (${myQueue.length}):</b>`,
+    '',
+    items.join('\n\n'),
+  ].join('\n');
+}
+
+/**
  * Безопасно останавливает polling Telegram-бота и освобождает ресурсы.
  */
 export async function stopTelegramBot(reason = 'SIGTERM'): Promise<void> {
@@ -748,6 +972,60 @@ export function initTelegramBot(): Telegraf | null {
         );
       } catch (err) {
         console.error('[Telegram] Error handling /start command:', err);
+      }
+    });
+
+    // Команда /help — контекстная справка (для ментора, студента или нового пользователя)
+    bot.command('help', async (ctx) => {
+      try {
+        const callerChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
+        if (!callerChatId) {
+          await ctx.reply('❌ Не удалось определить ваш Telegram Chat ID.');
+          return;
+        }
+        const message = await getBotHelpMessage(callerChatId);
+        await ctx.reply(message, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (err) {
+        console.error('[Telegram] Error handling /help command:', err);
+        await ctx.reply('❌ Произошла ошибка при получении справки.');
+      }
+    });
+
+    // Команда /status — оперативная сводка (для ментора — платформа, для студента — личные ДЗ)
+    bot.command('status', async (ctx) => {
+      try {
+        const callerChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
+        if (!callerChatId) {
+          await ctx.reply('❌ Не удалось определить ваш Telegram Chat ID.');
+          return;
+        }
+        const message = await getBotStatusMessage(callerChatId);
+        await ctx.reply(message, { parse_mode: 'HTML' });
+      } catch (err) {
+        console.error('[Telegram] Error handling /status command:', err);
+        await ctx.reply('❌ Произошла ошибка при получении сводки.');
+      }
+    });
+
+    // Команда /queue — интерактивная очередь последних 5 работ со статусом SENT
+    bot.command('queue', async (ctx) => {
+      try {
+        const callerChatId = ctx.chat?.id ? String(ctx.chat.id) : (ctx.from?.id ? String(ctx.from.id) : undefined);
+        if (!callerChatId) {
+          await ctx.reply('❌ Не удалось определить ваш Telegram Chat ID.');
+          return;
+        }
+        const message = await getBotQueueMessage(callerChatId);
+        await ctx.reply(message, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+        });
+      } catch (err) {
+        console.error('[Telegram] Error handling /queue command:', err);
+        await ctx.reply('❌ Произошла ошибка при получении очереди.');
       }
     });
 
