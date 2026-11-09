@@ -1,0 +1,110 @@
+.authContainer {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+  background-color: #0a0b0e;
+  display: flex;
+  flex-direction: column;
+}
+
+.backgroundBase {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 0%, #13151c 0%, #0a0b0e 70%);
+  z-index: 0;
+}
+
+.ambientGlow {
+  position: absolute;
+  inset: -15%;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(ellipse 55% 45% at 50% 40%, rgba(139, 92, 246, 0.16) 0%, rgba(139, 92, 246, 0) 70%),
+    radial-gradient(ellipse 40% 35% at 55% 55%, rgba(245, 158, 11, 0.08) 0%, rgba(245, 158, 11, 0) 65%),
+    radial-gradient(circle at 20% 80%, rgba(99, 102, 241, 0.08) 0%, transparent 50%);
+  animation: pulseGlow 7s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+
+@keyframes pulseGlow {
+  0% {
+    transform: scale(1) translate3d(0, 0, 0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.06) translate3d(15px, -10px, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.96) translate3d(-10px, 15px, 0);
+    opacity: 0.85;
+  }
+}
+
+.patternLayer {
+  position: absolute;
+  inset: -60px;
+  pointer-events: none;
+  z-index: 2;
+  background-image: url('/apple-touch-icon.png');
+  background-repeat: repeat;
+  background-size: 80px 80px;
+  opacity: 0.045;
+  filter: contrast(1.2) brightness(1.1);
+  will-change: transform, background-position;
+  animation: subtleDrift 80s linear infinite;
+  transform: translate3d(var(--mouse-x, 0px), var(--mouse-y, 0px), 0);
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes subtleDrift {
+  0% {
+    background-position: 0px 0px;
+  }
+  100% {
+    background-position: 160px 160px;
+  }
+}
+
+.vignetteOverlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  background: radial-gradient(
+    circle at 50% 50%,
+    transparent 35%,
+    rgba(10, 11, 14, 0.5) 70%,
+    #0a0b0e 95%
+  );
+}
+
+.contentLayer {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Touch & Low-spec / Reduced motion fallbacks */
+@media (hover: none) and (pointer: coarse) {
+  .patternLayer {
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambientGlow {
+    animation: none !important;
+  }
+  .patternLayer {
+    animation: none !important;
+    transform: none !important;
+  }
+}

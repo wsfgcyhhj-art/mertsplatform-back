@@ -8,6 +8,7 @@ import { FaEyeSlash } from 'react-icons/fa';
 import { api } from '../../../api/client.js';
 import { showAchievementToast } from '../../../components/AchievementToast.jsx';
 import { hashPasswordClient } from '../../../utils/crypto.js';
+import { AuthBackground } from '../../../components/AuthBackground/AuthBackground.jsx';
 
 export const Register = () => {
     const navigate = useNavigate();
@@ -88,7 +89,7 @@ export const Register = () => {
     };
 
     return (
-        <>
+        <AuthBackground>
             <ToastContainer theme="dark" />
             <div className={cls.wrapper} data-aos="zoom-in" data-aos-duration="600" style={{ minHeight: '100vh', padding: '30px 0' }}>
                 <div className={cls.login_items} style={{ maxHeight: 'none', height: 'auto', width: '520px' }}>
@@ -140,6 +141,6 @@ export const Register = () => {
                     </form>
                 </div>
             </div>
-        </>
+        </AuthBackground>
     );
 };

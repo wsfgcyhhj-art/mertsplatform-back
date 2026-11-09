@@ -7,6 +7,7 @@ import { IoEyeSharp } from "react-icons/io5";
 import { FaEyeSlash } from "react-icons/fa";
 import { api } from "../../../api/client.js";
 import { hashPasswordClient } from "../../../utils/crypto.js";
+import { AuthBackground } from "../../../components/AuthBackground/AuthBackground.jsx";
 
 export const Login = () => {
     const navigate = useNavigate();
@@ -56,7 +57,7 @@ export const Login = () => {
     };
 
     return (
-        <>
+        <AuthBackground>
             <ToastContainer theme="dark" />
             <div className={cls.wrapper} data-aos="zoom-in" data-aos-duration="600">
                 <div className={cls.login_items}>
@@ -95,6 +96,6 @@ export const Login = () => {
                     </form>
                 </div>
             </div>
-        </>
+        </AuthBackground>
     );
 };
