@@ -162,23 +162,37 @@ export const Header = () => {
                         onClick={handleLogoEasterEgg}
                         title="MertsPlatform"
                         style={{
-                            width: 40,
-                            height: 40,
-                            margin: '16px auto -36px auto',
-                            borderRadius: 10,
-                            background: '#18181b',
-                            border: '1px solid rgba(245, 158, 11, 0.3)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            color: '#fbbf24',
+                            margin: '14px auto -36px auto',
+                            padding: '4px',
                             cursor: 'pointer',
                             userSelect: 'none',
-                            fontWeight: 800,
-                            fontSize: 16,
+                            width: '100%',
+                            maxHeight: '44px',
+                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                         }}
                     >
-                        <FaTerminal size={16} />
+                        <img
+                            src="/logo.png"
+                            alt="MertsPlatform"
+                            style={{
+                                height: '36px',
+                                maxWidth: '90%',
+                                objectFit: 'contain',
+                                filter: 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3))',
+                                transition: 'transform 0.25s ease, filter 0.25s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'scale(1.06)';
+                                e.currentTarget.style.filter = 'drop-shadow(0 4px 12px rgba(245, 158, 11, 0.4))';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = 'scale(1)';
+                                e.currentTarget.style.filter = 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3))';
+                            }}
+                        />
                     </div>
 
                     {userInfo && (
