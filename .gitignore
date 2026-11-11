@@ -36,14 +36,6 @@ __pycache__/
 *$py.class
 db.sqlite3
 
-# AI Agents, Skills, Tools & Design Docs
-.agents/
-.agents/skills/
-.agents/tools/
-.mcp.json
-docs/design/
-ponytail/
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
