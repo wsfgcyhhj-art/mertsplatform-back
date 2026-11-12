@@ -1,6 +1,7 @@
 # Logs
-logs
+logs/
 *.log
+**/*.log
 django.log
 npm-debug.log*
 yarn-debug.log*
@@ -16,12 +17,11 @@ backend/dist/
 dist-ssr/
 
 # Environment & Secrets
+env/
 .env
-.env.*
-!.env.example
-backend/.env
-backend/.env.*
-!backend/.env.example
+.env*
+**/*.env*
+backend/.env*
 .env.local
 .neon
 .neon/
@@ -36,13 +36,16 @@ __pycache__/
 *$py.class
 db.sqlite3
 
-# AI Agents, Skills, Tools & Design Docs
+# AI Agents, Skills, Tools, Specify & Markdown Docs
 .agents/
+agents/
+.specify/
+specify/
 ponytail/
 .mcp.json
-docs/design/
-.specify/
-AGENTS.md
+docs/
+*.md
+**/*.md
 
 # Editor directories and files
 .vscode/*
