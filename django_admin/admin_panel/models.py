@@ -25,6 +25,27 @@ class SubmissionStatusChoices(models.TextChoices):
     ACCEPTED = 'ACCEPTED', 'Принято (ACCEPTED)'
 
 
+class TriggerTypeChoices(models.TextChoices):
+    MANUAL = 'MANUAL', 'Ручная выдача (MANUAL)'
+    ON_REGISTER = 'ON_REGISTER', 'При регистрации / первом входе (ON_REGISTER)'
+    TOTAL_SCORE = 'TOTAL_SCORE', 'Набрать X суммарных баллов (TOTAL_SCORE)'
+    ACCEPTED_TASKS = 'ACCEPTED_TASKS', 'Сдать X принятых заданий (ACCEPTED_TASKS)'
+    BONUS_TASKS = 'BONUS_TASKS', 'Сдать X бонусных заданий (BONUS_TASKS)'
+    FIRST_TRY_ACCEPTED = 'FIRST_TRY_ACCEPTED', 'Сдать X заданий с 1-й попытки (FIRST_TRY_ACCEPTED)'
+    PERFECT_SCORE = 'PERFECT_SCORE', 'Сдать X заданий на макс. балл (PERFECT_SCORE)'
+    REVISION_ACCEPTED = 'REVISION_ACCEPTED', 'Сдать X заданий после доработки (REVISION_ACCEPTED)'
+    EASTER_EGG = 'EASTER_EGG', 'Секретная пасхалка (EASTER_EGG)'
+
+
+class AchievementCategoryChoices(models.TextChoices):
+    START = 'START', 'Старт (START)'
+    TASKS = 'TASKS', 'Домашки (TASKS)'
+    SCORES = 'SCORES', 'Баллы (SCORES)'
+    SECRET = 'SECRET', 'Секретные (SECRET)'
+    SPECIAL = 'SPECIAL', 'Особые (SPECIAL)'
+    GENERAL = 'general', 'Общие (general)'
+
+
 class User(models.Model):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     login = models.CharField('Логин', max_length=255, unique=True)
@@ -206,7 +227,27 @@ class Achievement(models.Model):
         'Иконка (URL / Data URI)',
         default='/api/v1/achievements/icons/trophy.svg',
     )
-    category = models.CharField('Категория', max_length=128, default='general')
+    category = models.CharField(
+        'Категория',
+        max_length=128,
+        choices=AchievementCategoryChoices.choices,
+        default=AchievementCategoryChoices.TASKS,
+    )
+    trigger_type = models.CharField(
+        'Тип триггера (правило)',
+        max_length=64,
+        choices=TriggerTypeChoices.choices,
+        default=TriggerTypeChoices.MANUAL,
+    )
+    threshold = models.IntegerField(
+        'Порог срабатывания (X)',
+        blank=True,
+        null=True,
+        help_text='Числовое значение для триггеров баллов и заданий (например: 100 для баллов или 5 для ДЗ). Для MANUAL / ON_REGISTER / EASTER_EGG оставьте пустым.',
+    )
+    points = models.IntegerField('Очки за ачивку (+pts)', default=10)
+    criteria = models.TextField('Критерий получения (текст для студента)', blank=True, null=True)
+    is_active = models.BooleanField('Активна', default=True)
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
 
     class Meta:

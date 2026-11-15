@@ -8,7 +8,7 @@ import { FaUser, FaTrophy } from "react-icons/fa";
 import { RiTelegram2Line } from "react-icons/ri";
 import { FaPeopleGroup } from "react-icons/fa6";
 import { ProfileBanner } from "./ProfileBanner.jsx";
-import { api, API_BASE_URL, extractAuthToken } from "../../../api/client.js";
+import { api, API_BASE_URL, extractAuthToken, resolveMediaUrl } from "../../../api/client.js";
 import { useNavigate } from "react-router-dom";
 import { AchievementIcon } from "../../../components/AchievementToast.jsx";
 
@@ -25,6 +25,8 @@ export const ProfilePage = () => {
     const [name, setName] = useState(userInfo?.name || '');
     const [telegram, setTelegram] = useState(userInfo?.telegram || '');
     const [savingProfile, setSavingProfile] = useState(false);
+    const [avatarPresets, setAvatarPresets] = useState([]);
+    const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
     // Модалка смены пароля
     const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -337,21 +339,59 @@ export const ProfilePage = () => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = async () => {
-            const base64 = reader.result;
-            try {
-                const token = getAuthToken();
-                const res = await api.patch('/users/me/avatar', { avatarUrl: base64 });
-                if (res.data?.user) {
-                    addUser(res.data.user, token);
-                    message.success('Аватар обновлен!');
-                }
-            } catch {
-                message.error('Не удалось загрузить аватар');
+        try {
+            setUploadingAvatar(true);
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const token = getAuthToken();
+            const res = await api.post('/users/me/avatar', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+            });
+
+            if (res.data?.user) {
+                addUser(res.data.user, token);
+                message.success('Аватар обновлен!');
             }
-        };
-        reader.readAsDataURL(file);
+        } catch (err) {
+            message.error(err.response?.data?.message || 'Не удалось загрузить аватар');
+        } finally {
+            setUploadingAvatar(false);
+            e.target.value = '';
+        }
+    };
+
+    const handleSelectAvatarPreset = async (presetUrl) => {
+        try {
+            setUploadingAvatar(true);
+            const token = getAuthToken();
+            const res = await api.patch('/users/me/avatar', { avatarUrl: presetUrl });
+            if (res.data?.user) {
+                addUser(res.data.user, token);
+                message.success('Фирменный аватар установлен!');
+            }
+        } catch (err) {
+            message.error(err.response?.data?.message || 'Не удалось выбрать аватар');
+        } finally {
+            setUploadingAvatar(false);
+        }
+    };
+
+    const openEditProfileModal = async () => {
+        setEditModalOpen(true);
+        if (avatarPresets.length === 0) {
+            try {
+                const res = await api.get('/media/presets');
+                if (Array.isArray(res.data?.avatars)) {
+                    setAvatarPresets(res.data.avatars);
+                }
+            } catch (err) {
+                console.error('Failed to load avatar presets', err);
+            }
+        }
     };
 
     const handleChangePassword = async () => {
@@ -407,7 +447,7 @@ export const ProfilePage = () => {
                             <div
                                 className={cls.profile_avatar}
                                 style={{
-                                    backgroundImage: userInfo?.avatarUrl ? `url(${userInfo.avatarUrl})` : 'none',
+                                    backgroundImage: userInfo?.avatarUrl ? `url("${resolveMediaUrl(userInfo.avatarUrl)}")` : 'none',
                                     backgroundSize: 'cover',
                                     backgroundPosition: 'center',
                                     display: 'flex',
@@ -417,11 +457,12 @@ export const ProfilePage = () => {
                             >
                                 {!userInfo?.avatarUrl && <FaUser style={{ fontSize: '46px', color: '#71717a' }} />}
                                 <label className={cls.profiel_change}>
-                                    изменить фото
+                                    {uploadingAvatar ? 'загрузка...' : 'изменить фото'}
                                     <input
                                         type="file"
-                                        accept="image/*"
+                                        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
                                         onChange={handleAvatarUpload}
+                                        disabled={uploadingAvatar}
                                         className={cls.file}
                                     />
                                 </label>
@@ -468,7 +509,7 @@ export const ProfilePage = () => {
                                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        onClick={() => setEditModalOpen(true)}
+                                        onClick={openEditProfileModal}
                                         style={{
                                             background: '#f59e0b',
                                             color: '#09090b',
@@ -804,6 +845,49 @@ export const ProfilePage = () => {
                             onChange={(e) => setTelegram(e.target.value)}
                         />
                     </div>
+                    {avatarPresets.length > 0 && (
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}>
+                                Фирменные аватары MertsPlatform
+                            </label>
+                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                {avatarPresets.map((preset) => {
+                                    const isSelected = userInfo?.avatarUrl === preset.url;
+                                    const previewSrc = resolveMediaUrl(preset.url);
+                                    return (
+                                        <button
+                                            key={preset.slug}
+                                            type="button"
+                                            title={preset.title}
+                                            onClick={() => handleSelectAvatarPreset(preset.url)}
+                                            disabled={uploadingAvatar}
+                                            style={{
+                                                width: 56,
+                                                height: 56,
+                                                borderRadius: '50%',
+                                                padding: 2,
+                                                background: '#18181b',
+                                                border: isSelected ? '2px solid #f59e0b' : '1px solid #27272a',
+                                                cursor: 'pointer',
+                                                overflow: 'hidden',
+                                            }}
+                                        >
+                                            <img
+                                                src={previewSrc}
+                                                alt={preset.title}
+                                                style={{
+                                                    width: '100%',
+                                                    height: '100%',
+                                                    borderRadius: '50%',
+                                                    objectFit: 'cover',
+                                                }}
+                                            />
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </Modal>
 

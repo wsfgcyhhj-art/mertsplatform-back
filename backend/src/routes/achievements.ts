@@ -1,7 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../prisma.js';
 import { authenticate } from '../middleware/auth.js';
-import { DEFAULT_ACHIEVEMENTS, ensureDefaultAchievements } from '../services/achievements.js';
+import {
+  DEFAULT_ACHIEVEMENTS,
+  ensureDefaultAchievements,
+  formatRuleCriteria,
+} from '../services/achievements.js';
 import {
   PRESET_ACHIEVEMENT_ICONS,
   getPresetAchievementIcon,
@@ -47,10 +51,16 @@ achievementsRouter.get('/icons/:slug', (req: Request, res: Response): void => {
 
 achievementsRouter.use(authenticate);
 
-// GET /api/v1/achievements — каталог всех доступных ачивок
+// GET /api/v1/achievements — каталог всех активных ачивок
 achievementsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   const user = req.user!;
-  let achievements = await prisma.achievement.findMany({
+  const totalInDb = await prisma.achievement.count();
+  if (totalInDb < DEFAULT_ACHIEVEMENTS.length) {
+    await ensureDefaultAchievements();
+  }
+
+  const achievements = await prisma.achievement.findMany({
+    where: { isActive: true },
     orderBy: { createdAt: 'asc' },
     include: {
       _count: {
@@ -63,22 +73,6 @@ achievementsRouter.get('/', async (req: Request, res: Response): Promise<void> =
     },
   });
 
-  if (achievements.length < DEFAULT_ACHIEVEMENTS.length) {
-    await ensureDefaultAchievements();
-    achievements = await prisma.achievement.findMany({
-      orderBy: { createdAt: 'asc' },
-      include: {
-        _count: {
-          select: { userAchievements: true },
-        },
-        userAchievements: {
-          where: { userId: user.id },
-          select: { awardedAt: true },
-        },
-      },
-    });
-  }
-
   const result = achievements.map((ach) => {
     const meta = DEFAULT_ACHIEVEMENTS.find((d) => d.code === ach.code);
     const userAch = ach.userAchievements[0];
@@ -89,8 +83,14 @@ achievementsRouter.get('/', async (req: Request, res: Response): Promise<void> =
       description: ach.description,
       iconUrl: resolveAchievementIconUrl(ach.iconUrl, ach.code),
       category: ach.category,
-      criteria: meta?.criteria || ach.description,
-      points: meta?.points || 10,
+      triggerType: ach.triggerType,
+      threshold: ach.threshold,
+      isActive: ach.isActive,
+      criteria:
+        ach.criteria ||
+        meta?.criteria ||
+        formatRuleCriteria(ach.triggerType, ach.threshold, ach.description),
+      points: ach.points || meta?.points || 10,
       unlockedCount: ach._count.userAchievements,
       isUnlockedByMe: Boolean(userAch),
       unlockedAt: userAch ? userAch.awardedAt : null,
@@ -165,8 +165,14 @@ achievementsRouter.get('/:id', async (req: Request, res: Response): Promise<void
       description: achievement.description,
       iconUrl: resolveAchievementIconUrl(achievement.iconUrl, achievement.code),
       category: achievement.category,
-      criteria: meta?.criteria || achievement.description,
-      points: meta?.points || 10,
+      triggerType: achievement.triggerType,
+      threshold: achievement.threshold,
+      isActive: achievement.isActive,
+      criteria:
+        achievement.criteria ||
+        meta?.criteria ||
+        formatRuleCriteria(achievement.triggerType, achievement.threshold, achievement.description),
+      points: achievement.points || meta?.points || 10,
       unlockedCount: achievement._count.userAchievements,
       isUnlockedByMe: Boolean(myUnlock),
       unlockedAt: myUnlock ? myUnlock.awardedAt : null,

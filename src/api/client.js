@@ -2,6 +2,24 @@ import axios from 'axios';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
+export function resolveMediaUrl(rawUrl, fallbackPath = null) {
+  const val = String(rawUrl || '').trim();
+  if (!val) {
+    return fallbackPath ? resolveMediaUrl(fallbackPath, null) : null;
+  }
+  if (val.startsWith('data:image/') || val.startsWith('http://') || val.startsWith('https://')) {
+    return val;
+  }
+  if (val.startsWith('/api/v1/')) {
+    const serverOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
+    return `${serverOrigin}${val}`;
+  }
+  if (val.startsWith('/')) {
+    return `${API_BASE_URL.replace(/\/$/, '')}${val}`;
+  }
+  return val;
+}
+
 export function extractAuthToken() {
   try {
     const directToken =

@@ -113,6 +113,22 @@ export const swaggerDocument = {
           description: { type: 'string' },
           iconUrl: { type: 'string' },
           category: { type: 'string' },
+          triggerType: {
+            type: 'string',
+            enum: [
+              'MANUAL',
+              'ON_REGISTER',
+              'TOTAL_SCORE',
+              'ACCEPTED_TASKS',
+              'BONUS_TASKS',
+              'FIRST_TRY_ACCEPTED',
+              'PERFECT_SCORE',
+              'REVISION_ACCEPTED',
+              'EASTER_EGG',
+            ],
+          },
+          threshold: { type: 'integer', nullable: true },
+          isActive: { type: 'boolean' },
           criteria: { type: 'string' },
           points: { type: 'integer' },
           unlockedCount: { type: 'integer' },
@@ -207,9 +223,52 @@ export const swaggerDocument = {
       },
     },
     '/users/me/avatar': {
+      post: {
+        summary: 'Загрузка файла аватарки студента (multipart/form-data)',
+        description:
+          'Принимает файл изображения (JPEG, PNG, WebP, GIF, SVG до 2 МБ), автоматически оптимизирует в 256×256 WebP (quality 85), сохраняет в таблицу MediaAsset БД Neon и обновляет user.avatarUrl.',
+        tags: ['Users', 'Media'],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Файл аватарки (JPEG, PNG, WebP, GIF, SVG до 2 МБ)',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Аватар успешно загружен, оптимизирован и сохранен на бэкенде',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                    avatarUrl: { type: 'string', example: '/api/v1/media/3fa85f64-5717-4562-b3fc-2c963f66afa6' },
+                    assetId: { type: 'string', format: 'uuid' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'Отсутствует файл или недопустимый формат/размер (> 2 МБ)' },
+          401: { description: 'Пользователь не авторизован' },
+        },
+      },
       patch: {
-        summary: 'Обновление аватарки текущего пользователя',
-        description: 'Обновляет URL или Base64 Data URL аватарки текущего пользователя. Для удаления передайте null.',
+        summary: 'Обновление аватарки по URL пресета или сброс',
+        description: 'Обновляет URL (например, пресет /api/v1/media/presets/avatars/amber-coder.svg) или сбрасывает аватарку (null).',
         tags: ['Users'],
         requestBody: {
           required: true,
@@ -222,8 +281,8 @@ export const swaggerDocument = {
                   avatarUrl: {
                     type: 'string',
                     nullable: true,
-                    example: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde',
-                    description: 'Прямая ссылка на аватар, Data URL (base64) или null для сброса',
+                    example: '/api/v1/media/presets/avatars/amber-coder.svg',
+                    description: 'Ссылка на пресет с бэкенда, внешний URL или null для сброса',
                   },
                 },
               },
@@ -274,9 +333,52 @@ export const swaggerDocument = {
       },
     },
     '/users/me/banner': {
+      post: {
+        summary: 'Загрузка файла обоев/баннера профиля (multipart/form-data)',
+        description:
+          'Принимает файл обложки профиля (JPEG, PNG, WebP, GIF, SVG до 5 МБ), автоматически оптимизирует в 1600×400 WebP (quality 85), сохраняет в таблицу MediaAsset БД Neon и обновляет user.bannerUrl.',
+        tags: ['Users', 'Media'],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Файл баннера профиля (JPEG, PNG, WebP, GIF, SVG до 5 МБ)',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Баннер успешно загружен, оптимизирован и сохранен на бэкенде',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                    bannerUrl: { type: 'string', example: '/api/v1/media/7b29c4a1-9123-4bc1-8890-12a4567890ef' },
+                    assetId: { type: 'string', format: 'uuid' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'Отсутствует файл или недопустимый формат/размер (> 5 МБ)' },
+          401: { description: 'Пользователь не авторизован' },
+        },
+      },
       patch: {
-        summary: 'Обновление баннера профиля пользователя',
-        description: 'Обновляет изображение шапки/баннера профиля пользователя. Для удаления передайте null.',
+        summary: 'Обновление баннера профиля по URL пресета или сброс',
+        description: 'Обновляет шапку профиля по URL пресета (например, /api/v1/media/presets/banners/linear-graphite.svg) или сбрасывает в null.',
         tags: ['Users'],
         requestBody: {
           required: true,
@@ -289,8 +391,8 @@ export const swaggerDocument = {
                   bannerUrl: {
                     type: 'string',
                     nullable: true,
-                    example: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809',
-                    description: 'Прямая ссылка на баннер, Data URL (base64) или null для сброса',
+                    example: '/api/v1/media/presets/banners/linear-graphite.svg',
+                    description: 'Ссылка на пресет баннера с бэкенда, внешний URL или null для сброса',
                   },
                 },
               },
@@ -337,6 +439,30 @@ export const swaggerDocument = {
               },
             },
           },
+        },
+      },
+    },
+    '/media/presets': {
+      get: {
+        summary: 'Каталог готовых обоев профиля, дефолтных аватаров и пресетов иконок ачивок',
+        tags: ['Media'],
+        security: [],
+        responses: {
+          200: {
+            description: 'Возвращает списки banners, avatars и achievementIcons с URL и Data URI',
+          },
+        },
+      },
+    },
+    '/media/{id}': {
+      get: {
+        summary: 'Отдача загруженного медиафайла (аватар, баннер, иконка) из БД Neon',
+        tags: ['Media'],
+        security: [],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Бинарный поток изображения (image/webp, image/svg+xml) с иммутабельным кэшированием' },
+          404: { description: 'Медиафайл не найден' },
         },
       },
     },

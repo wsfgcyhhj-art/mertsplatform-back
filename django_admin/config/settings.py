@@ -133,7 +133,45 @@ UNFOLD = {
     "SITE_TITLE": "MertsPlatform Admin",
     "SITE_HEADER": "MertsPlatform Control Center",
     "SITE_SUBHEADER": "Управление платформой и проверка ДЗ",
-    "SITE_SYMBOL": "rocket_launch",
+    "SITE_ICON": {
+        "light": lambda request: static("admin_panel/favicon.svg"),
+        "dark": lambda request: static("admin_panel/favicon.svg"),
+    },
+    "SITE_FAVICON": {
+        "light": lambda request: static("admin_panel/favicon.svg"),
+        "dark": lambda request: static("admin_panel/favicon.svg"),
+    },
+    "SITE_FAVICONS": [
+        {
+            "rel": "icon",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "href": lambda request: static("admin_panel/favicon.svg"),
+        },
+        {
+            "rel": "icon",
+            "sizes": "32x32",
+            "type": "image/png",
+            "href": lambda request: static("admin_panel/favicon-32x32.png"),
+        },
+        {
+            "rel": "icon",
+            "sizes": "16x16",
+            "type": "image/png",
+            "href": lambda request: static("admin_panel/favicon-16x16.png"),
+        },
+        {
+            "rel": "apple-touch-icon",
+            "sizes": "180x180",
+            "type": "image/png",
+            "href": lambda request: static("admin_panel/apple-touch-icon.png"),
+        },
+        {
+            "rel": "shortcut icon",
+            "type": "image/x-icon",
+            "href": lambda request: static("admin_panel/favicon.ico"),
+        },
+    ],
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": False,
     # Оставляем THEME=None в самом движке Unfold, чтобы рендерился встроенный переключатель Light/Dark/System,

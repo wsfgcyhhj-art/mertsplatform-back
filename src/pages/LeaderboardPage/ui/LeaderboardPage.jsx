@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Table, Tag, Avatar, Card, Row, Col, Select, Input, Spin, Badge } from "antd";
 import { TrophyOutlined, UserOutlined, CrownOutlined, CheckCircleOutlined, FireOutlined } from "@ant-design/icons";
-import { api } from "../../../api/client.js";
+import { api, resolveMediaUrl } from "../../../api/client.js";
 import { useFindUser } from "../../../store/userStore.js";
 
 export const LeaderboardPage = () => {
@@ -70,7 +70,7 @@ export const LeaderboardPage = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <Avatar
                             size={40}
-                            src={record.avatarUrl}
+                            src={resolveMediaUrl(record.avatarUrl)}
                             icon={<UserOutlined />}
                             style={{
                                 border: record.rank <= 3 ? `2px solid ${getRankColor(record.rank)}` : '1px solid rgba(255,255,255,0.1)'
@@ -190,7 +190,7 @@ export const LeaderboardPage = () => {
                                     >
                                         <Avatar
                                             size={64}
-                                            src={student.avatarUrl}
+                                            src={resolveMediaUrl(student.avatarUrl)}
                                             icon={<UserOutlined />}
                                             style={{
                                                 border: `3px solid ${getRankColor(idx + 1)}`,

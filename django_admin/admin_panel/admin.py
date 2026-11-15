@@ -308,11 +308,30 @@ class AchievementAdminForm(forms.ModelForm):
 
     class Meta:
         model = Achievement
-        fields = ('code', 'title', 'category', 'description', 'preset_selector', 'custom_icon_file', 'icon_url')
+        fields = (
+            'code',
+            'title',
+            'category',
+            'points',
+            'is_active',
+            'description',
+            'trigger_type',
+            'threshold',
+            'criteria',
+            'preset_selector',
+            'custom_icon_file',
+            'icon_url',
+        )
         widgets = {
             'icon_url': forms.TextInput(
                 attrs={
                     'placeholder': '/api/v1/achievements/icons/trophy.svg или https://... или data:image/...',
+                }
+            ),
+            'criteria': forms.Textarea(
+                attrs={
+                    'rows': 2,
+                    'placeholder': 'Оставьте пустым для авто-генерации по выбранному правилу или укажите свой текст условия...',
                 }
             ),
         }
@@ -333,6 +352,42 @@ class AchievementAdminForm(forms.ModelForm):
         uploaded = cleaned_data.get('custom_icon_file')
         preset_val = (cleaned_data.get('preset_selector') or '').strip()
         raw_icon_url = (cleaned_data.get('icon_url') or '').strip()
+
+        trigger_type = cleaned_data.get('trigger_type') or 'MANUAL'
+        threshold = cleaned_data.get('threshold')
+        numeric_triggers = {
+            'TOTAL_SCORE',
+            'ACCEPTED_TASKS',
+            'BONUS_TASKS',
+            'FIRST_TRY_ACCEPTED',
+            'PERFECT_SCORE',
+            'REVISION_ACCEPTED',
+        }
+
+        if trigger_type in numeric_triggers:
+            if threshold is None or threshold < 1:
+                self.add_error(
+                    'threshold',
+                    'Для выбранного типа триггера необходимо указать положительное числовое значение порога (>= 1).',
+                )
+        else:
+            cleaned_data['threshold'] = None
+            threshold = None
+
+        criteria = (cleaned_data.get('criteria') or '').strip()
+        if not criteria:
+            auto_criteria_map = {
+                'MANUAL': 'Выдается ментором или администратором вручную',
+                'ON_REGISTER': 'Авторизоваться на платформе',
+                'TOTAL_SCORE': f'Набрать суммарно {threshold or 1} баллов',
+                'ACCEPTED_TASKS': f'Получить статус ACCEPTED по {threshold or 1} заданиям',
+                'BONUS_TASKS': f'Получить статус ACCEPTED по {threshold or 1} бонусным заданиям',
+                'FIRST_TRY_ACCEPTED': f'Сдать {threshold or 1} заданий со статусом ACCEPTED с первой попытки',
+                'PERFECT_SCORE': f'Сдать {threshold or 1} заданий на максимальный балл',
+                'REVISION_ACCEPTED': f'Сдать {threshold or 1} заданий после доработки (REVISION -> ACCEPTED)',
+                'EASTER_EGG': 'Найти секретную пасхалку на платформе',
+            }
+            cleaned_data['criteria'] = auto_criteria_map.get(trigger_type, '')
 
         if uploaded:
             max_bytes = 512 * 1024
@@ -370,11 +425,60 @@ class AchievementAdminForm(forms.ModelForm):
 class AchievementAdmin(ModelAdmin):
     form = AchievementAdminForm
     list_fullwidth = True
-    list_display = ('icon_preview', 'title', 'code', 'category', 'icon_source_badge', 'created_at')
+    list_display = (
+        'icon_preview',
+        'title',
+        'code',
+        'category',
+        'rule_badge',
+        'points',
+        'is_active',
+        'icon_source_badge',
+    )
     list_display_links = ('title', 'code')
-    list_filter = ('category',)
-    search_fields = ('title', 'code', 'description')
+    list_editable = ('points', 'is_active')
+    list_filter = ('category', 'trigger_type', 'is_active')
+    search_fields = ('title', 'code', 'description', 'criteria')
     ordering = ('created_at',)
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('code', 'title', 'category', 'points', 'is_active', 'description'),
+        }),
+        ('Конструктор правил авто-выдачи (Rule Engine)', {
+            'fields': ('trigger_type', 'threshold', 'criteria'),
+            'description': (
+                'Настройте правило автоматического награждения студентов. '
+                'Бэкенд проверяет все активные правила при проверке ДЗ, изменении баллов и регистрации.'
+            ),
+        }),
+        ('Иконка достижения (Бэкенд-каталог или кастомный файл)', {
+            'fields': ('preset_selector', 'custom_icon_file', 'icon_url'),
+        }),
+    )
+
+    @admin.display(description='Правило выдачи')
+    def rule_badge(self, obj):
+        t = obj.trigger_type or 'MANUAL'
+        th = obj.threshold
+        labels = {
+            'MANUAL': ('Ручная выдача', '#a1a1aa'),
+            'ON_REGISTER': ('При регистрации', '#34d399'),
+            'TOTAL_SCORE': (f'Баллы ≥ {th or 0}', '#fbbf24'),
+            'ACCEPTED_TASKS': (f'Принято ДЗ ≥ {th or 0}', '#34d399'),
+            'BONUS_TASKS': (f'Бонусные ДЗ ≥ {th or 0}', '#f59e0b'),
+            'FIRST_TRY_ACCEPTED': (f'С 1-й попытки ≥ {th or 0}', '#38bdf8'),
+            'PERFECT_SCORE': (f'Макс. балл ≥ {th or 0}', '#fbbf24'),
+            'REVISION_ACCEPTED': (f'После ревью ≥ {th or 0}', '#c084fc'),
+            'EASTER_EGG': ('Пасхалка (клик)', '#f472b6'),
+        }
+        text, color = labels.get(t, (t, '#a1a1aa'))
+        return format_html(
+            '<span style="display:inline-block;padding:3px 9px;border-radius:8px;'
+            'background:#18181b;border:1px solid #27272a;font-size:12px;font-weight:600;color:{};">{}</span>',
+            color,
+            text,
+        )
 
     @admin.display(description='Иконка')
     def icon_preview(self, obj):

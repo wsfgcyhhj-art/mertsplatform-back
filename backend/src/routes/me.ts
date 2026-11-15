@@ -1,14 +1,45 @@
 import crypto from 'crypto';
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { prisma } from '../prisma.js';
-import { config } from '../config.js';
 import { authenticate } from '../middleware/auth.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
-import { awardAchievement } from '../services/achievementService.js';
-import { DEFAULT_ACHIEVEMENTS } from '../services/achievements.js';
+import { awardAchievement, evaluateUserAchievements } from '../services/achievementService.js';
+import { DEFAULT_ACHIEVEMENTS, formatRuleCriteria } from '../services/achievements.js';
 import { resolveAchievementIconUrl } from '../services/achievementIcons.js';
+import { ALLOWED_IMAGE_MIMES, saveOptimizedMediaAsset } from '../services/mediaPresets.js';
 
 export const meRouter = Router();
+
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB
+});
+
+const bannerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+});
+
+function handleMulterUpload(uploadMiddleware: ReturnType<multer.Multer['single']>) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    uploadMiddleware(req, res, (err: unknown) => {
+      if (err) {
+        const message =
+          err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? 'Превышен допустимый размер файла (макс. 2 МБ для аватара, 5 МБ для баннера)'
+            : (err as Error)?.message || 'Ошибка при загрузке файла';
+        res.status(400).json({
+          statusCode: 400,
+          error: 'Bad Request',
+          message,
+        });
+        return;
+      }
+      next();
+    });
+  };
+}
 
 meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
@@ -101,7 +132,63 @@ const safeUserSelect = {
   updatedAt: true,
 } as const;
 
-// PATCH /api/v1/users/me/avatar — обновление только аватарки
+// POST /api/v1/users/me/avatar — загрузка файла аватарки (multipart/form-data, поле file)
+meRouter.post(
+  '/avatar',
+  authenticate,
+  handleMulterUpload(avatarUpload.single('file')),
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: 'Файл изображения обязателен (передайте поле "file" в multipart/form-data)',
+      });
+      return;
+    }
+
+    if (!ALLOWED_IMAGE_MIMES.has(file.mimetype.toLowerCase())) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: 'Недопустимый формат файла. Разрешены: JPEG, PNG, WebP, GIF, SVG',
+      });
+      return;
+    }
+
+    try {
+      const asset = await saveOptimizedMediaAsset({
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        kind: 'AVATAR',
+        ownerId: userId,
+      });
+
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { avatarUrl: asset.url },
+        select: safeUserSelect,
+      });
+
+      res.json({
+        user: updatedUser,
+        avatarUrl: asset.url,
+        assetId: asset.id,
+      });
+    } catch (err) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: (err as Error)?.message || 'Не удалось обработать изображение аватара',
+      });
+    }
+  }
+);
+
+// PATCH /api/v1/users/me/avatar — обновление аватарки по URL пресета или сброс в null
 meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { avatarUrl } = req.body;
@@ -135,7 +222,63 @@ meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Pro
   res.json({ user: updatedUser });
 });
 
-// PATCH /api/v1/users/me/banner — обновление только баннера профиля
+// POST /api/v1/users/me/banner — загрузка файла обоев/баннера профиля (multipart/form-data, поле file)
+meRouter.post(
+  '/banner',
+  authenticate,
+  handleMulterUpload(bannerUpload.single('file')),
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = req.user!.id;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: 'Файл баннера обязателен (передайте поле "file" в multipart/form-data)',
+      });
+      return;
+    }
+
+    if (!ALLOWED_IMAGE_MIMES.has(file.mimetype.toLowerCase())) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: 'Недопустимый формат файла. Разрешены: JPEG, PNG, WebP, GIF, SVG',
+      });
+      return;
+    }
+
+    try {
+      const asset = await saveOptimizedMediaAsset({
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        kind: 'BANNER',
+        ownerId: userId,
+      });
+
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { bannerUrl: asset.url },
+        select: safeUserSelect,
+      });
+
+      res.json({
+        user: updatedUser,
+        bannerUrl: asset.url,
+        assetId: asset.id,
+      });
+    } catch (err) {
+      res.status(400).json({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: (err as Error)?.message || 'Не удалось обработать изображение баннера',
+      });
+    }
+  }
+);
+
+// PATCH /api/v1/users/me/banner — обновление баннера профиля по URL пресета или сброс в null
 meRouter.patch('/banner', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { bannerUrl } = req.body;
@@ -348,8 +491,17 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
         description: ua.achievement.description,
         iconUrl: resolveAchievementIconUrl(ua.achievement.iconUrl, ua.achievement.code),
         category: ua.achievement.category,
-        points: meta?.points ?? 10,
-        criteria: meta?.criteria ?? ua.achievement.description,
+        triggerType: ua.achievement.triggerType,
+        threshold: ua.achievement.threshold,
+        points: ua.achievement.points || meta?.points || 10,
+        criteria:
+          ua.achievement.criteria ||
+          meta?.criteria ||
+          formatRuleCriteria(
+            ua.achievement.triggerType,
+            ua.achievement.threshold,
+            ua.achievement.description
+          ),
         awardedAt: ua.awardedAt,
       };
     }),
@@ -359,7 +511,8 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
 // POST /api/v1/me/claim-easter-egg — начисление секретной ачивки за пасхалку
 meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
-  const achievement = await awardAchievement(userId, 'EASTER_EGG');
+  const awardedList = await evaluateUserAchievements(userId, { trigger: 'EASTER_EGG' });
+  const achievement = awardedList[0] ?? (await awardAchievement(userId, 'EASTER_EGG'));
 
   res.json({
     success: true,

@@ -14,6 +14,7 @@ import { tasksRouter } from './routes/tasks.js';
 import { adminSubmissionsRouter, submissionsRouter } from './routes/submissions.js';
 import { leaderboardRouter, adminLeaderboardRouter } from './routes/leaderboard.js';
 import { achievementsRouter } from './routes/achievements.js';
+import { mediaRouter } from './routes/media.js';
 import { healthRouter, handleHealthCheck } from './routes/health.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { setupSwagger } from './swagger.js';
@@ -57,6 +58,7 @@ app.use('/api/v1/tasks', tasksRouter);
 app.use('/api/v1/submissions', submissionsRouter);
 app.use('/api/v1/leaderboard', leaderboardRouter);
 app.use('/api/v1/achievements', achievementsRouter);
+app.use('/api/v1/media', mediaRouter);
 app.use('/api/v1/health', healthRouter);
 
 // Healthcheck endpoints for uptime monitoring (Render, UptimeRobot, k8s)

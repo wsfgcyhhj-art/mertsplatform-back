@@ -9,7 +9,7 @@ import {
   getRefreshTokenCookieOptions,
 } from '../utils/tokens.js';
 import { config } from '../config.js';
-import { awardAchievement } from '../services/achievementService.js';
+import { awardAchievement, evaluateUserAchievements } from '../services/achievementService.js';
 import { updateStreak } from '../services/streakService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 
@@ -90,7 +90,8 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
       },
     });
 
-    const welcomeAchievement = await awardAchievement(user.id, 'WELCOME');
+    const onRegisterAwards = await evaluateUserAchievements(user.id, { trigger: 'ON_REGISTER' });
+    const welcomeAchievement = onRegisterAwards[0] ?? (await awardAchievement(user.id, 'WELCOME'));
 
     const tokenPayload = { userId: user.id, role: user.role };
     const accessToken = generateAccessToken(tokenPayload);

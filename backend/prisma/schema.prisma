@@ -146,9 +146,26 @@ model Achievement {
   description String
   iconUrl     String            @map("icon_url")
   category    String            @default("general")
+  triggerType String            @default("MANUAL") @map("trigger_type")
+  threshold   Int?
+  points      Int               @default(10)
+  criteria    String?
+  isActive    Boolean           @default(true) @map("is_active")
   createdAt   DateTime          @default(now()) @map("created_at")
 
   userAchievements UserAchievement[]
+}
+
+model MediaAsset {
+  id        String   @id @default(uuid())
+  kind      String   @default("GENERAL")
+  mimeType  String   @map("mime_type")
+  data      Bytes
+  sizeBytes Int      @map("size_bytes")
+  ownerId   String?  @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([ownerId, kind])
 }
 
 model UserAchievement {

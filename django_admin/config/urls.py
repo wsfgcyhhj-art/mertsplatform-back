@@ -15,8 +15,16 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.http import HttpResponseRedirect
+from django.templatetags.static import static
 from django.urls import path
 
+
+def favicon_redirect(request):
+    return HttpResponseRedirect(static('admin_panel/favicon.ico'))
+
+
 urlpatterns = [
+    path('favicon.ico', favicon_redirect, name='favicon'),
     path('admin/', admin.site.urls),
 ]
