@@ -11,11 +11,11 @@ import {
   getPresetAchievementIcon,
   resolveAchievementIconUrl,
 } from '../services/achievementIcons.js';
+import { toPublicUrl } from '../utils/url.js';
 
 export const achievementsRouter = Router();
 
-// GET /api/v1/achievements/icons — публичный каталог системных SVG-иконок
-achievementsRouter.get('/icons', (_req: Request, res: Response): void => {
+function sendPresetIconsList(req: Request, res: Response): void {
   res.json({
     icons: PRESET_ACHIEVEMENT_ICONS.map((icon) => ({
       slug: icon.slug,
@@ -23,11 +23,16 @@ achievementsRouter.get('/icons', (_req: Request, res: Response): void => {
       code: icon.code,
       label: icon.label,
       color: icon.color,
-      url: icon.url,
+      path: icon.url,
+      url: toPublicUrl(req, icon.url) || icon.url,
       dataUri: icon.dataUri,
     })),
   });
-});
+}
+
+// GET /api/v1/achievements/icons & /api/v1/achievements/icons/presets — публичный каталог системных SVG-иконок
+achievementsRouter.get('/icons', sendPresetIconsList);
+achievementsRouter.get('/icons/presets', sendPresetIconsList);
 
 // GET /api/v1/achievements/icons/:slug — отдача векторной SVG-иконки для <img>
 achievementsRouter.get('/icons/:slug', (req: Request, res: Response): void => {
@@ -76,12 +81,14 @@ achievementsRouter.get('/', async (req: Request, res: Response): Promise<void> =
   const result = achievements.map((ach) => {
     const meta = DEFAULT_ACHIEVEMENTS.find((d) => d.code === ach.code);
     const userAch = ach.userAchievements[0];
+    const resolvedIconPath = resolveAchievementIconUrl(ach.iconUrl, ach.code);
     return {
       id: ach.id,
       code: ach.code,
       title: ach.title,
       description: ach.description,
-      iconUrl: resolveAchievementIconUrl(ach.iconUrl, ach.code),
+      iconUrl: toPublicUrl(req, resolvedIconPath) || resolvedIconPath,
+      iconPath: resolvedIconPath,
       category: ach.category,
       triggerType: ach.triggerType,
       threshold: ach.threshold,
@@ -150,12 +157,13 @@ achievementsRouter.get('/:id', async (req: Request, res: Response): Promise<void
     id: item.user.id,
     name: item.user.name,
     login: item.user.login,
-    avatarUrl: item.user.avatarUrl,
+    avatarUrl: toPublicUrl(req, item.user.avatarUrl),
     awardedAt: item.awardedAt,
   }));
 
   const meta = DEFAULT_ACHIEVEMENTS.find((d) => d.code === achievement.code);
   const myUnlock = achievement.userAchievements[0];
+  const resolvedIconPath = resolveAchievementIconUrl(achievement.iconUrl, achievement.code);
 
   res.json({
     achievement: {
@@ -163,7 +171,8 @@ achievementsRouter.get('/:id', async (req: Request, res: Response): Promise<void
       code: achievement.code,
       title: achievement.title,
       description: achievement.description,
-      iconUrl: resolveAchievementIconUrl(achievement.iconUrl, achievement.code),
+      iconUrl: toPublicUrl(req, resolvedIconPath) || resolvedIconPath,
+      iconPath: resolvedIconPath,
       category: achievement.category,
       triggerType: achievement.triggerType,
       threshold: achievement.threshold,

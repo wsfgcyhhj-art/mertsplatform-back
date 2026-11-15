@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { toPublicUrl } from '../utils/url.js';
 
 export const leaderboardRouter = Router();
 
@@ -151,7 +152,12 @@ leaderboardRouter.get('/', async (req: Request, res: Response): Promise<void> =>
 
   const leaderboard = await computeFlatLeaderboard(targetMonth, groupNumber);
 
-  res.json(leaderboard);
+  res.json(
+    leaderboard.map((item) => ({
+      ...item,
+      avatarUrl: toPublicUrl(req, item.avatarUrl),
+    }))
+  );
 });
 
 // GET /api/v1/leaderboard/top?month=&groupNumber= — топ-5 по баллам и топ-5 по задачам
@@ -173,7 +179,10 @@ leaderboardRouter.get('/top', async (req: Request, res: Response): Promise<void>
       ? groupNumberParam.trim()
       : undefined;
 
-  const fullList = await computeFlatLeaderboard(targetMonth, groupNumber);
+  const fullList = (await computeFlatLeaderboard(targetMonth, groupNumber)).map((item) => ({
+    ...item,
+    avatarUrl: toPublicUrl(req, item.avatarUrl),
+  }));
 
   const topByScore = [...fullList]
     .sort((a, b) => b.totalScore - a.totalScore)
@@ -223,7 +232,15 @@ leaderboardRouter.get('/archive/:month', async (req: Request, res: Response): Pr
   res.json({
     month,
     recordsCount: archive.length,
-    archive,
+    archive: archive.map((item) => ({
+      ...item,
+      user: item.user
+        ? {
+            ...item.user,
+            avatarUrl: toPublicUrl(req, item.user.avatarUrl),
+          }
+        : item.user,
+    })),
   });
 });
 

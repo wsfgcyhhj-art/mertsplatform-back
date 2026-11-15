@@ -5,12 +5,30 @@ import {
   findPresetBanner,
   getAllMediaPresetsCatalog,
 } from '../services/mediaPresets.js';
+import { toPublicUrl } from '../utils/url.js';
 
 export const mediaRouter = Router();
 
 // GET /api/v1/media/presets — каталог готовых темных обоев, дефолтных аватаров и иконок ачивок
-mediaRouter.get('/presets', (_req: Request, res: Response): void => {
-  res.json(getAllMediaPresetsCatalog());
+mediaRouter.get('/presets', (req: Request, res: Response): void => {
+  const catalog = getAllMediaPresetsCatalog();
+  res.json({
+    banners: catalog.banners.map((item) => ({
+      ...item,
+      path: item.url,
+      url: toPublicUrl(req, item.url) || item.url,
+    })),
+    avatars: catalog.avatars.map((item) => ({
+      ...item,
+      path: item.url,
+      url: toPublicUrl(req, item.url) || item.url,
+    })),
+    achievementIcons: catalog.achievementIcons.map((item) => ({
+      ...item,
+      path: item.url,
+      url: toPublicUrl(req, item.url) || item.url,
+    })),
+  });
 });
 
 // GET /api/v1/media/presets/banners/:slug — векторные обои профиля с бэкенда
@@ -63,6 +81,7 @@ mediaRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
       statusCode: 400,
       error: 'Bad Request',
       message: 'Media asset ID is required',
+      fields: { id: 'Media asset ID is required' },
     });
     return;
   }

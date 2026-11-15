@@ -8,6 +8,7 @@ import { awardAchievement, evaluateUserAchievements } from '../services/achievem
 import { DEFAULT_ACHIEVEMENTS, formatRuleCriteria } from '../services/achievements.js';
 import { resolveAchievementIconUrl } from '../services/achievementIcons.js';
 import { ALLOWED_IMAGE_MIMES, saveOptimizedMediaAsset } from '../services/mediaPresets.js';
+import { formatUserMedia, normalizeStoredMediaUrl, toPublicUrl } from '../utils/url.js';
 
 export const meRouter = Router();
 
@@ -101,11 +102,11 @@ meRouter.get('/', authenticate, async (req: Request, res: Response): Promise<voi
   const { telegramChatId: _telegramChatId, ...safeUser } = user;
 
   res.json({
-    user: {
+    user: formatUserMedia(req, {
       ...safeUser,
       isTelegramConnected,
       telegramUsername: user.telegramUsername,
-    },
+    }),
     isTelegramConnected,
     telegramUsername: user.telegramUsername,
     stats: {
@@ -173,9 +174,11 @@ meRouter.post(
         select: safeUserSelect,
       });
 
+      const formattedUser = formatUserMedia(req, updatedUser);
       res.json({
-        user: updatedUser,
-        avatarUrl: asset.url,
+        user: formattedUser,
+        avatarUrl: formattedUser.avatarUrl,
+        avatarPath: asset.url,
         assetId: asset.id,
       });
     } catch (err) {
@@ -183,6 +186,7 @@ meRouter.post(
         statusCode: 400,
         error: 'Bad Request',
         message: (err as Error)?.message || 'Не удалось обработать изображение аватара',
+        fields: { file: 'Не удалось обработать изображение аватара' },
       });
     }
   }
@@ -191,13 +195,14 @@ meRouter.post(
 // PATCH /api/v1/users/me/avatar — обновление аватарки по URL пресета или сброс в null
 meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
-  const { avatarUrl } = req.body;
+  const { avatarUrl } = req.body || {};
 
   if (avatarUrl === undefined) {
     res.status(400).json({
       statusCode: 400,
       error: 'Bad Request',
       message: 'Поле avatarUrl обязательно для обновления аватара (передайте URL, Base64 или null)',
+      fields: { avatarUrl: 'Поле avatarUrl обязательно' },
     });
     return;
   }
@@ -207,6 +212,7 @@ meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Pro
       statusCode: 400,
       error: 'Bad Request',
       message: 'avatarUrl must be a string or null',
+      fields: { avatarUrl: 'avatarUrl must be a string or null' },
     });
     return;
   }
@@ -214,12 +220,12 @@ meRouter.patch('/avatar', authenticate, async (req: Request, res: Response): Pro
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: {
-      avatarUrl: avatarUrl ? String(avatarUrl).trim() : null,
+      avatarUrl: normalizeStoredMediaUrl(avatarUrl),
     },
     select: safeUserSelect,
   });
 
-  res.json({ user: updatedUser });
+  res.json({ user: formatUserMedia(req, updatedUser) });
 });
 
 // POST /api/v1/users/me/banner — загрузка файла обоев/баннера профиля (multipart/form-data, поле file)
@@ -236,6 +242,7 @@ meRouter.post(
         statusCode: 400,
         error: 'Bad Request',
         message: 'Файл баннера обязателен (передайте поле "file" в multipart/form-data)',
+        fields: { file: 'Файл баннера обязателен' },
       });
       return;
     }
@@ -245,6 +252,7 @@ meRouter.post(
         statusCode: 400,
         error: 'Bad Request',
         message: 'Недопустимый формат файла. Разрешены: JPEG, PNG, WebP, GIF, SVG',
+        fields: { file: 'Недопустимый формат файла' },
       });
       return;
     }
@@ -263,9 +271,11 @@ meRouter.post(
         select: safeUserSelect,
       });
 
+      const formattedUser = formatUserMedia(req, updatedUser);
       res.json({
-        user: updatedUser,
-        bannerUrl: asset.url,
+        user: formattedUser,
+        bannerUrl: formattedUser.bannerUrl,
+        bannerPath: asset.url,
         assetId: asset.id,
       });
     } catch (err) {
@@ -273,6 +283,7 @@ meRouter.post(
         statusCode: 400,
         error: 'Bad Request',
         message: (err as Error)?.message || 'Не удалось обработать изображение баннера',
+        fields: { file: 'Не удалось обработать изображение баннера' },
       });
     }
   }
@@ -281,13 +292,14 @@ meRouter.post(
 // PATCH /api/v1/users/me/banner — обновление баннера профиля по URL пресета или сброс в null
 meRouter.patch('/banner', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
-  const { bannerUrl } = req.body;
+  const { bannerUrl } = req.body || {};
 
   if (bannerUrl === undefined) {
     res.status(400).json({
       statusCode: 400,
       error: 'Bad Request',
       message: 'Поле bannerUrl обязательно для обновления баннера (передайте URL, Base64 или null)',
+      fields: { bannerUrl: 'Поле bannerUrl обязательно' },
     });
     return;
   }
@@ -297,6 +309,7 @@ meRouter.patch('/banner', authenticate, async (req: Request, res: Response): Pro
       statusCode: 400,
       error: 'Bad Request',
       message: 'bannerUrl must be a string or null',
+      fields: { bannerUrl: 'bannerUrl must be a string or null' },
     });
     return;
   }
@@ -304,12 +317,12 @@ meRouter.patch('/banner', authenticate, async (req: Request, res: Response): Pro
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: {
-      bannerUrl: bannerUrl ? String(bannerUrl).trim() : null,
+      bannerUrl: normalizeStoredMediaUrl(bannerUrl),
     },
     select: safeUserSelect,
   });
 
-  res.json({ user: updatedUser });
+  res.json({ user: formatUserMedia(req, updatedUser) });
 });
 
 // PATCH /api/v1/users/me/profile — частичное обновление текстовых данных (name, telegram)
@@ -397,7 +410,7 @@ meRouter.patch('/profile', authenticate, async (req: Request, res: Response): Pr
     select: safeUserSelect,
   });
 
-  res.json({ user: updatedUser });
+  res.json({ user: formatUserMedia(req, updatedUser) });
 });
 
 // POST /api/v1/me/change-password — явный эндпоинт смены пароля
@@ -484,12 +497,14 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
     total: userAchievements.length,
     achievements: userAchievements.map((ua) => {
       const meta = DEFAULT_ACHIEVEMENTS.find((d) => d.code === ua.achievement.code);
+      const resolvedIconPath = resolveAchievementIconUrl(ua.achievement.iconUrl, ua.achievement.code);
       return {
         id: ua.achievement.id,
         code: ua.achievement.code,
         title: ua.achievement.title,
         description: ua.achievement.description,
-        iconUrl: resolveAchievementIconUrl(ua.achievement.iconUrl, ua.achievement.code),
+        iconUrl: toPublicUrl(req, resolvedIconPath) || resolvedIconPath,
+        iconPath: resolvedIconPath,
         category: ua.achievement.category,
         triggerType: ua.achievement.triggerType,
         threshold: ua.achievement.threshold,
@@ -512,7 +527,13 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
 meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const awardedList = await evaluateUserAchievements(userId, { trigger: 'EASTER_EGG' });
-  const achievement = awardedList[0] ?? (await awardAchievement(userId, 'EASTER_EGG'));
+  const rawAchievement = awardedList[0] ?? (await awardAchievement(userId, 'EASTER_EGG'));
+  const achievement = rawAchievement
+    ? {
+        ...rawAchievement,
+        iconUrl: toPublicUrl(req, rawAchievement.iconUrl) || rawAchievement.iconUrl,
+      }
+    : null;
 
   res.json({
     success: true,

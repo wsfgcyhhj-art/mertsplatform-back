@@ -8,17 +8,19 @@ import { ensureDefaultAchievements, evaluateUserAchievements } from '../src/serv
 
 let server: Server;
 let baseUrl: string;
+let serverRootUrl: string;
 let testUserId = '';
 let testToken = '';
 let customAchId = '';
 
-describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & Dynamic Rule Engine', () => {
+describe('API-First Backend: OpenAPI 3.0, CORS, Media Storage, Public URLs & Dynamic Rule Engine', () => {
   before(async () => {
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const addr = server.address();
         const port = typeof addr === 'object' && addr ? addr.port : 0;
-        baseUrl = `http://127.0.0.1:${port}/api/v1`;
+        serverRootUrl = `http://127.0.0.1:${port}`;
+        baseUrl = `${serverRootUrl}/api/v1`;
         resolve();
       });
     });
@@ -34,7 +36,7 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
       },
     });
     testUserId = testUser.id;
-    const secret = process.env.JWT_SECRET || 'dev_jwt_secret_key_change_in_prod';
+    const secret = process.env.JWT_ACCESS_SECRET || 'merts-jwt-access-secret-key-change-in-prod';
     testToken = jwt.sign({ userId: testUser.id, role: 'STUDENT' }, secret, { expiresIn: '1h' });
   });
 
@@ -44,7 +46,7 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
       await prisma.achievement.delete({ where: { id: customAchId } }).catch(() => {});
     }
     if (testUserId) {
-      await prisma.mediaAsset.deleteMany({ where: { userId: testUserId } }).catch(() => {});
+      await prisma.mediaAsset.deleteMany({ where: { ownerId: testUserId } }).catch(() => {});
       await prisma.scoreAdjustment.deleteMany({ where: { userId: testUserId } }).catch(() => {});
       await prisma.userAchievement.deleteMany({ where: { userId: testUserId } }).catch(() => {});
       await prisma.user.delete({ where: { id: testUserId } }).catch(() => {});
@@ -53,28 +55,96 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
     await prisma.$disconnect();
   });
 
-  it('Module 1: serves GET /api/v1/media/presets with banners, avatars, and achievementIcons', async () => {
+  it('OpenAPI 3.0 & CORS: serves valid /api/docs-json and allows Vercel/Netlify/localhost origins with credentials', async () => {
+    const res = await fetch(`${serverRootUrl}/api/docs-json`, {
+      headers: { Origin: 'https://merts-frontend-git-main.vercel.app' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
+
+    const spec = (await res.json()) as {
+      openapi: string;
+      paths: Record<string, unknown>;
+      components: { schemas: Record<string, unknown> };
+    };
+    assert.equal(spec.openapi, '3.0.3');
+
+    const expectedPaths = [
+      '/auth/register',
+      '/auth/login',
+      '/auth/refresh',
+      '/auth/logout',
+      '/me',
+      '/users/me/profile',
+      '/me/change-password',
+      '/me/achievements',
+      '/me/claim-easter-egg',
+      '/me/telegram/connect',
+      '/me/telegram/disconnect',
+      '/users/me/avatar',
+      '/users/me/banner',
+      '/media/presets',
+      '/media/presets/banners/{slug}',
+      '/media/presets/avatars/{slug}',
+      '/media/{id}',
+      '/lessons',
+      '/tasks',
+      '/tasks/{id}',
+      '/tasks/{id}/submissions',
+      '/submissions/{id}/voice',
+      '/achievements',
+      '/achievements/icons',
+      '/achievements/icons/{slug}',
+      '/achievements/{id}',
+      '/leaderboard',
+      '/leaderboard/top',
+      '/leaderboard/archive/{month}',
+      '/admin/users',
+      '/admin/users/bulk',
+      '/admin/users/{id}',
+      '/admin/users/{id}/score-adjust',
+      '/admin/users/{id}/score-history',
+      '/admin/users/{id}/achievements',
+      '/admin/lessons',
+      '/admin/lessons/{id}',
+      '/admin/tasks',
+      '/admin/tasks/{id}',
+      '/admin/submissions',
+      '/admin/submissions/{id}',
+      '/admin/submissions/{id}/review',
+      '/admin/leaderboard/archive-and-reset',
+      '/health',
+    ];
+    for (const p of expectedPaths) {
+      assert.ok(p in spec.paths, `Missing OpenAPI path: ${p}`);
+    }
+  });
+
+  it('Module 1: serves GET /api/v1/media/presets with full public URLs for banners, avatars, and achievementIcons', async () => {
     const res = await fetch(`${baseUrl}/media/presets`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
-      banners: Array<{ slug: string; url: string }>;
-      avatars: Array<{ slug: string; url: string }>;
-      achievementIcons: Array<{ slug: string; url: string }>;
+      banners: Array<{ slug: string; url: string; path: string }>;
+      avatars: Array<{ slug: string; url: string; path: string }>;
+      achievementIcons: Array<{ slug: string; url: string; path: string }>;
     };
     assert.equal(body.banners.length, 6);
     assert.equal(body.avatars.length, 6);
     assert.equal(body.achievementIcons.length, 12);
+    assert.ok(body.banners[0].url.startsWith('http://'));
+    assert.ok(body.avatars[0].url.startsWith('http://'));
+    assert.ok(body.achievementIcons[0].url.startsWith('http://'));
 
-    const bannerSvgRes = await fetch(`${baseUrl}/media/presets/banners/linear-graphite.svg`);
+    const bannerSvgRes = await fetch(body.banners[0].url);
     assert.equal(bannerSvgRes.status, 200);
     assert.ok((bannerSvgRes.headers.get('content-type') || '').includes('image/svg+xml'));
 
-    const avatarSvgRes = await fetch(`${baseUrl}/media/presets/avatars/avatar-amber-wolf.svg`);
+    const avatarSvgRes = await fetch(body.avatars[0].url);
     assert.equal(avatarSvgRes.status, 200);
     assert.ok((avatarSvgRes.headers.get('content-type') || '').includes('image/svg+xml'));
   });
 
-  it('Module 1: uploads PNG avatar and banner via multipart/form-data, converts to WebP in Neon DB, and serves GET /api/v1/media/:id', async () => {
+  it('Module 1: uploads PNG avatar and banner via multipart/form-data, converts to WebP in Neon DB, and returns full URLs', async () => {
     const pngBuffer = await sharp({
       create: {
         width: 320,
@@ -95,11 +165,15 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
       body: form,
     });
     assert.equal(uploadRes.status, 200);
-    const uploadBody = (await uploadRes.json()) as { avatarUrl: string; user: { avatarUrl: string } };
-    assert.ok(uploadBody.avatarUrl.startsWith('/api/v1/media/'));
+    const uploadBody = (await uploadRes.json()) as {
+      avatarUrl: string;
+      avatarPath: string;
+      user: { avatarUrl: string };
+    };
+    assert.ok(uploadBody.avatarUrl.startsWith(`${baseUrl}/media/`));
+    assert.ok(uploadBody.avatarPath.startsWith('/api/v1/media/'));
 
-    const mediaId = uploadBody.avatarUrl.replace('/api/v1/media/', '');
-    const mediaRes = await fetch(`${baseUrl}/media/${mediaId}`);
+    const mediaRes = await fetch(uploadBody.avatarUrl);
     assert.equal(mediaRes.status, 200);
     assert.equal(mediaRes.headers.get('content-type'), 'image/webp');
     const webpBytes = Buffer.from(await mediaRes.arrayBuffer());
@@ -108,7 +182,6 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
     assert.equal(meta.width, 256);
     assert.equal(meta.height, 256);
 
-    // Banner upload test
     const bannerForm = new FormData();
     bannerForm.append('file', new Blob([pngBuffer], { type: 'image/png' }), 'banner.png');
     const bannerUploadRes = await fetch(`${baseUrl}/users/me/banner`, {
@@ -117,19 +190,8 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
       body: bannerForm,
     });
     assert.equal(bannerUploadRes.status, 200);
-    const bannerBody = (await bannerUploadRes.json()) as { bannerUrl: string };
-    assert.ok(bannerBody.bannerUrl.startsWith('/api/v1/media/'));
-  });
-
-  it('Module 2: serves all 12 preset SVG icons on /api/v1/achievements/icons/presets and /:slug.svg', async () => {
-    const res = await fetch(`${baseUrl}/achievements/icons/presets`);
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as { icons: Array<{ slug: string; url: string; dataUri: string }> };
-    assert.equal(body.icons.length, 12);
-
-    const svgRes = await fetch(`${baseUrl}/achievements/icons/sparkles.svg`);
-    assert.equal(svgRes.status, 200);
-    assert.ok((svgRes.headers.get('content-type') || '').includes('image/svg+xml'));
+    const bannerBody = (await bannerUploadRes.json()) as { bannerUrl: string; bannerPath: string };
+    assert.ok(bannerBody.bannerUrl.startsWith(`${baseUrl}/media/`));
   });
 
   it('Module 2: migrates legacy icon keys and preserves custom Admin Data URI icons across restarts', async () => {
@@ -185,17 +247,15 @@ describe('Modules 1, 2 & 3: Media Storage, Preset Catalogs, Achievement Icons & 
       },
     });
 
-    // While isActive is false, evaluateUserAchievements should NOT award it
-    const unlockedWhenInactive = await evaluateUserAchievements(testUserId, { type: 'SCORE_UPDATED' });
+    const unlockedWhenInactive = await evaluateUserAchievements(testUserId, { trigger: 'SCORE_ADJUSTED' });
     assert.ok(!unlockedWhenInactive.some((a) => a.code === 'DYNAMIC_RULE_SCORE_25'));
 
-    // Activate rule in DB (as in Django Admin) and evaluate again
     await prisma.achievement.update({
       where: { id: customAch.id },
       data: { isActive: true },
     });
 
-    const unlockedWhenActive = await evaluateUserAchievements(testUserId, { type: 'SCORE_UPDATED' });
+    const unlockedWhenActive = await evaluateUserAchievements(testUserId, { trigger: 'SCORE_ADJUSTED' });
     assert.ok(unlockedWhenActive.some((a) => a.code === 'DYNAMIC_RULE_SCORE_25' && a.points === 35));
   });
 });

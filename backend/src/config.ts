@@ -27,23 +27,69 @@ if (isProd) {
   );
 }
 
-// Парсинг CORS_ORIGIN из переменных окружения
+// Парсинг CORS_ORIGINS / CORS_ORIGIN из переменных окружения с поддержкой wildcard-доменов
+const wildcardToRegExp = (pattern: string): RegExp => {
+  const escaped = pattern
+    .replace(/^https?:\/\//i, '')
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\\\*/g, '[a-zA-Z0-9-]+');
+  return new RegExp(`^https?:\\/\\/${escaped}(:\\d+)?$`, 'i');
+};
+
 const parseCorsOrigins = (): (string | RegExp)[] => {
-  const envOrigins = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS;
+  const defaultOrigins: (string | RegExp)[] = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+    /\.vercel\.app$/i,
+    /\.netlify\.app$/i,
+    /\.onrender\.com$/i,
+  ];
+
+  const envOrigins = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN;
   if (!envOrigins) {
-    return ['http://localhost:5173', 'http://localhost:3000', /\.vercel\.app$/];
+    return defaultOrigins;
   }
-  return envOrigins
+
+  const parsed = envOrigins
     .split(',')
     .map((o) => o.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((entry): string | RegExp => {
+      if (entry === '*') {
+        return /^https?:\/\/.+$/i;
+      }
+      if (entry.includes('*')) {
+        return wildcardToRegExp(entry);
+      }
+      if (!/^https?:\/\//i.test(entry)) {
+        return new RegExp(`^https?:\\/\\/${entry.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      }
+      return entry.replace(/\/+$/, '');
+    });
+
+  return [...defaultOrigins, ...parsed];
 };
+
+const allowedOrigins = parseCorsOrigins();
+
+export function isOriginAllowed(origin?: string): boolean {
+  if (!origin) return true;
+  const cleanOrigin = origin.replace(/\/+$/, '');
+  return allowedOrigins.some((rule) => {
+    if (typeof rule === 'string') {
+      return rule.toLowerCase() === cleanOrigin.toLowerCase();
+    }
+    return rule.test(cleanOrigin);
+  });
+}
 
 export const config = {
   port: Number(process.env.PORT) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
   isProd,
-  corsOrigins: parseCorsOrigins(),
+  corsOrigins: allowedOrigins,
   jwt: {
     accessSecret,
     refreshSecret,

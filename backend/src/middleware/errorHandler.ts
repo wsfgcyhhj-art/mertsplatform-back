@@ -1,11 +1,46 @@
 import { Request, Response, NextFunction } from 'express';
 
+export interface ApiErrorPayload {
+  statusCode: number;
+  error: string;
+  message: string;
+  fields?: Record<string, string>;
+}
+
+export function sendApiError(
+  res: Response,
+  statusCode: number,
+  message: string,
+  fields?: Record<string, string>,
+  customError?: string
+): void {
+  const errorMap: Record<number, string> = {
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    409: 'Conflict',
+    422: 'Unprocessable Entity',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    503: 'Service Unavailable',
+  };
+
+  const payload: ApiErrorPayload = {
+    statusCode,
+    error: customError || errorMap[statusCode] || 'Error',
+    message,
+  };
+
+  if (fields && Object.keys(fields).length > 0) {
+    payload.fields = fields;
+  }
+
+  res.status(statusCode).json(payload);
+}
+
 export function notFoundHandler(req: Request, res: Response): void {
-  res.status(404).json({
-    statusCode: 404,
-    error: 'Not Found',
-    message: `Route ${req.method} ${req.originalUrl} not found`,
-  });
+  sendApiError(res, 404, `Route ${req.method} ${req.originalUrl} not found`, undefined, 'Not Found');
 }
 
 export function errorHandler(
@@ -14,21 +49,15 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
+  if (err instanceof SyntaxError && 'body' in err) {
+    sendApiError(res, 400, 'Invalid JSON payload in request body', { body: 'Malformed JSON' });
+    return;
+  }
+
   const statusCode = err.status || err.statusCode || 500;
   const message = err.message || 'Internal Server Error';
 
-  let errorName = 'Internal Server Error';
-  if (statusCode === 400) errorName = 'Bad Request';
-  else if (statusCode === 401) errorName = 'Unauthorized';
-  else if (statusCode === 403) errorName = 'Forbidden';
-  else if (statusCode === 404) errorName = 'Not Found';
-  else if (statusCode === 409) errorName = 'Conflict';
-
   console.error(`[Error] ${statusCode} - ${message}`, err.stack || err);
 
-  res.status(statusCode).json({
-    statusCode,
-    error: errorName,
-    message,
-  });
+  sendApiError(res, statusCode, message, err.fields);
 }

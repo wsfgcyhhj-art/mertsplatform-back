@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { awardAchievement, evaluateUserAchievements } from '../services/achievementService.js';
 import { updateStreak } from '../services/streakService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
+import { formatUserMedia, toPublicUrl } from '../utils/url.js';
 
 export const authRouter = Router();
 
@@ -110,7 +111,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
 
     res.status(201).json({
       accessToken,
-      user: {
+      user: formatUserMedia(req, {
         id: user.id,
         login: user.login,
         role: user.role,
@@ -123,8 +124,13 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
         bannerUrl: user.bannerUrl,
         streakCount: 0,
         createdAt: user.createdAt,
-      },
-      awardedAchievement: welcomeAchievement,
+      }),
+      awardedAchievement: welcomeAchievement
+        ? {
+            ...welcomeAchievement,
+            iconUrl: toPublicUrl(req, welcomeAchievement.iconUrl) || welcomeAchievement.iconUrl,
+          }
+        : null,
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -197,7 +203,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
 
   res.json({
     accessToken,
-    user: {
+    user: formatUserMedia(req, {
       id: user.id,
       login: user.login,
       role: user.role,
@@ -209,7 +215,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
       avatarUrl: user.avatarUrl,
       bannerUrl: user.bannerUrl,
       streakCount,
-    },
+    }),
   });
 });
 

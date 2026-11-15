@@ -8,6 +8,7 @@ import {
   escapeTelegramHtml,
   getTelegramFileStream,
 } from '../services/telegramService.js';
+import { formatUserMedia } from '../utils/url.js';
 
 // Общий роутер для работы с решениями (доступен студенту-автору и менторам)
 export const submissionsRouter = Router();
@@ -187,7 +188,10 @@ adminSubmissionsRouter.get('/:id', async (req: Request, res: Response): Promise<
   });
 
   res.json({
-    submission,
+    submission: {
+      ...submission,
+      user: submission.user ? formatUserMedia(req, submission.user) : submission.user,
+    },
     history,
   });
 });

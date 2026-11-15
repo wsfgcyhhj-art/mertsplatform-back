@@ -5,6 +5,7 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../utils/password.js';
 import { checkScoreThresholds } from '../services/achievementService.js';
 import { isValidTelegramChatId } from '../services/telegramService.js';
+import { formatUserMedia } from '../utils/url.js';
 
 export const adminUsersRouter = Router();
 
@@ -65,7 +66,7 @@ adminUsersRouter.get('/', async (req: Request, res: Response): Promise<void> => 
     orderBy: { createdAt: 'desc' },
   });
 
-  res.json({ users });
+  res.json({ users: users.map((u) => formatUserMedia(req, u)) });
 });
 
 // POST /api/v1/admin/users
@@ -148,7 +149,7 @@ adminUsersRouter.post('/', async (req: Request, res: Response): Promise<void> =>
       select: userSelectWithoutPassword,
     });
 
-    res.status(201).json({ user: newUser });
+    res.status(201).json({ user: formatUserMedia(req, newUser) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       res.status(409).json({ error: 'User with this login already exists' });
@@ -361,7 +362,7 @@ adminUsersRouter.patch('/:id', async (req: Request, res: Response): Promise<void
     select: userSelectWithoutPassword,
   });
 
-  res.json({ user: updatedUser });
+  res.json({ user: formatUserMedia(req, updatedUser) });
 });
 
 // DELETE /api/v1/admin/users/:id

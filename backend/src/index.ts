@@ -2,7 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { config } from './config.js';
+import { config, isOriginAllowed } from './config.js';
 import { prisma } from './prisma.js';
 import { authRouter } from './routes/auth.js';
 import { meRouter } from './routes/me.js';
@@ -23,6 +23,7 @@ import { initTelegramBot, stopTelegramBot } from './services/telegramService.js'
 import { initWeeklyDigestCron, stopWeeklyDigestCron } from './services/cronService.js';
 
 const app = express();
+app.set('trust proxy', 1);
 
 // Безопасные HTTP-заголовки (X-Content-Type-Options, X-Frame-Options, HSTS, etc.)
 app.use(
@@ -33,13 +34,22 @@ app.use(
 
 app.use(
   cors({
-    origin: config.corsOrigins,
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Disposition', 'Content-Range', 'Accept-Ranges', 'Content-Length'],
   })
 );
 
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // Swagger documentation
 setupSwagger(app);
