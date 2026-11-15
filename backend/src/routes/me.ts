@@ -542,7 +542,7 @@ meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Respo
   });
 });
 
-// POST /api/v1/me/telegram/connect — генерация одноразового кода и ссылки для привязки Telegram-бота
+// POST /api/v1/users/me/telegram/connect (и /api/v1/me/telegram/connect) — генерация одноразового кода и ссылки для привязки Telegram-бота
 meRouter.post('/telegram/connect', authenticate, async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
@@ -565,13 +565,14 @@ meRouter.post('/telegram/connect', authenticate, async (req: Request, res: Respo
   } catch (err) {
     console.error('[Telegram Connect] Error generating auth code:', err);
     res.status(503).json({
-      error: 'База данных временно недоступна, повторите попытку',
+      statusCode: 503,
+      error: 'Service Unavailable',
       message: 'Не удалось сгенерировать ссылку привязки Telegram',
     });
   }
 });
 
-// DELETE /api/v1/me/telegram/disconnect — отвязка Telegram-бота от профиля
+// DELETE /api/v1/users/me/telegram/disconnect (и /api/v1/me/telegram/disconnect) — отвязка Telegram-бота от профиля
 meRouter.delete('/telegram/disconnect', authenticate, async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
@@ -593,7 +594,8 @@ meRouter.delete('/telegram/disconnect', authenticate, async (req: Request, res: 
   } catch (err) {
     console.error('[Telegram Disconnect] Error disconnecting telegram:', err);
     res.status(503).json({
-      error: 'База данных временно недоступна, повторите попытку',
+      statusCode: 503,
+      error: 'Service Unavailable',
       message: 'Не удалось отвязать Telegram',
     });
   }

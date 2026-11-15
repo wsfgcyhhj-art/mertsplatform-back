@@ -539,13 +539,77 @@ export const swaggerDocument = {
     },
 
     // ──────────────────────────────────────────────────────────────────────────
-    // PROFILE & USERS (/me & /users/me)
+    // PROFILE & USERS (/users/me & /me)
     // ──────────────────────────────────────────────────────────────────────────
+    '/users/me': {
+      get: {
+        tags: ['Profile & Users'],
+        summary: 'Профиль текущего пользователя со статистикой и статусом привязки Telegram-бота',
+        description:
+          'Возвращает полные данные текущего авторизованного пользователя, статистику баллов/задач/стрика, а также статус привязки Telegram-бота (`isTelegramConnected: boolean` и `telegramUsername: string | null` как в корне ответа, так и внутри объекта `user`).\n\n' +
+          '### Использование при автопривязке Telegram-бота:\n' +
+          'После открытия ссылки из `POST /api/v1/users/me/telegram/connect` в новой вкладке фронтенд опрашивает `GET /api/v1/users/me` каждые **3 секунды** (или по событию `window.focus` / `visibilitychange`), пока поле `isTelegramConnected` не станет `true`. Как только `isTelegramConnected === true` — поллинг прекращается, а в UI отображается плашка `Подключен (@${telegramUsername})`.',
+        responses: {
+          200: {
+            description: 'Профиль пользователя, статус Telegram и статистика',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['user', 'isTelegramConnected', 'telegramUsername', 'stats'],
+                  properties: {
+                    user: { $ref: '#/components/schemas/User' },
+                    isTelegramConnected: {
+                      type: 'boolean',
+                      description: 'Флаг: привязан ли Telegram-бот к аккаунту студента',
+                      example: true,
+                    },
+                    telegramUsername: {
+                      type: 'string',
+                      nullable: true,
+                      description: 'Username привязанного аккаунта Telegram (без символа @) или null',
+                      example: 'alex_ivanov',
+                    },
+                    stats: { $ref: '#/components/schemas/UserStats' },
+                  },
+                },
+                example: {
+                  user: {
+                    id: 'd290f1ee-6c54-4b01-90e6-d701748f0851',
+                    login: 'student_01',
+                    role: 'STUDENT',
+                    name: 'Алексей Иванов',
+                    telegram: '@alex_ivanov',
+                    telegramUsername: 'alex_ivanov',
+                    isTelegramConnected: true,
+                    groupNumber: '15',
+                    groupId: '15',
+                    currentMonth: 1,
+                    streakCount: 5,
+                    avatarUrl: 'https://mertsplatform-back.onrender.com/api/v1/media/presets/avatars/avatar-amber-wolf.svg',
+                    bannerUrl: 'https://mertsplatform-back.onrender.com/api/v1/media/presets/banners/linear-graphite.svg',
+                  },
+                  isTelegramConnected: true,
+                  telegramUsername: 'alex_ivanov',
+                  stats: {
+                    totalScore: 145,
+                    tasksAcceptedCount: 6,
+                    streakCount: 5,
+                  },
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/UnauthorizedError' },
+        },
+      },
+    },
     '/me': {
       get: {
         tags: ['Profile & Users'],
-        summary: 'Профиль текущего пользователя со статистикой и статусом Telegram',
-        description: 'Доступен также по алиасу `GET /api/v1/users/me`. Возвращает профиль с полными URL аватара и баннера.',
+        summary: 'Профиль текущего пользователя (алиас GET /api/v1/users/me)',
+        description:
+          'Полный алиас `GET /api/v1/users/me`. Возвращает профиль текущего пользователя, статистику и поля `isTelegramConnected: boolean`, `telegramUsername: string | null`.',
         responses: {
           200: {
             description: 'Данные текущего пользователя и счетчики баллов/задач/стрика',
@@ -553,7 +617,7 @@ export const swaggerDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['user', 'isTelegramConnected', 'stats'],
+                  required: ['user', 'isTelegramConnected', 'telegramUsername', 'stats'],
                   properties: {
                     user: { $ref: '#/components/schemas/User' },
                     isTelegramConnected: { type: 'boolean', example: true },
@@ -714,12 +778,84 @@ export const swaggerDocument = {
         },
       },
     },
+    '/users/me/telegram/connect': {
+      post: {
+        tags: ['Profile & Users'],
+        summary: 'Генерация персональной deep-link ссылки для автопривязки Telegram-бота (@MertsPlatform_bot)',
+        description:
+          'Генерирует одноразовый 16-символьный токен `telegramAuthCode`, сохраняет его в профиле пользователя и возвращает готовую deep-link ссылку `https://t.me/MertsPlatform_bot?start=<code>`.\n\n' +
+          '**Тело запроса (requestBody) НЕ требуется** — отправьте пустой `POST`-запрос с заголовком `Authorization: Bearer <accessToken>`.\n\n' +
+          '### Пошаговый флоу автопривязки для фронтенда:\n' +
+          '1. При клике студента на кнопку **«Подключить Telegram»** вызовите `POST /api/v1/users/me/telegram/connect`.\n' +
+          '2. Получите из ответа поле `link` и откройте его в новой вкладке: `window.open(data.link, "_blank", "noopener,noreferrer")`.\n' +
+          '3. Запустите фоновый поллинг `GET /api/v1/users/me` каждые **3 секунды** (или подписавшись на событие `window.addEventListener("focus", ...)`), проверяя поле `isTelegramConnected`.\n' +
+          '4. Когда студент нажмет **«Запустить» (`/start`)** в Telegram-боте, бэкенд автоматически свяжет его `chat_id` и `username` с аккаунтом, и следующий запрос `GET /api/v1/users/me` вернет `isTelegramConnected: true` и `telegramUsername: "..."`.',
+        responses: {
+          200: {
+            description: 'Персональная ссылка для автоматической привязки в Telegram-боте',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['link'],
+                  properties: {
+                    link: {
+                      type: 'string',
+                      format: 'uri',
+                      description: 'Deep-link на Telegram-бота с одноразовым кодом запуска (?start=<code>)',
+                      example: 'https://t.me/MertsPlatform_bot?start=a1b2c3d4e5f60718',
+                    },
+                  },
+                },
+                example: {
+                  link: 'https://t.me/MertsPlatform_bot?start=a1b2c3d4e5f60718',
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/UnauthorizedError' },
+        },
+      },
+    },
+    '/users/me/telegram/disconnect': {
+      delete: {
+        tags: ['Profile & Users'],
+        summary: 'Отвязка Telegram-бота от профиля студента',
+        description:
+          'Очищает привязанный `telegramChatId`, `telegramUsername` и `telegramAuthCode` у текущего пользователя и отключает отправку уведомлений в Telegram.\n\n' +
+          '**Тело запроса (requestBody) НЕ требуется** — отправьте `DELETE`-запрос с заголовком `Authorization: Bearer <accessToken>`.',
+        responses: {
+          200: {
+            description: 'Telegram-бот успешно отвязан от аккаунта',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['success', 'isTelegramConnected', 'telegramUsername'],
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    isTelegramConnected: { type: 'boolean', example: false },
+                    telegramUsername: { type: 'string', nullable: true, example: null },
+                  },
+                },
+                example: {
+                  success: true,
+                  isTelegramConnected: false,
+                  telegramUsername: null,
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/UnauthorizedError' },
+        },
+      },
+    },
     '/me/telegram/connect': {
       post: {
         tags: ['Profile & Users'],
-        summary: 'Генерация персональной ссылки для привязки Telegram-бота (@MertsPlatform_bot)',
+        summary: 'Генерация ссылки для привязки Telegram-бота (алиас POST /api/v1/users/me/telegram/connect)',
         description:
-          'Генерирует одноразовый 16-символьный код `telegramAuthCode` и возвращает deep-link `https://t.me/MertsPlatform_bot?start=<code>`.',
+          'Полный алиас `POST /api/v1/users/me/telegram/connect`. Тело запроса не требуется. Возвращает `{ link: "https://t.me/MertsPlatform_bot?start=<code>" }`.',
         responses: {
           200: {
             description: 'Ссылка для перехода в Telegram-бот',
@@ -731,6 +867,7 @@ export const swaggerDocument = {
                   properties: {
                     link: {
                       type: 'string',
+                      format: 'uri',
                       example: 'https://t.me/MertsPlatform_bot?start=a1b2c3d4e5f60718',
                     },
                   },
@@ -745,7 +882,8 @@ export const swaggerDocument = {
     '/me/telegram/disconnect': {
       delete: {
         tags: ['Profile & Users'],
-        summary: 'Отвязка Telegram-бота от профиля студента',
+        summary: 'Отвязка Telegram-бота от профиля (алиас DELETE /api/v1/users/me/telegram/disconnect)',
+        description: 'Полный алиас `DELETE /api/v1/users/me/telegram/disconnect`. Тело запроса не требуется.',
         responses: {
           200: {
             description: 'Telegram успешно отвязан',
@@ -753,7 +891,7 @@ export const swaggerDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['success', 'isTelegramConnected'],
+                  required: ['success', 'isTelegramConnected', 'telegramUsername'],
                   properties: {
                     success: { type: 'boolean', example: true },
                     isTelegramConnected: { type: 'boolean', example: false },
