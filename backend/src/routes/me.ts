@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
 import { awardAchievement } from '../services/achievementService.js';
 import { DEFAULT_ACHIEVEMENTS } from '../services/achievements.js';
+import { resolveAchievementIconUrl } from '../services/achievementIcons.js';
 
 export const meRouter = Router();
 
@@ -345,7 +346,7 @@ meRouter.get('/achievements', authenticate, async (req: Request, res: Response):
         code: ua.achievement.code,
         title: ua.achievement.title,
         description: ua.achievement.description,
-        iconUrl: ua.achievement.iconUrl,
+        iconUrl: resolveAchievementIconUrl(ua.achievement.iconUrl, ua.achievement.code),
         category: ua.achievement.category,
         points: meta?.points ?? 10,
         criteria: meta?.criteria ?? ua.achievement.description,

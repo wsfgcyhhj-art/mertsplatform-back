@@ -202,7 +202,10 @@ class Achievement(models.Model):
     code = models.CharField('Код ачивки', max_length=128, unique=True)
     title = models.CharField('Название', max_length=255)
     description = models.TextField('Описание')
-    icon_url = models.CharField('Иконка / Эмодзи', max_length=255)
+    icon_url = models.TextField(
+        'Иконка (URL / Data URI)',
+        default='/api/v1/achievements/icons/trophy.svg',
+    )
     category = models.CharField('Категория', max_length=128, default='general')
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
 
@@ -214,7 +217,7 @@ class Achievement(models.Model):
         ordering = ['created_at']
 
     def __str__(self):
-        return f"{self.icon_url} {self.title} ({self.code})"
+        return f"{self.title} ({self.code})"
 
 
 class UserAchievement(models.Model):

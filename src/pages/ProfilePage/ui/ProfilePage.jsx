@@ -748,7 +748,7 @@ export const ProfilePage = () => {
                                                             justifyContent: 'center',
                                                         }}
                                                     >
-                                                        <AchievementIcon name={ach.iconUrl} size={20} />
+                                                        <AchievementIcon iconUrl={ach.iconUrl} size={20} />
                                                     </div>
                                                     <div>
                                                         <div style={{ fontWeight: 700, fontSize: '15px', color: '#f4f4f5' }}>{ach.title}</div>
@@ -865,7 +865,7 @@ export const ProfilePage = () => {
                                 justifyContent: 'center',
                             }}
                         >
-                            <AchievementIcon name={selectedAch.iconUrl} size={30} />
+                            <AchievementIcon iconUrl={selectedAch.iconUrl} size={30} />
                         </div>
                         <h2 style={{ fontSize: '20px', fontWeight: 700 }}>{selectedAch.title}</h2>
                         <p style={{ color: '#a1a1aa', marginTop: '6px' }}>{selectedAch.description}</p>

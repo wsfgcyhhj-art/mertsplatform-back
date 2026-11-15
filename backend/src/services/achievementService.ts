@@ -1,5 +1,6 @@
 import { prisma } from '../prisma.js';
 import { DEFAULT_ACHIEVEMENTS, ensureDefaultAchievements } from './achievements.js';
+import { resolveAchievementIconUrl } from './achievementIcons.js';
 import { sendTelegramNotification, escapeTelegramHtml } from './telegramService.js';
 
 export interface AwardedAchievementResult {
@@ -76,7 +77,7 @@ export async function awardAchievement(
       code: achievement.code,
       title: achievement.title,
       description: achievement.description,
-      iconUrl: achievement.iconUrl,
+      iconUrl: resolveAchievementIconUrl(achievement.iconUrl, achievement.code),
       category: achievement.category,
       points,
       criteria: meta?.criteria ?? achievement.description,

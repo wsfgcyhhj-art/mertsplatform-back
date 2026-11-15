@@ -288,11 +288,10 @@ export const AchievementsPage = () => {
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          filter: isUnlocked ? 'none' : 'grayscale(100%)',
                         }}
                       >
                         <AchievementIcon
-                          name={ach.iconUrl}
+                          iconUrl={ach.iconUrl}
                           locked={!isUnlocked}
                           size={24}
                         />
@@ -500,7 +499,7 @@ export const AchievementsPage = () => {
                 }}
               >
                 <AchievementIcon
-                  name={selectedAch.iconUrl}
+                  iconUrl={selectedAch.iconUrl}
                   locked={!selectedAch.isUnlockedByMe}
                   size={30}
                 />

@@ -1,3 +1,5 @@
+import base64
+import os
 import re
 from django import forms
 from django.contrib import admin
@@ -5,6 +7,12 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils import timezone
 from unfold.admin import ModelAdmin
+from .achievement_icons import (
+    PRESET_ACHIEVEMENT_ICONS,
+    find_preset_icon,
+    normalize_icon_url,
+    resolve_icon_preview_src,
+)
 from .models import (
     User,
     Lesson,
@@ -212,14 +220,189 @@ class ScoreAdjustmentAdmin(ModelAdmin):
     ordering = ('-created_at',)
 
 
+class PresetIconGalleryWidget(forms.Widget):
+    def render(self, name, value, attrs=None, renderer=None):
+        selected_val = value or ''
+        cards_html = []
+        for item in PRESET_ACHIEVEMENT_ICONS:
+            url = item['url']
+            is_selected = selected_val == url
+            border_color = '#f59e0b' if is_selected else '#27272a'
+            bg_color = 'rgba(245, 158, 11, 0.14)' if is_selected else '#18181b'
+            cards_html.append(
+                f'''
+                <button type="button"
+                    data-preset-url="{url}"
+                    data-preset-src="{item['data_uri']}"
+                    onclick="window.__selectMertsPresetIcon(this)"
+                    style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;
+                           border:1px solid {border_color};background:{bg_color};color:#f4f4f5;cursor:pointer;
+                           text-align:left;transition:all 0.15s ease;">
+                    <span style="width:36px;height:36px;min-width:36px;border-radius:10px;background:#09090b;
+                                 border:1px solid rgba(245,158,11,0.3);display:inline-flex;align-items:center;justify-content:center;">
+                        <img src="{item['data_uri']}" alt="{item['slug']}" style="width:20px;height:20px;object-fit:contain;" />
+                    </span>
+                    <span style="font-size:12px;font-weight:600;line-height:1.25;">{item['label']}</span>
+                </button>
+                '''
+            )
+
+        initial_preview = resolve_icon_preview_src(selected_val)
+        html = f'''
+        <div style="display:flex;flex-direction:column;gap:14px;">
+            <input type="hidden" name="{name}" id="id_{name}" value="{selected_val}" />
+            <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:14px;
+                        background:#09090b;border:1px solid #27272a;max-width:460px;">
+                <div style="width:48px;height:48px;min-width:48px;border-radius:12px;background:rgba(245,158,11,0.12);
+                            border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">
+                    <img id="merts_live_icon_preview" src="{initial_preview}" alt="Preview" style="width:26px;height:26px;object-fit:contain;" />
+                </div>
+                <div>
+                    <div style="font-size:12px;color:#fbbf24;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">
+                        Текущее превью иконки
+                    </div>
+                    <div id="merts_live_icon_caption" style="font-size:12px;color:#a1a1aa;margin-top:2px;word-break:break-all;">
+                        {selected_val[:80] + ('...' if len(selected_val) > 80 else '') if selected_val else 'Выберите пресет ниже или загрузите файл'}
+                    </div>
+                </div>
+            </div>
+            <div id="merts_preset_gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;">
+                {''.join(cards_html)}
+            </div>
+        </div>
+        <script>
+            window.__selectMertsPresetIcon = function(btn) {{
+                var url = btn.getAttribute('data-preset-url');
+                var src = btn.getAttribute('data-preset-src');
+                var hidden = document.getElementById('id_{name}');
+                if (hidden) hidden.value = url;
+                var iconInput = document.getElementById('id_icon_url');
+                if (iconInput) iconInput.value = url;
+                var previewImg = document.getElementById('merts_live_icon_preview');
+                if (previewImg) previewImg.src = src;
+                var caption = document.getElementById('merts_live_icon_caption');
+                if (caption) caption.textContent = url;
+                var buttons = document.querySelectorAll('#merts_preset_gallery button[data-preset-url]');
+                buttons.forEach(function(b) {{
+                    b.style.borderColor = (b === btn) ? '#f59e0b' : '#27272a';
+                    b.style.background = (b === btn) ? 'rgba(245, 158, 11, 0.14)' : '#18181b';
+                }});
+            }};
+        </script>
+        '''
+        return mark_safe(html)
+
+
+class AchievementAdminForm(forms.ModelForm):
+    preset_selector = forms.CharField(
+        label='Галерея системных иконок (кликните для выбора)',
+        required=False,
+        widget=PresetIconGalleryWidget(),
+    )
+    custom_icon_file = forms.FileField(
+        label='Загрузить свою кастомную иконку (SVG / PNG / WebP)',
+        required=False,
+        help_text='Максимальный размер: 512 КБ. При загрузке файла он автоматически кодируется и надежно сохраняется в БД Neon (не пропадает при редеплое на Render).',
+        widget=forms.ClearableFileInput(attrs={'accept': '.svg,.png,.webp,image/svg+xml,image/png,image/webp'}),
+    )
+
+    class Meta:
+        model = Achievement
+        fields = ('code', 'title', 'category', 'description', 'preset_selector', 'custom_icon_file', 'icon_url')
+        widgets = {
+            'icon_url': forms.TextInput(
+                attrs={
+                    'placeholder': '/api/v1/achievements/icons/trophy.svg или https://... или data:image/...',
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        current_icon = normalize_icon_url(self.instance.icon_url if self.instance and self.instance.pk else '')
+        self.fields['preset_selector'].initial = current_icon
+        if self.instance and self.instance.pk:
+            self.initial['icon_url'] = current_icon
+        self.fields['icon_url'].required = False
+        self.fields['icon_url'].help_text = (
+            'Заполняется автоматически при выборе пресета или загрузке файла. Также можно указать прямой URL.'
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        uploaded = cleaned_data.get('custom_icon_file')
+        preset_val = (cleaned_data.get('preset_selector') or '').strip()
+        raw_icon_url = (cleaned_data.get('icon_url') or '').strip()
+
+        if uploaded:
+            max_bytes = 512 * 1024
+            if uploaded.size > max_bytes:
+                raise forms.ValidationError('Размер файла иконки не должен превышать 512 КБ.')
+
+            ext = os.path.splitext(uploaded.name or '')[1].lower()
+            allowed_map = {
+                '.svg': 'image/svg+xml',
+                '.png': 'image/png',
+                '.webp': 'image/webp',
+            }
+            if ext not in allowed_map:
+                raise forms.ValidationError('Разрешены только файлы форматов .svg, .png или .webp.')
+
+            raw_bytes = uploaded.read()
+            if ext == '.svg':
+                text_head = raw_bytes[:512].decode('utf-8', errors='ignore').lower()
+                if '<svg' not in text_head:
+                    raise forms.ValidationError('Загруженный .svg файл не содержит корректного тега <svg>.')
+
+            b64_data = base64.b64encode(raw_bytes).decode('ascii')
+            cleaned_data['icon_url'] = f"data:{allowed_map[ext]};base64,{b64_data}"
+        elif raw_icon_url:
+            cleaned_data['icon_url'] = normalize_icon_url(raw_icon_url)
+        elif preset_val:
+            cleaned_data['icon_url'] = normalize_icon_url(preset_val)
+        else:
+            cleaned_data['icon_url'] = '/api/v1/achievements/icons/trophy.svg'
+
+        return cleaned_data
+
+
 @admin.register(Achievement)
 class AchievementAdmin(ModelAdmin):
+    form = AchievementAdminForm
     list_fullwidth = True
-    list_display = ('icon_url', 'title', 'code', 'category', 'created_at')
+    list_display = ('icon_preview', 'title', 'code', 'category', 'icon_source_badge', 'created_at')
     list_display_links = ('title', 'code')
     list_filter = ('category',)
     search_fields = ('title', 'code', 'description')
     ordering = ('created_at',)
+
+    @admin.display(description='Иконка')
+    def icon_preview(self, obj):
+        src = resolve_icon_preview_src(obj.icon_url)
+        return format_html(
+            '<div style="width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,0.12);'
+            'border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">'
+            '<img src="{}" alt="{}" style="width:22px;height:22px;object-fit:contain;" />'
+            '</div>',
+            src,
+            obj.code,
+        )
+
+    @admin.display(description='Тип иконки')
+    def icon_source_badge(self, obj):
+        preset = find_preset_icon(obj.icon_url)
+        if preset:
+            return format_html(
+                '<span style="font-size:12px;font-weight:600;color:#fbbf24;">Системная ({})</span>',
+                preset['slug'],
+            )
+        if obj.icon_url and obj.icon_url.startswith('data:image/'):
+            return format_html(
+                '<span style="font-size:12px;font-weight:600;color:#34d399;">Кастомный файл (БД)</span>'
+            )
+        return format_html(
+            '<span style="font-size:12px;font-weight:600;color:#a1a1aa;">Внешний URL</span>'
+        )
 
 
 @admin.register(UserAchievement)
