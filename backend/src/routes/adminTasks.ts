@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { applyListQuery } from '../utils/pagination.js';
+import { eventBus } from '../services/eventBus.js';
 
 export const adminTasksRouter = Router();
 
@@ -29,7 +31,17 @@ adminTasksRouter.get('/', async (req: Request, res: Response): Promise<void> => 
     },
   });
 
-  res.json({ tasks });
+  const paged = applyListQuery(tasks, req.query as Record<string, any>, [
+    'title',
+    'description',
+    'topic',
+  ]);
+
+  res.json({
+    tasks: paged.items,
+    items: paged.items,
+    meta: paged.meta,
+  });
 });
 
 // POST /api/v1/admin/tasks
@@ -86,6 +98,14 @@ adminTasksRouter.post('/', async (req: Request, res: Response): Promise<void> =>
       maxScore: hasScoreBool ? (maxScoreNum && !isNaN(maxScoreNum) ? maxScoreNum : 100) : null,
       isBonus: isBonusBool,
     },
+  });
+
+  eventBus.emit('TASK_CREATED', {
+    taskId: task.id,
+    title: task.title,
+    topic: task.topic,
+    month: task.month,
+    isBonus: task.isBonus,
   });
 
   res.status(201).json({ task });

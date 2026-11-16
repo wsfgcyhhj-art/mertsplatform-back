@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { evaluateUserAchievements } from './achievementService.js';
 
 /**
  * Вычисляет разницу в целых календарных днях (по UTC) между двумя датами.
@@ -59,6 +60,9 @@ export async function updateStreak(userId: string): Promise<number> {
       lastActiveDate: now,
     },
   });
+
+  // Автоматическая проверка правил ачивок со триггером STREAK_DAYS
+  await evaluateUserAchievements(userId, { trigger: 'STREAK_UPDATED' }).catch(() => {});
 
   return newStreak;
 }

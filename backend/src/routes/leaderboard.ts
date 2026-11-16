@@ -3,6 +3,7 @@ import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { toPublicUrl } from '../utils/url.js';
+import { applyListQuery } from '../utils/pagination.js';
 
 export const leaderboardRouter = Router();
 
@@ -150,14 +151,27 @@ leaderboardRouter.get('/', async (req: Request, res: Response): Promise<void> =>
       ? groupNumberParam.trim()
       : undefined;
 
-  const leaderboard = await computeFlatLeaderboard(targetMonth, groupNumber);
+  const leaderboard = (await computeFlatLeaderboard(targetMonth, groupNumber)).map((item) => ({
+    ...item,
+    avatarUrl: toPublicUrl(req, item.avatarUrl),
+  }));
 
-  res.json(
-    leaderboard.map((item) => ({
-      ...item,
-      avatarUrl: toPublicUrl(req, item.avatarUrl),
-    }))
-  );
+  const paged = applyListQuery(leaderboard, req.query as Record<string, any>, [
+    'name',
+    'login',
+    'groupNumber',
+  ]);
+
+  if (paged.isPaginatedRequested) {
+    res.json({
+      items: paged.items,
+      leaderboard: paged.items,
+      meta: paged.meta,
+    });
+    return;
+  }
+
+  res.json(paged.items);
 });
 
 // GET /api/v1/leaderboard/top?month=&groupNumber= — топ-5 по баллам и топ-5 по задачам

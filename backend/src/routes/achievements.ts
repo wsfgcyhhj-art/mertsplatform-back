@@ -12,6 +12,7 @@ import {
   resolveAchievementIconUrl,
 } from '../services/achievementIcons.js';
 import { toPublicUrl } from '../utils/url.js';
+import { applyListQuery } from '../utils/pagination.js';
 
 export const achievementsRouter = Router();
 
@@ -104,7 +105,18 @@ achievementsRouter.get('/', async (req: Request, res: Response): Promise<void> =
     };
   });
 
-  res.json({ achievements: result });
+  const paged = applyListQuery(result, req.query as Record<string, any>, [
+    'title',
+    'code',
+    'description',
+    'category',
+  ]);
+
+  res.json({
+    achievements: paged.items,
+    items: paged.items,
+    meta: paged.meta,
+  });
 });
 
 // GET /api/v1/achievements/:id — детальная информация об ачивке

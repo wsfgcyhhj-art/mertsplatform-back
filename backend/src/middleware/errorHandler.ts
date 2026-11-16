@@ -4,6 +4,7 @@ export interface ApiErrorPayload {
   statusCode: number;
   error: string;
   message: string;
+  details?: Record<string, string> | string[];
   fields?: Record<string, string>;
 }
 
@@ -34,6 +35,7 @@ export function sendApiError(
 
   if (fields && Object.keys(fields).length > 0) {
     payload.fields = fields;
+    payload.details = fields;
   }
 
   res.status(statusCode).json(payload);
@@ -59,5 +61,5 @@ export function errorHandler(
 
   console.error(`[Error] ${statusCode} - ${message}`, err.stack || err);
 
-  sendApiError(res, statusCode, message, err.fields);
+  sendApiError(res, statusCode, message, err.fields || err.details);
 }

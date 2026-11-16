@@ -13,6 +13,7 @@ import { awardAchievement, evaluateUserAchievements } from '../services/achievem
 import { updateStreak } from '../services/streakService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 import { formatUserMedia, toPublicUrl } from '../utils/url.js';
+import { eventBus } from '../services/eventBus.js';
 
 export const authRouter = Router();
 
@@ -93,6 +94,12 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
 
     const onRegisterAwards = await evaluateUserAchievements(user.id, { trigger: 'ON_REGISTER' });
     const welcomeAchievement = onRegisterAwards[0] ?? (await awardAchievement(user.id, 'WELCOME'));
+
+    eventBus.emit('USER_REGISTERED', {
+      userId: user.id,
+      login: user.login,
+      groupNumber: user.groupNumber,
+    });
 
     const tokenPayload = { userId: user.id, role: user.role };
     const accessToken = generateAccessToken(tokenPayload);
@@ -198,6 +205,12 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
   });
 
   const streakCount = await updateStreak(user.id);
+
+  eventBus.emit('USER_LOGIN', {
+    userId: user.id,
+    login: user.login,
+    streakCount,
+  });
 
   res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
 

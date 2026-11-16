@@ -23,6 +23,7 @@ export interface EvaluationEventContext {
     | 'EASTER_EGG'
     | 'SUBMISSION_ACCEPTED'
     | 'SCORE_ADJUSTED'
+    | 'STREAK_UPDATED'
     | 'ALL';
 }
 
@@ -150,8 +151,8 @@ export async function evaluateUserAchievements(
     return awarded;
   }
 
-  // 2. Вычисление метрик студента для пороговых правил (TOTAL_SCORE, ACCEPTED_TASKS, BONUS_TASKS, FIRST_TRY_ACCEPTED, PERFECT_SCORE, REVISION_ACCEPTED)
-  const [allSubmissions, adjustments] = await Promise.all([
+  // 2. Вычисление метрик студента для пороговых правил (TOTAL_SCORE, ACCEPTED_TASKS, BONUS_TASKS, FIRST_TRY_ACCEPTED, PERFECT_SCORE, REVISION_ACCEPTED, STREAK_DAYS)
+  const [allSubmissions, adjustments, userRecord] = await Promise.all([
     prisma.submission.findMany({
       where: { userId },
       include: {
@@ -170,7 +171,13 @@ export async function evaluateUserAchievements(
       where: { userId },
       _sum: { amount: true },
     }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { streakCount: true },
+    }),
   ]);
+
+  const currentStreak = userRecord?.streakCount || 0;
 
   const acceptedSubs = allSubmissions.filter((s) => s.status === 'ACCEPTED');
   const submissionsScore = acceptedSubs.reduce((sum, s) => sum + (s.score || 0), 0);
@@ -245,6 +252,9 @@ export async function evaluateUserAchievements(
         break;
       case 'REVISION_ACCEPTED':
         shouldAward = revisionAcceptedTaskIds.size >= threshold;
+        break;
+      case 'STREAK_DAYS':
+        shouldAward = currentStreak >= threshold;
         break;
       default:
         shouldAward = false;

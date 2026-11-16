@@ -3,6 +3,8 @@ import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { extractYoutubeId } from '../utils/youtube.js';
+import { applyListQuery } from '../utils/pagination.js';
+import { eventBus } from '../services/eventBus.js';
 
 export const adminLessonsRouter = Router();
 
@@ -58,8 +60,16 @@ adminLessonsRouter.get('/', async (req: Request, res: Response): Promise<void> =
     a.localeCompare(b, 'ru', { numeric: true })
   );
 
+  const paged = applyListQuery(lessons, req.query as Record<string, any>, [
+    'title',
+    'youtubeId',
+    'groupNumber',
+  ]);
+
   res.json({
-    lessons,
+    lessons: paged.items,
+    items: paged.items,
+    meta: paged.meta,
     availableGroups,
   });
 });
@@ -109,6 +119,13 @@ adminLessonsRouter.post('/', async (req: Request, res: Response): Promise<void> 
       month: monthNum,
       order: isNaN(orderNum) ? 0 : orderNum,
     },
+  });
+
+  eventBus.emit('LESSON_CREATED', {
+    lessonId: lesson.id,
+    title: lesson.title,
+    groupNumber: lesson.groupNumber,
+    month: lesson.month,
   });
 
   res.status(201).json({ lesson });

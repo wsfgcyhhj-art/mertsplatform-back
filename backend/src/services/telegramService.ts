@@ -5,6 +5,7 @@ import { prisma } from '../prisma.js';
 import { config } from '../config.js';
 import { checkAndAwardAcceptedSubmission } from './achievements.js';
 import { runWeeklyDigestBroadcast } from './cronService.js';
+import { eventBus } from './eventBus.js';
 
 let bot: Telegraf | null = null;
 let isBotActive = false;
@@ -965,6 +966,12 @@ export function initTelegramBot(): Telegraf | null {
             telegramUsername: username,
             telegramAuthCode: null,
           },
+        });
+
+        eventBus.emit('TELEGRAM_LINKED', {
+          userId: user.id,
+          telegramChatId: chatId,
+          telegramUsername: username,
         });
 
         await ctx.reply(

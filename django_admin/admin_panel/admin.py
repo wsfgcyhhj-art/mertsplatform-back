@@ -22,6 +22,7 @@ from .models import (
     Achievement,
     UserAchievement,
     MonthlyScoreArchive,
+    MediaAsset,
 )
 
 
@@ -362,6 +363,7 @@ class AchievementAdminForm(forms.ModelForm):
             'FIRST_TRY_ACCEPTED',
             'PERFECT_SCORE',
             'REVISION_ACCEPTED',
+            'STREAK_DAYS',
         }
 
         if trigger_type in numeric_triggers:
@@ -385,6 +387,7 @@ class AchievementAdminForm(forms.ModelForm):
                 'FIRST_TRY_ACCEPTED': f'Сдать {threshold or 1} заданий со статусом ACCEPTED с первой попытки',
                 'PERFECT_SCORE': f'Сдать {threshold or 1} заданий на максимальный балл',
                 'REVISION_ACCEPTED': f'Сдать {threshold or 1} заданий после доработки (REVISION -> ACCEPTED)',
+                'STREAK_DAYS': f'Проявлять активность на платформе {threshold or 1} дней подряд (стрик)',
                 'EASTER_EGG': 'Найти секретную пасхалку на платформе',
             }
             cleaned_data['criteria'] = auto_criteria_map.get(trigger_type, '')
@@ -470,6 +473,7 @@ class AchievementAdmin(ModelAdmin):
             'FIRST_TRY_ACCEPTED': (f'С 1-й попытки ≥ {th or 0}', '#38bdf8'),
             'PERFECT_SCORE': (f'Макс. балл ≥ {th or 0}', '#fbbf24'),
             'REVISION_ACCEPTED': (f'После ревью ≥ {th or 0}', '#c084fc'),
+            'STREAK_DAYS': (f'Стрик ≥ {th or 0} дн.', '#fb923c'),
             'EASTER_EGG': ('Пасхалка (клик)', '#f472b6'),
         }
         text, color = labels.get(t, (t, '#a1a1aa'))
@@ -525,3 +529,39 @@ class MonthlyScoreArchiveAdmin(ModelAdmin):
     list_filter = ('month',)
     search_fields = ('user__login', 'user__name')
     ordering = ('-month', 'final_rank')
+
+
+@admin.register(MediaAsset)
+class MediaAssetAdmin(ModelAdmin):
+    list_fullwidth = True
+    list_display = ('asset_preview', 'id', 'kind', 'mime_type', 'size_kb', 'owner_id', 'api_endpoint', 'created_at')
+    list_filter = ('kind', 'mime_type')
+    search_fields = ('id', 'owner_id', 'kind')
+    readonly_fields = ('id', 'kind', 'mime_type', 'size_bytes', 'owner_id', 'created_at', 'asset_preview')
+    ordering = ('-created_at',)
+
+    @admin.display(description='Превью')
+    def asset_preview(self, obj):
+        try:
+            raw_bytes = bytes(obj.data)
+            b64 = base64.b64encode(raw_bytes).decode('ascii')
+            src = f"data:{obj.mime_type};base64,{b64}"
+            return format_html(
+                '<div style="width:48px;height:48px;border-radius:10px;background:#09090b;'
+                'border:1px solid #27272a;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
+                '<img src="{}" alt="{}" style="width:100%;height:100%;object-fit:cover;" />'
+                '</div>',
+                src,
+                obj.kind,
+            )
+        except Exception:
+            return '—'
+
+    @admin.display(description='Размер')
+    def size_kb(self, obj):
+        return f"{round((obj.size_bytes or 0) / 1024, 1)} КБ"
+
+    @admin.display(description='API URL')
+    def api_endpoint(self, obj):
+        path = f"/api/v1/media/{obj.id}"
+        return format_html('<code style="font-size:12px;color:#fbbf24;">{}</code>', path)

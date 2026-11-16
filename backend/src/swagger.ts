@@ -19,6 +19,7 @@ export const swaggerDocument = {
     },
   ],
   tags: [
+    { name: 'System & Bootstrap', description: 'Единый эндпоинт конфигурации платформы, справочников, лимитов и пресетов (/system/config)' },
     { name: 'Auth', description: 'Регистрация, вход, ротация JWT-токенов и выход' },
     { name: 'Profile & Users', description: 'Профиль студента, статистика, смена пароля, привязка Telegram-бота и пасхалки' },
     { name: 'Media & Presets', description: 'Загрузка файлов аватарок/баннеров (multipart/form-data), каталог пресетов и отдача медиа из БД Neon' },
@@ -48,12 +49,28 @@ export const swaggerDocument = {
           statusCode: { type: 'integer', example: 400 },
           error: { type: 'string', example: 'Bad Request' },
           message: { type: 'string', example: 'Некорректные входные данные' },
+          details: {
+            type: 'object',
+            additionalProperties: { type: 'string' },
+            nullable: true,
+            example: { login: 'Login must be at least 3 characters long' },
+          },
           fields: {
             type: 'object',
             additionalProperties: { type: 'string' },
             nullable: true,
             example: { login: 'Login must be at least 3 characters long' },
           },
+        },
+      },
+      PaginationMeta: {
+        type: 'object',
+        required: ['total', 'page', 'limit', 'totalPages'],
+        properties: {
+          total: { type: 'integer', example: 42 },
+          page: { type: 'integer', example: 1 },
+          limit: { type: 'integer', example: 20 },
+          totalPages: { type: 'integer', example: 3 },
         },
       },
       User: {
@@ -247,6 +264,7 @@ export const swaggerDocument = {
               'FIRST_TRY_ACCEPTED',
               'PERFECT_SCORE',
               'REVISION_ACCEPTED',
+              'STREAK_DAYS',
               'EASTER_EGG',
             ],
             example: 'TOTAL_SCORE',
@@ -394,6 +412,139 @@ export const swaggerDocument = {
   },
   security: [{ bearerAuth: [] }],
   paths: {
+    // ──────────────────────────────────────────────────────────────────────────
+    // SYSTEM & BOOTSTRAP
+    // ──────────────────────────────────────────────────────────────────────────
+    '/system/config': {
+      get: {
+        tags: ['System & Bootstrap', 'Media & Presets'],
+        summary: 'Bootstrap-конфигурация платформы (справочники, лимиты загрузки, Telegram-бот и каталог пресетов)',
+        description:
+          'Публичный эндпоинт для инициализации любого внешнего фронтенда одним запросом. Возвращает:\n' +
+          '- `roles`: доступные роли (`STUDENT`, `ADMIN`)\n' +
+          '- `submissionStatuses`: статусы ДЗ (`SENT`, `IN_REVIEW`, `REVISION`, `ACCEPTED`)\n' +
+          '- `achievementCategories` и `achievementTriggerTypes` (все 10 типов правил движка ачивок)\n' +
+          '- `uploadLimits`: максимальные размеры файлов аватара (2 МБ), баннера (5 МБ) и список разрешенных MIME-типов\n' +
+          '- `telegram`: имя бота (`telegramBotUsername`), прямая ссылка на бота и маршруты автопривязки\n' +
+          '- `mediaPresets`: полный каталог фирменных темных обоев (`banners`), дефолтных аватаров (`avatars`) и системных SVG-иконок ачивок (`achievementIcons`) с абсолютными URL.',
+        security: [],
+        responses: {
+          200: {
+            description: 'Полная конфигурация платформы и каталог медиа-пресетов',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: [
+                    'platform',
+                    'roles',
+                    'submissionStatuses',
+                    'achievementCategories',
+                    'achievementTriggerTypes',
+                    'uploadLimits',
+                    'paginationDefaults',
+                    'telegram',
+                    'mediaPresets',
+                  ],
+                  properties: {
+                    platform: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string', example: 'MertsPlatform' },
+                        apiVersion: { type: 'string', example: '2.1.0' },
+                      },
+                    },
+                    roles: {
+                      type: 'array',
+                      items: { type: 'string', enum: ['STUDENT', 'ADMIN'] },
+                    },
+                    submissionStatuses: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          code: { type: 'string', example: 'ACCEPTED' },
+                          label: { type: 'string', example: 'Принято' },
+                        },
+                      },
+                    },
+                    achievementCategories: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          code: { type: 'string', example: 'TASKS' },
+                          label: { type: 'string', example: 'Домашки' },
+                        },
+                      },
+                    },
+                    achievementTriggerTypes: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          code: { type: 'string', example: 'TOTAL_SCORE' },
+                          requiresThreshold: { type: 'boolean', example: true },
+                          label: { type: 'string', example: 'Набрать X суммарных баллов' },
+                        },
+                      },
+                    },
+                    uploadLimits: {
+                      type: 'object',
+                      properties: {
+                        avatarMaxBytes: { type: 'integer', example: 2097152 },
+                        bannerMaxBytes: { type: 'integer', example: 5242880 },
+                        customIconMaxBytes: { type: 'integer', example: 524288 },
+                        allowedMimeTypes: {
+                          type: 'array',
+                          items: { type: 'string' },
+                        },
+                      },
+                    },
+                    paginationDefaults: {
+                      type: 'object',
+                      properties: {
+                        defaultPage: { type: 'integer', example: 1 },
+                        defaultLimit: { type: 'integer', example: 20 },
+                        maxLimit: { type: 'integer', example: 200 },
+                      },
+                    },
+                    telegram: {
+                      type: 'object',
+                      properties: {
+                        botUsername: { type: 'string', example: 'MertsPlatform_bot' },
+                        botUrl: { type: 'string', example: 'https://t.me/MertsPlatform_bot' },
+                        connectEndpoint: { type: 'string', example: '/api/v1/users/me/telegram/connect' },
+                        disconnectEndpoint: { type: 'string', example: '/api/v1/users/me/telegram/disconnect' },
+                        recommendedPollIntervalMs: { type: 'integer', example: 3000 },
+                      },
+                    },
+                    mediaPresets: {
+                      type: 'object',
+                      properties: {
+                        banners: {
+                          type: 'array',
+                          items: { $ref: '#/components/schemas/MediaPresetItem' },
+                        },
+                        avatars: {
+                          type: 'array',
+                          items: { $ref: '#/components/schemas/MediaPresetItem' },
+                        },
+                        achievementIcons: {
+                          type: 'array',
+                          items: { $ref: '#/components/schemas/AchievementIconPreset' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+
     // ──────────────────────────────────────────────────────────────────────────
     // AUTH
     // ──────────────────────────────────────────────────────────────────────────

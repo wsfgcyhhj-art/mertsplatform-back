@@ -15,8 +15,10 @@ import { adminSubmissionsRouter, submissionsRouter } from './routes/submissions.
 import { leaderboardRouter, adminLeaderboardRouter } from './routes/leaderboard.js';
 import { achievementsRouter } from './routes/achievements.js';
 import { mediaRouter } from './routes/media.js';
+import { systemRouter } from './routes/system.js';
 import { healthRouter, handleHealthCheck } from './routes/health.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
+import { normalizeRequestMiddleware } from './middleware/normalizeRequest.js';
 import { setupSwagger } from './swagger.js';
 import { ensureDefaultAchievements } from './services/achievements.js';
 import { initTelegramBot, stopTelegramBot } from './services/telegramService.js';
@@ -50,11 +52,13 @@ app.use(
 
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
+app.use(normalizeRequestMiddleware);
 
 // Swagger documentation
 setupSwagger(app);
 
 // API v1 routes
+app.use('/api/v1/system', systemRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/me', meRouter);
 app.use('/api/v1/users/me', meRouter);

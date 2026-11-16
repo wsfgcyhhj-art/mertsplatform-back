@@ -9,6 +9,8 @@ import {
   getTelegramFileStream,
 } from '../services/telegramService.js';
 import { formatUserMedia } from '../utils/url.js';
+import { applyListQuery } from '../utils/pagination.js';
+import { eventBus } from '../services/eventBus.js';
 
 // Общий роутер для работы с решениями (доступен студенту-автору и менторам)
 export const submissionsRouter = Router();
@@ -129,7 +131,17 @@ adminSubmissionsRouter.get('/', async (req: Request, res: Response): Promise<voi
     },
   });
 
-  res.json({ submissions });
+  const paged = applyListQuery(submissions, req.query as Record<string, any>, [
+    'solutionLink',
+    'comment',
+    'status',
+  ]);
+
+  res.json({
+    submissions: paged.items,
+    items: paged.items,
+    meta: paged.meta,
+  });
 });
 
 // GET /api/v1/admin/submissions/:id — просмотр с историей сдач
@@ -286,6 +298,15 @@ adminSubmissionsRouter.patch('/:id/review', async (req: Request, res: Response):
     lines.push(`Комментарий: <i>${escapeTelegramHtml(feedback)}</i>`);
   }
   await sendTelegramNotification(updatedSubmission.userId, lines.join('\n'));
+
+  eventBus.emit('SUBMISSION_REVIEWED', {
+    submissionId: updatedSubmission.id,
+    userId: updatedSubmission.userId,
+    taskId: updatedSubmission.taskId,
+    status: updatedSubmission.status,
+    score: updatedSubmission.score,
+    reviewerComment: updatedSubmission.reviewerComment,
+  });
 
   res.json({
     submission: updatedSubmission,

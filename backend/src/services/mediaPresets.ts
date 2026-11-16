@@ -99,7 +99,10 @@ export function findPresetBanner(slug: string): MediaPresetItem | undefined {
 
 export function findPresetAvatar(slug: string): MediaPresetItem | undefined {
   const clean = String(slug || '').trim().replace(/\.svg$/i, '').toLowerCase();
-  return PRESET_AVATARS.find((a) => a.slug === clean);
+  if (clean === 'avatar-amber-wolf') {
+    return PRESET_AVATARS[0];
+  }
+  return PRESET_AVATARS.find((a) => a.slug === clean || `avatar-${a.slug}` === clean);
 }
 
 export const ALLOWED_IMAGE_MIMES = new Set([

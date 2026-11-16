@@ -34,6 +34,7 @@ class TriggerTypeChoices(models.TextChoices):
     FIRST_TRY_ACCEPTED = 'FIRST_TRY_ACCEPTED', 'Сдать X заданий с 1-й попытки (FIRST_TRY_ACCEPTED)'
     PERFECT_SCORE = 'PERFECT_SCORE', 'Сдать X заданий на макс. балл (PERFECT_SCORE)'
     REVISION_ACCEPTED = 'REVISION_ACCEPTED', 'Сдать X заданий после доработки (REVISION_ACCEPTED)'
+    STREAK_DAYS = 'STREAK_DAYS', 'Активность X дней подряд / стрик (STREAK_DAYS)'
     EASTER_EGG = 'EASTER_EGG', 'Секретная пасхалка (EASTER_EGG)'
 
 
@@ -298,3 +299,23 @@ class MonthlyScoreArchive(models.Model):
 
     def __str__(self):
         return f"Месяц {self.month} | #{self.final_rank} {self.user} ({self.final_score} pts)"
+
+
+class MediaAsset(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    kind = models.CharField('Тип медиа (AVATAR / BANNER / ICON)', max_length=64, default='GENERAL')
+    mime_type = models.CharField('MIME-тип', max_length=128)
+    data = models.BinaryField('Бинарные данные (WebP / SVG)')
+    size_bytes = models.IntegerField('Размер (байт)')
+    owner_id = models.CharField('ID владельца (User ID)', max_length=64, blank=True, null=True)
+    created_at = models.DateTimeField('Дата загрузки', default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'MediaAsset'
+        verbose_name = 'Медиа-ассет (БД Neon)'
+        verbose_name_plural = 'Медиа-ассеты (БД Neon)'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.kind}] {self.id} ({self.mime_type}, {self.size_bytes} bytes)"

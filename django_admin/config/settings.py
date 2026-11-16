@@ -239,6 +239,11 @@ UNFOLD = {
                         "icon": "inventory_2",
                         "link": reverse_lazy("admin:admin_panel_monthlyscorearchive_changelist"),
                     },
+                    {
+                        "title": "Медиа-хранилище (Neon DB)",
+                        "icon": "perm_media",
+                        "link": reverse_lazy("admin:admin_panel_mediaasset_changelist"),
+                    },
                 ],
             },
         ],

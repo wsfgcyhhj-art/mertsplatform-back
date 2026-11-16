@@ -9,6 +9,7 @@ import { DEFAULT_ACHIEVEMENTS, formatRuleCriteria } from '../services/achievemen
 import { resolveAchievementIconUrl } from '../services/achievementIcons.js';
 import { ALLOWED_IMAGE_MIMES, saveOptimizedMediaAsset } from '../services/mediaPresets.js';
 import { formatUserMedia, normalizeStoredMediaUrl, toPublicUrl } from '../utils/url.js';
+import { eventBus } from '../services/eventBus.js';
 
 export const meRouter = Router();
 
@@ -534,6 +535,11 @@ meRouter.post('/claim-easter-egg', authenticate, async (req: Request, res: Respo
         iconUrl: toPublicUrl(req, rawAchievement.iconUrl) || rawAchievement.iconUrl,
       }
     : null;
+
+  eventBus.emit('EASTER_EGG_CLAIMED', {
+    userId,
+    achievementCode: achievement?.code || null,
+  });
 
   res.json({
     success: true,

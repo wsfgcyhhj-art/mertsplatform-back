@@ -6,6 +6,8 @@ import { hashPassword } from '../utils/password.js';
 import { checkScoreThresholds } from '../services/achievementService.js';
 import { isValidTelegramChatId } from '../services/telegramService.js';
 import { formatUserMedia } from '../utils/url.js';
+import { applyListQuery } from '../utils/pagination.js';
+import { eventBus } from '../services/eventBus.js';
 
 export const adminUsersRouter = Router();
 
@@ -66,7 +68,19 @@ adminUsersRouter.get('/', async (req: Request, res: Response): Promise<void> => 
     orderBy: { createdAt: 'desc' },
   });
 
-  res.json({ users: users.map((u) => formatUserMedia(req, u)) });
+  const formattedUsers = users.map((u) => formatUserMedia(req, u));
+  const paged = applyListQuery(formattedUsers, req.query as Record<string, any>, [
+    'login',
+    'name',
+    'telegram',
+    'groupNumber',
+  ]);
+
+  res.json({
+    users: paged.items,
+    items: paged.items,
+    meta: paged.meta,
+  });
 });
 
 // POST /api/v1/admin/users
@@ -448,6 +462,15 @@ adminUsersRouter.post('/:id/score-adjust', async (req: Request, res: Response): 
   });
 
   const awardedAchievements = await checkScoreThresholds(id);
+
+  eventBus.emit('SCORE_ADJUSTED', {
+    adjustmentId: adjustment.id,
+    userId: id,
+    adminId: admin.id,
+    amount: adjustment.amount,
+    reason: adjustment.reason,
+    month: adjustment.month,
+  });
 
   res.status(201).json({ adjustment, awardedAchievements });
 });

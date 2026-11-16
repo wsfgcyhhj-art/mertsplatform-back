@@ -5,6 +5,8 @@ import { authenticate } from '../middleware/auth.js';
 import { isValidGithubUrl } from '../utils/github.js';
 import { notifyMentorsNewSubmission } from '../services/telegramService.js';
 import { updateStreak } from '../services/streakService.js';
+import { eventBus } from '../services/eventBus.js';
+import { applyListQuery } from '../utils/pagination.js';
 
 export const tasksRouter = Router();
 
@@ -65,9 +67,13 @@ tasksRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     };
   });
 
+  const paged = applyListQuery(tasks, req.query as Record<string, any>, ['title', 'description', 'topic']);
+
   res.json({
     month: targetMonth,
-    tasks,
+    tasks: paged.items,
+    items: paged.items,
+    meta: paged.meta,
   });
 });
 
@@ -166,6 +172,14 @@ tasksRouter.post('/:id/submissions', async (req: Request, res: Response): Promis
 
   // Обновление стрика активности
   const streakCount = await updateStreak(user.id);
+
+  eventBus.emit('SUBMISSION_CREATED', {
+    submissionId: submission.id,
+    userId: user.id,
+    taskId,
+    version: nextVersion,
+    streakCount,
+  });
 
   res.status(201).json({ submission, streakCount });
 });

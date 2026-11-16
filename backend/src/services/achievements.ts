@@ -14,6 +14,7 @@ export type AchievementTriggerType =
   | 'FIRST_TRY_ACCEPTED'
   | 'PERFECT_SCORE'
   | 'REVISION_ACCEPTED'
+  | 'STREAK_DAYS'
   | 'EASTER_EGG';
 
 export interface AchievementDefinition {
@@ -181,6 +182,8 @@ export function formatRuleCriteria(triggerType: string, threshold: number | null
       return `Получить максимальный балл (100%) в ${th} задании(ях)`;
     case 'REVISION_ACCEPTED':
       return `Успешно исправить замечания ментора (REVISION → ACCEPTED) в ${th} задании(ях)`;
+    case 'STREAK_DAYS':
+      return `Проявлять активность на платформе не менее ${th} дней подряд (стрик)`;
     case 'EASTER_EGG':
       return 'Найти секретную пасхалку в интерфейсе платформы';
     default:

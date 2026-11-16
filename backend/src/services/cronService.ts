@@ -145,9 +145,6 @@ export async function buildWeeklyDigestMessage(): Promise<string> {
   ].join('\n');
 }
 
-/**
- * Вычисляет ключ текущей недели в формате ISO 8601 (YYYY-Www), например: "2026-W45".
- */
 export function getIsoWeekKey(d: Date = new Date()): string {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const dayNum = date.getUTCDay() || 7;
@@ -167,13 +164,6 @@ export function resetBroadcastWeekKeyForTesting(): void {
   lastBroadcastWeekKey = null;
 }
 
-/**
- * Рассылает еженедельный дайджест:
- * 1) В общий чат курса (TELEGRAM_COURSE_CHAT_ID), если он настроен.
- * 2) Персонально каждому студенту (и пользователю), у которого привязан Telegram (telegramChatId != null).
- * 
- * Поддерживает идемпотентность: повторный вызов за ту же неделю блокируется, если force !== true.
- */
 export async function runWeeklyDigestBroadcast(options?: {
   force?: boolean;
 }): Promise<{
@@ -223,7 +213,6 @@ export async function runWeeklyDigestBroadcast(options?: {
       }
     }
 
-    // Фиксируем успешную отправку за текущую неделю
     lastBroadcastWeekKey = currentWeekKey;
 
     return {
@@ -242,16 +231,145 @@ export async function runWeeklyDigestBroadcast(options?: {
   }
 }
 
+/**
+ * Автоматическая уборка БД:
+ * 1) Удаляет истекшие JWT-сессии (expiresAt < now).
+ * 2) Очищает неиспользованные одноразовые коды привязки Telegram старше 24 часов.
+ */
+export async function runMaintenanceCleanup(): Promise<{
+  expiredSessionsDeleted: number;
+  staleAuthCodesCleared: number;
+}> {
+  const now = new Date();
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  const [sessionResult, authCodeResult] = await Promise.all([
+    prisma.session.deleteMany({
+      where: { expiresAt: { lt: now } },
+    }),
+    prisma.user.updateMany({
+      where: {
+        telegramAuthCode: { not: null },
+        telegramChatId: null,
+        updatedAt: { lt: oneDayAgo },
+      },
+      data: {
+        telegramAuthCode: null,
+      },
+    }),
+  ]);
+
+  return {
+    expiredSessionsDeleted: sessionResult.count,
+    staleAuthCodesCleared: authCodeResult.count,
+  };
+}
+
+/**
+ * Еженедельные пятничные напоминания студентам о несданных обязательных ДЗ текущего месяца.
+ */
+export async function runHomeworkRemindersBroadcast(): Promise<{
+  notifiedStudentsCount: number;
+}> {
+  if (process.env.ENABLE_HOMEWORK_REMINDERS === 'false') {
+    return { notifiedStudentsCount: 0 };
+  }
+
+  const students = await prisma.user.findMany({
+    where: {
+      role: Role.STUDENT,
+      telegramChatId: { not: null },
+    },
+    select: {
+      id: true,
+      name: true,
+      login: true,
+      currentMonth: true,
+    },
+  });
+
+  if (students.length === 0) {
+    return { notifiedStudentsCount: 0 };
+  }
+
+  const allTasks = await prisma.task.findMany({
+    where: { isBonus: false },
+    select: { id: true, title: true, month: true },
+  });
+
+  const submissions = await prisma.submission.findMany({
+    where: {
+      userId: { in: students.map((s) => s.id) },
+    },
+    select: {
+      userId: true,
+      taskId: true,
+      status: true,
+    },
+  });
+
+  let notifiedStudentsCount = 0;
+
+  for (const st of students) {
+    const monthTasks = allTasks.filter((t) => t.month === st.currentMonth);
+    if (monthTasks.length === 0) continue;
+
+    const mySubTaskIds = new Set(
+      submissions
+        .filter((s) => s.userId === st.id && s.status !== SubmissionStatus.REVISION)
+        .map((s) => s.taskId)
+    );
+
+    const pendingTasks = monthTasks.filter((t) => !mySubTaskIds.has(t.id));
+    if (pendingTasks.length === 0) continue;
+
+    const previewTitles = pendingTasks
+      .slice(0, 3)
+      .map((t) => `• ${escapeTelegramHtml(t.title)}`)
+      .join('\n');
+
+    const msg = [
+      `⏰ <b>Напоминание о домашних заданиях (Месяц ${st.currentMonth})</b>`,
+      `У вас осталось <b>${pendingTasks.length}</b> несданных обязательных ДЗ:`,
+      previewTitles,
+      '',
+      '<i>Сдайте решения до конца недели, чтобы сохранить стрик и подняться в лидерборде! 🚀</i>',
+    ].join('\n');
+
+    const ok = await sendTelegramNotification(st.id, msg);
+    if (ok) notifiedStudentsCount += 1;
+  }
+
+  return { notifiedStudentsCount };
+}
+
 let digestTask: ReturnType<typeof cron.schedule> | null = null;
+let cleanupTask: ReturnType<typeof cron.schedule> | null = null;
+let reminderTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function initWeeklyDigestCron(): void {
-  if (digestTask) {
-    digestTask.stop();
-  }
-  // Каждый понедельник в 10:00 (0 10 * * 1)
+  stopWeeklyDigestCron();
+
+  // 1. Каждый понедельник в 10:00 — еженедельный дайджест
   digestTask = cron.schedule('0 10 * * 1', async () => {
     console.log('[Cron] Running weekly digest broadcast (0 10 * * 1)...');
     await runWeeklyDigestBroadcast({ force: false });
+  });
+
+  // 2. Каждый день в 03:00 — очистка истекших сессий и старых кодов привязки Telegram
+  cleanupTask = cron.schedule('0 3 * * *', async () => {
+    console.log('[Cron] Running daily maintenance cleanup (0 3 * * *)...');
+    await runMaintenanceCleanup().catch((err) => {
+      console.error('[Cron] Maintenance cleanup failed:', err);
+    });
+  });
+
+  // 3. Каждую пятницу в 17:00 — напоминание о несданных ДЗ
+  reminderTask = cron.schedule('0 17 * * 5', async () => {
+    console.log('[Cron] Running homework reminders broadcast (0 17 * * 5)...');
+    await runHomeworkRemindersBroadcast().catch((err) => {
+      console.error('[Cron] Homework reminders failed:', err);
+    });
   });
 }
 
@@ -259,6 +377,13 @@ export function stopWeeklyDigestCron(): void {
   if (digestTask) {
     digestTask.stop();
     digestTask = null;
-    console.log('[Cron] Weekly digest cron stopped.');
+  }
+  if (cleanupTask) {
+    cleanupTask.stop();
+    cleanupTask = null;
+  }
+  if (reminderTask) {
+    reminderTask.stop();
+    reminderTask = null;
   }
 }

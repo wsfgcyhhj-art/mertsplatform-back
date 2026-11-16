@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Role, Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { authenticate } from '../middleware/auth.js';
+import { applyListQuery } from '../utils/pagination.js';
 
 export const lessonsRouter = Router();
 
@@ -60,10 +61,14 @@ lessonsRouter.get('/', async (req: Request, res: Response): Promise<void> => {
     orderBy: [{ month: 'asc' }, { order: 'asc' }, { createdAt: 'asc' }],
   });
 
+  const paged = applyListQuery(lessons, req.query as Record<string, any>, ['title', 'youtubeId', 'groupNumber']);
+
   res.json({
     month: targetMonth,
     currentMonth: maxAllowedMonth,
     groupNumber: user.groupNumber,
-    lessons,
+    lessons: paged.items,
+    items: paged.items,
+    meta: paged.meta,
   });
 });
