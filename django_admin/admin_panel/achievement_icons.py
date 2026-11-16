@@ -118,6 +118,7 @@ def find_preset_icon(value: Optional[str]) -> Optional[Dict[str, str]]:
         return _BY_URL[clean.lower()]
     slug_candidate = (
         clean.replace('/api/v1/achievements/icons/', '')
+        .replace('/api/v1/media/presets/icons/', '')
         .replace('.svg', '')
         .strip()
         .lower()
@@ -127,22 +128,24 @@ def find_preset_icon(value: Optional[str]) -> Optional[Dict[str, str]]:
 
 def normalize_icon_url(value: Optional[str]) -> str:
     if not value or not value.strip():
-        return '/api/v1/achievements/icons/trophy.svg'
+        return '/api/v1/media/presets/icons/trophy.svg'
     clean = value.strip()
     preset = find_preset_icon(clean)
     if preset:
-        return preset['url']
+        return f"/api/v1/media/presets/icons/{preset['slug']}.svg"
     return clean
 
 
 def resolve_icon_preview_src(value: Optional[str]) -> str:
     """
-    Возвращает гарантированно работающий src для <img> в Django Admin (Data URI или внешний URL),
-    независимо от того, на каком домене/порту запущен Express API.
+    Возвращает гарантированно работающий src для <img> в Django Admin (Data URI, относительный URL /api/v1/media/... или внешний URL).
     """
     preset = find_preset_icon(value)
     if preset:
         return preset['data_uri']
-    if value and (value.startswith('data:image/') or value.startswith('http://') or value.startswith('https://')):
-        return value
+    if not value or not value.strip():
+        return _BY_SLUG['trophy']['data_uri']
+    clean = value.strip()
+    if clean.startswith('data:image/') or clean.startswith('http://') or clean.startswith('https://') or clean.startswith('/'):
+        return clean
     return _BY_SLUG['trophy']['data_uri']

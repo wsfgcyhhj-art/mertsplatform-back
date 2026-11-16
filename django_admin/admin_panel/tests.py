@@ -365,3 +365,57 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         user.refresh_from_db()
         self.assertIsNone(user.telegram_chat_id)
         self.assertIsNone(user.telegram_auth_code)
+
+    def test_09_achievement_admin_form_icon_handling(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from admin_panel.admin import AchievementAdminForm, AchievementAdmin
+        from django.contrib.admin.sites import AdminSite
+
+        # 1. Test preset icon selection
+        form_data = {
+            'code': 'PRESET_TEST',
+            'title': 'Пресет тест',
+            'category': 'general',
+            'trigger_type': 'MANUAL',
+            'points': 10,
+            'description': 'Тестовое описание',
+            'preset_selector': '/api/v1/media/presets/icons/sparkles.svg',
+        }
+        form = AchievementAdminForm(data=form_data)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['icon_url'], '/api/v1/media/presets/icons/sparkles.svg')
+
+        # 2. Test custom file upload (PNG/SVG) to MediaAsset
+        svg_content = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+        uploaded_file = SimpleUploadedFile(
+            name="custom_badge.svg",
+            content=svg_content,
+            content_type="image/svg+xml"
+        )
+        form_data2 = {
+            'code': 'CUSTOM_UPLOAD_TEST',
+            'title': 'Кастомная иконка',
+            'category': 'SPECIAL',
+            'trigger_type': 'MANUAL',
+            'points': 25,
+            'description': 'Тестовое описание',
+        }
+        form2 = AchievementAdminForm(data=form_data2, files={'custom_icon_file': uploaded_file})
+        self.assertTrue(form2.is_valid(), form2.errors)
+        icon_url = form2.cleaned_data['icon_url']
+        self.assertTrue(icon_url.startswith('/api/v1/media/'))
+
+        # Verify MediaAsset record in DB
+        media_id = icon_url.split('/')[-1]
+        asset = MediaAsset.objects.get(id=media_id)
+        self.assertEqual(asset.kind, 'ACHIEVEMENT_ICON')
+        self.assertEqual(asset.mime_type, 'image/svg+xml')
+
+        # 3. Test AchievementAdmin badges
+        site = AdminSite()
+        admin_obj = AchievementAdmin(Achievement, site)
+        ach_instance = Achievement(code='CUSTOM_UPLOAD_TEST', icon_url=icon_url)
+        preview_html = admin_obj.icon_preview(ach_instance)
+        self.assertIn(f'src="{icon_url}"', preview_html)
+        badge_html = admin_obj.icon_source_badge(ach_instance)
+        self.assertIn('Кастомный файл (Neon DB)', badge_html)

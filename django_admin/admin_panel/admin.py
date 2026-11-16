@@ -282,13 +282,34 @@ class PresetIconGalleryWidget(forms.Widget):
                 var previewImg = document.getElementById('merts_live_icon_preview');
                 if (previewImg) previewImg.src = src;
                 var caption = document.getElementById('merts_live_icon_caption');
-                if (caption) caption.textContent = url;
+                if (caption) caption.textContent = 'Выбран пресет: ' + url;
                 var buttons = document.querySelectorAll('#merts_preset_gallery button[data-preset-url]');
                 buttons.forEach(function(b) {{
                     b.style.borderColor = (b === btn) ? '#f59e0b' : '#27272a';
                     b.style.background = (b === btn) ? 'rgba(245, 158, 11, 0.14)' : '#18181b';
                 }});
             }};
+
+            document.addEventListener('DOMContentLoaded', function() {{
+                var fileInput = document.getElementById('id_custom_icon_file');
+                if (fileInput) {{
+                    fileInput.addEventListener('change', function(e) {{
+                        var file = e.target.files && e.target.files[0];
+                        if (file) {{
+                            var reader = new FileReader();
+                            reader.onload = function(evt) {{
+                                var previewImg = document.getElementById('merts_live_icon_preview');
+                                if (previewImg) previewImg.src = evt.target.result;
+                                var caption = document.getElementById('merts_live_icon_caption');
+                                if (caption) caption.textContent = 'Файл готов к загрузке в Neon DB: ' + file.name + ' (' + Math.round(file.size / 1024) + ' КБ)';
+                                var iconInput = document.getElementById('id_icon_url');
+                                if (iconInput) iconInput.value = '';
+                            }};
+                            reader.readAsDataURL(file);
+                        }}
+                    }});
+                }}
+            }});
         </script>
         '''
         return mark_safe(html)
@@ -393,33 +414,39 @@ class AchievementAdminForm(forms.ModelForm):
             cleaned_data['criteria'] = auto_criteria_map.get(trigger_type, '')
 
         if uploaded:
-            max_bytes = 512 * 1024
+            max_bytes = 1024 * 1024  # 1 MB
             if uploaded.size > max_bytes:
-                raise forms.ValidationError('Размер файла иконки не должен превышать 512 КБ.')
+                raise forms.ValidationError('Размер файла иконки не должен превышать 1 МБ.')
 
             ext = os.path.splitext(uploaded.name or '')[1].lower()
             allowed_map = {
                 '.svg': 'image/svg+xml',
                 '.png': 'image/png',
                 '.webp': 'image/webp',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
             }
             if ext not in allowed_map:
-                raise forms.ValidationError('Разрешены только файлы форматов .svg, .png или .webp.')
+                raise forms.ValidationError('Разрешены только файлы форматов .svg, .png, .webp или .jpg.')
 
             raw_bytes = uploaded.read()
-            if ext == '.svg':
-                text_head = raw_bytes[:512].decode('utf-8', errors='ignore').lower()
-                if '<svg' not in text_head:
-                    raise forms.ValidationError('Загруженный .svg файл не содержит корректного тега <svg>.')
-
-            b64_data = base64.b64encode(raw_bytes).decode('ascii')
-            cleaned_data['icon_url'] = f"data:{allowed_map[ext]};base64,{b64_data}"
+            mime_type = allowed_map[ext]
+            try:
+                from admin_panel.services.media_service import save_optimized_media_asset
+                asset = save_optimized_media_asset(
+                    buffer=raw_bytes,
+                    mime_type=mime_type,
+                    kind='ACHIEVEMENT_ICON',
+                )
+                cleaned_data['icon_url'] = asset['url']
+            except Exception as e:
+                raise forms.ValidationError(f'Ошибка сохранения иконки в MediaAsset: {str(e)}')
         elif raw_icon_url:
             cleaned_data['icon_url'] = normalize_icon_url(raw_icon_url)
         elif preset_val:
             cleaned_data['icon_url'] = normalize_icon_url(preset_val)
         else:
-            cleaned_data['icon_url'] = '/api/v1/achievements/icons/trophy.svg'
+            cleaned_data['icon_url'] = '/api/v1/media/presets/icons/trophy.svg'
 
         return cleaned_data
 
@@ -501,14 +528,14 @@ class AchievementAdmin(ModelAdmin):
         preset = find_preset_icon(obj.icon_url)
         if preset:
             return format_html(
-                '<span style="font-size:12px;font-weight:600;color:#fbbf24;">Системная ({})</span>',
+                '<span style="font-size:12px;font-weight:600;color:#fbbf24;">Предустановленная ({})</span>',
                 preset['slug'],
             )
-        if obj.icon_url and obj.icon_url.startswith('data:image/'):
-            return format_html(
-                '<span style="font-size:12px;font-weight:600;color:#34d399;">Кастомный файл (БД)</span>'
+        if obj.icon_url and ('/api/v1/media/' in obj.icon_url or obj.icon_url.startswith('data:image/')):
+            return mark_safe(
+                '<span style="font-size:12px;font-weight:600;color:#10b981;">Кастомный файл (Neon DB)</span>'
             )
-        return format_html(
+        return mark_safe(
             '<span style="font-size:12px;font-weight:600;color:#a1a1aa;">Внешний URL</span>'
         )
 
