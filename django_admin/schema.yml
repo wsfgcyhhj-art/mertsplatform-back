@@ -1,0 +1,1222 @@
+openapi: 3.0.3
+info:
+  title: MertsPlatform LMS API
+  version: 1.0.0
+  description: 'Production REST API for MertsPlatform: Authentication, Curriculum,
+    Homework Submissions, Media Assets & Dynamic Gamification Engine.'
+paths:
+  /api/v1/achievements:
+    get:
+      operationId: achievements_catalog
+      summary: Каталог всех достижений платформы с отметкой о получении
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Achievement'
+          description: ''
+  /api/v1/admin/score-adjustments:
+    post:
+      operationId: admin_score_adjustment
+      summary: Начисление или списание бонусных баллов ментором
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreAdjustment'
+          description: ''
+  /api/v1/admin/stats:
+    get:
+      operationId: admin_stats
+      summary: Сводная статистика учебной активности
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/admin/users:
+    get:
+      operationId: admin_users_list
+      summary: Список всех пользователей для панели ментора
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserProfile'
+          description: ''
+    post:
+      operationId: v1_admin_users_create
+      summary: Создать пользователя администратором
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/admin/users/{id}/role:
+    patch:
+      operationId: admin_user_role
+      summary: Изменить роль пользователя (STUDENT / ADMIN)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+  /api/v1/auth/login:
+    post:
+      operationId: v1_auth_login_create
+      summary: Аутентификация пользователя (логин + пароль)
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/logout:
+    post:
+      operationId: auth_logout
+      summary: Выход из системы и удаление сессии
+      tags:
+      - v1
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/refresh:
+    post:
+      operationId: auth_refresh
+      summary: Обновление пары токенов по refresh-токену
+      tags:
+      - v1
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/register:
+    post:
+      operationId: v1_auth_register_create
+      summary: Регистрация нового студента
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/health:
+    get:
+      operationId: v1_health_retrieve
+      summary: Проверка работоспособности сервиса (Health Check)
+      parameters:
+      - in: query
+        name: shallow
+        schema:
+          type: boolean
+        description: Быстрая проверка без обращения к БД
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/leaderboard:
+    get:
+      operationId: leaderboard_list
+      summary: Таблица рейтинга студентов (лидерборд)
+      parameters:
+      - in: query
+        name: groupNumber
+        schema:
+          type: string
+        description: Фильтр по номеру группы
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: Месяц обучения
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/lessons:
+    get:
+      operationId: lessons_list
+      summary: Список видеоуроков курса
+      parameters:
+      - in: query
+        name: groupNumber
+        schema:
+          type: string
+        description: Фильтр по группе (для менторов)
+      - in: query
+        name: month
+        schema:
+          type: string
+        description: Номер месяца или 'all'
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Lesson'
+          description: ''
+  /api/v1/media/{id}:
+    get:
+      operationId: v1_media_retrieve
+      description: Возвращает оптимизированное бинарное изображение с кеширующими
+        заголовками.
+      summary: Получить медиа-ассет по ID (WebP / SVG)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        description: UUID медиафайла
+        required: true
+      tags:
+      - v1
+      responses:
+        '200':
+          description: Бинарные данные изображения
+        '404':
+          description: Медиа-ассет не найден
+  /api/v1/media/presets:
+    get:
+      operationId: v1_media_presets_retrieve
+      description: Возвращает списки готовых баннеров, аватарок и иконок достижений
+        со встроенными dataUri и URL.
+      summary: Каталог предустановленных медиа-ассетов
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/media/presets/avatars/{slug}:
+    get:
+      operationId: v1_media_presets_avatars_retrieve
+      summary: Получить SVG-аватар по slug
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/media/presets/banners/{slug}:
+    get:
+      operationId: v1_media_presets_banners_retrieve
+      summary: Получить SVG-баннер по slug
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/media/presets/icons/{slug}:
+    get:
+      operationId: v1_media_presets_icons_retrieve
+      summary: Получить SVG-иконку ачивки по slug
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/submissions:
+    get:
+      operationId: submissions_list
+      summary: Список решений (сдач) домашних заданий
+      parameters:
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Фильтр по статусу (SENT, IN_REVIEW, ACCEPTED, REVISION)
+      - in: query
+        name: taskId
+        schema:
+          type: string
+        description: Фильтр по заданию
+      - in: query
+        name: userId
+        schema:
+          type: string
+        description: Фильтр по студенту (для менторов)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Submission'
+          description: ''
+    post:
+      operationId: v1_submissions_create
+      summary: Сдать решение задания на проверку ментору
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/submissions/{id}:
+    get:
+      operationId: submission_detail
+      summary: Детальная информация о сдаче ДЗ
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+          description: ''
+    patch:
+      operationId: v1_submissions_partial_update
+      summary: Проверка ДЗ ментором (выставление статуса, баллов, комментария)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/system/config:
+    get:
+      operationId: v1_system_config_retrieve
+      summary: Единый конфигурационный эндпоинт платформы для фронтенда
+      tags:
+      - v1
+      responses:
+        '200':
+          description: No response body
+  /api/v1/tasks:
+    get:
+      operationId: tasks_list
+      summary: Список практических заданий
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: string
+        description: Номер месяца или 'all'
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+          description: ''
+    post:
+      operationId: v1_tasks_create
+      summary: Создать новое задание (только для ментора/админа)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/tasks/{id}:
+    get:
+      operationId: task_detail
+      summary: Детальная информация о задании
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
+    patch:
+      operationId: v1_tasks_partial_update
+      summary: Обновить задание (только для ментора/админа)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+    delete:
+      operationId: v1_tasks_destroy
+      summary: Удалить задание (только для ментора/админа)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/telegram/webhook:
+    post:
+      operationId: v1_telegram_webhook_create
+      description: Принимает обновления от Telegram Bot API и обрабатывает команды
+        /start, /help, /status.
+      summary: Telegram Bot Webhook Receiver
+      tags:
+      - v1
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me:
+    get:
+      operationId: users_me_retrieve
+      summary: Получить текущий профиль пользователя и статистику
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+    patch:
+      operationId: users_me_update
+      summary: Обновить данные профиля (имя, контакты, оформление)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+  /api/v1/users/me/achievements:
+    get:
+      operationId: users_me_achievements
+      summary: Список достижений текущего пользователя
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAchievement'
+          description: ''
+  /api/v1/users/me/avatar:
+    post:
+      operationId: users_me_avatar_upload
+      summary: Загрузить аватар профиля (оптимизация до WebP 256x256)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me/banner:
+    post:
+      operationId: users_me_banner_upload
+      summary: Загрузить баннер профиля (оптимизация до WebP 1600x400)
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me/easter-egg:
+    post:
+      operationId: users_me_easter_egg
+      summary: Активация пасхалки и получение ачивки
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me/password:
+    put:
+      operationId: users_me_change_password
+      summary: Смена пароля пользователя
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me/telegram/connect:
+    post:
+      operationId: users_me_telegram_connect
+      description: Генерирует уникальный auth-код и возвращает прямую ссылку на бота
+        вида https://t.me/Bot?start=CODE
+      summary: Инициализировать привязку Telegram
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/users/me/telegram/disconnect:
+    delete:
+      operationId: users_me_telegram_disconnect
+      summary: Отвязать Telegram-бота от аккаунта
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+components:
+  schemas:
+    Achievement:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        code:
+          type: string
+          title: Код ачивки
+          maxLength: 128
+        title:
+          type: string
+          title: Название
+          maxLength: 255
+        description:
+          type: string
+          title: Описание
+        iconUrl:
+          type: string
+        category:
+          allOf:
+          - $ref: '#/components/schemas/CategoryEnum'
+          title: Категория
+        triggerType:
+          type: string
+        threshold:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Порог срабатывания (X)
+          description: 'Числовое значение для триггеров баллов и заданий (например:
+            100 для баллов или 5 для ДЗ). Для MANUAL / ON_REGISTER / EASTER_EGG оставьте
+            пустым.'
+        points:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Очки за ачивку (+pts)
+        criteria:
+          type: string
+          nullable: true
+          title: Критерий получения (текст для студента)
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - code
+      - createdAt
+      - description
+      - iconUrl
+      - id
+      - isActive
+      - title
+      - triggerType
+    CategoryEnum:
+      enum:
+      - START
+      - TASKS
+      - SCORES
+      - SECRET
+      - SPECIAL
+      - general
+      type: string
+      description: |-
+        * `START` - Старт (START)
+        * `TASKS` - Домашки (TASKS)
+        * `SCORES` - Баллы (SCORES)
+        * `SECRET` - Секретные (SECRET)
+        * `SPECIAL` - Особые (SPECIAL)
+        * `general` - Общие (general)
+    ChangePasswordRequest:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+        newPassword:
+          type: string
+          minLength: 8
+      required:
+      - currentPassword
+      - newPassword
+    Lesson:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        title:
+          type: string
+          title: Название урока
+          maxLength: 255
+        videoLink:
+          type: string
+        youtubeId:
+          type: string
+        groupNumber:
+          type: string
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - createdAt
+      - groupNumber
+      - id
+      - title
+      - updatedAt
+      - videoLink
+      - youtubeId
+    LoginRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+      required:
+      - login
+      - password
+    RegisterRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          minLength: 3
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          maxLength: 255
+        groupNumber:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          maxLength: 255
+        telegram:
+          type: string
+          maxLength: 255
+        groupId:
+          type: string
+          maxLength: 64
+        currentMonth:
+          type: integer
+          default: 1
+      required:
+      - groupNumber
+      - login
+      - password
+    RoleEnum:
+      enum:
+      - STUDENT
+      - ADMIN
+      type: string
+      description: |-
+        * `STUDENT` - Студент (STUDENT)
+        * `ADMIN` - Администратор (ADMIN)
+    ScoreAdjustment:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        userId:
+          type: string
+        adminId:
+          type: string
+          readOnly: true
+        amount:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Изменение баллов (+/-)
+        reason:
+          type: string
+          title: Причина
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - adminId
+      - amount
+      - createdAt
+      - id
+      - reason
+      - userId
+    ShortTask:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        title:
+          type: string
+          title: Название задания
+          maxLength: 255
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        has_score:
+          type: boolean
+          title: Оценивается баллами
+        max_score:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Макс. балл
+        is_bonus:
+          type: boolean
+          title: Бонусное задание
+      required:
+      - id
+      - title
+    ShortUser:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        login:
+          type: string
+          title: Логин
+          maxLength: 255
+        name:
+          type: string
+          nullable: true
+          title: Имя
+          maxLength: 255
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: Роль
+        avatar_url:
+          type: string
+          nullable: true
+          title: URL аватара
+        group_number:
+          type: string
+          nullable: true
+          title: Номер группы
+          maxLength: 64
+      required:
+      - id
+      - login
+    StatusEnum:
+      enum:
+      - SENT
+      - IN_REVIEW
+      - REVISION
+      - ACCEPTED
+      type: string
+      description: |-
+        * `SENT` - Отправлено (SENT)
+        * `IN_REVIEW` - На проверке (IN_REVIEW)
+        * `REVISION` - На доработке (REVISION)
+        * `ACCEPTED` - Принято (ACCEPTED)
+    Submission:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        userId:
+          type: string
+        taskId:
+          type: string
+        reviewerId:
+          type: string
+          readOnly: true
+          nullable: true
+        version:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Попытка (версия)
+        comment:
+          type: string
+          nullable: true
+          title: Комментарий студента
+        solutionLink:
+          type: string
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          title: Статус
+        score:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Баллы
+        reviewerComment:
+          type: string
+          nullable: true
+        voiceFeedbackUrl:
+          type: string
+          nullable: true
+        reviewedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+        user:
+          allOf:
+          - $ref: '#/components/schemas/ShortUser'
+          readOnly: true
+        task:
+          allOf:
+          - $ref: '#/components/schemas/ShortTask'
+          readOnly: true
+      required:
+      - createdAt
+      - id
+      - reviewedAt
+      - reviewerId
+      - solutionLink
+      - task
+      - taskId
+      - updatedAt
+      - user
+      - userId
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        title:
+          type: string
+          title: Название задания
+          maxLength: 255
+        description:
+          type: string
+          title: Описание задания
+        topic:
+          type: string
+          title: Тема (стек)
+          maxLength: 128
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        exampleLink:
+          type: string
+          nullable: true
+        attachmentLink:
+          type: string
+          nullable: true
+        hasScore:
+          type: boolean
+          default: false
+        maxScore:
+          type: integer
+          nullable: true
+        isBonus:
+          type: boolean
+          default: false
+        mySubmission:
+          readOnly: true
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - createdAt
+      - description
+      - id
+      - mySubmission
+      - title
+      - topic
+      - updatedAt
+    UserAchievement:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        userId:
+          type: string
+        achievementId:
+          type: string
+        achievement:
+          allOf:
+          - $ref: '#/components/schemas/Achievement'
+          readOnly: true
+        awardedAt:
+          type: string
+          format: date-time
+      required:
+      - achievement
+      - achievementId
+      - awardedAt
+      - id
+      - userId
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        login:
+          type: string
+          title: Логин
+          maxLength: 255
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: Роль
+        name:
+          type: string
+          nullable: true
+          title: Имя
+          maxLength: 255
+        telegram:
+          type: string
+          nullable: true
+          maxLength: 255
+        isTelegramConnected:
+          type: boolean
+          readOnly: true
+        telegramUsername:
+          type: string
+          readOnly: true
+        groupNumber:
+          type: string
+          readOnly: true
+        groupId:
+          type: string
+          readOnly: true
+        currentMonth:
+          type: integer
+          readOnly: true
+        avatarUrl:
+          type: string
+          readOnly: true
+        bannerUrl:
+          type: string
+          readOnly: true
+        streakCount:
+          type: integer
+          readOnly: true
+        totalScore:
+          type: integer
+          readOnly: true
+        tasksAcceptedCount:
+          type: integer
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          title: Дата создания
+      required:
+      - avatarUrl
+      - bannerUrl
+      - currentMonth
+      - groupId
+      - groupNumber
+      - id
+      - isTelegramConnected
+      - login
+      - streakCount
+      - tasksAcceptedCount
+      - telegramUsername
+      - totalScore
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

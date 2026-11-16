@@ -114,7 +114,7 @@ export const AdminDashboard = () => {
       theme={{
         algorithm: theme.darkAlgorithm,
         token: {
-          colorPrimary: '#a855f7',
+          colorPrimary: '#f59e0b',
           colorBgContainer: '#182042',
           colorBgElevated: '#1e274f',
           borderRadius: 12,
@@ -137,7 +137,7 @@ export const AdminDashboard = () => {
               href="http://localhost:8000/admin"
               target="_blank"
               style={{
-                background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+                background: 'linear-gradient(135deg, #f59e0b 0%, #6366f1 100%)',
                 border: 'none',
                 fontWeight: 600,
                 height: 48,
@@ -201,11 +201,11 @@ export const AdminDashboard = () => {
           <div className={styles.statCard} onClick={() => handleTabChange('tasks')} style={{ cursor: 'pointer' }}>
             <div>
               <div className={styles.statTitle}>Учебных заданий</div>
-              <div className={styles.statValue} style={{ color: '#a855f7' }}>
+              <div className={styles.statValue} style={{ color: '#f59e0b' }}>
                 {kpi.totalTasks}
               </div>
             </div>
-            <div className={styles.statIcon} style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
+            <div className={styles.statIcon} style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
               <CheckSquareOutlined />
             </div>
           </div>

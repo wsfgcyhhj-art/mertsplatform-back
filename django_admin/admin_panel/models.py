@@ -92,6 +92,52 @@ class User(models.Model):
         verbose_name_plural = 'Пользователи'
         ordering = ['-created_at']
 
+    USERNAME_FIELD = 'login'
+    REQUIRED_FIELDS = []
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    @property
+    def is_active(self):
+        return True
+
+    @property
+    def is_staff(self):
+        return self.role == RoleChoices.ADMIN
+
+    @property
+    def is_superuser(self):
+        return self.role == RoleChoices.ADMIN
+
+    def check_password(self, raw_password: str) -> bool:
+        if not self.password_hash or not raw_password:
+            return False
+        import bcrypt
+        try:
+            return bcrypt.checkpw(raw_password.encode('utf-8'), self.password_hash.encode('utf-8'))
+        except Exception:
+            return False
+
+    def set_password(self, raw_password: str) -> None:
+        import bcrypt
+        salt = bcrypt.gensalt(rounds=10)
+        self.password_hash = bcrypt.hashpw(raw_password.encode('utf-8'), salt).decode('utf-8')
+
+    def calculate_total_score(self) -> int:
+        from django.db.models import Sum
+        sub_score = self.submissions.filter(status=SubmissionStatusChoices.ACCEPTED).aggregate(s=Sum('score'))['s'] or 0
+        adj_score = self.score_adjustments.aggregate(s=Sum('amount'))['s'] or 0
+        return sub_score + adj_score
+
+    def accepted_tasks_count(self) -> int:
+        return self.submissions.filter(status=SubmissionStatusChoices.ACCEPTED).count()
+
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
         if self.telegram_chat_id:
@@ -100,6 +146,30 @@ class User(models.Model):
 
     def __str__(self):
         return f"{self.name or self.login} (@{self.login})"
+
+
+class Session(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='sessions',
+        db_column='user_id',
+        verbose_name='Пользователь',
+    )
+    refresh_token = models.CharField('Refresh Token', max_length=512, unique=True, db_column='refresh_token')
+    expires_at = models.DateTimeField('Срок действия', db_column='expires_at')
+    created_at = models.DateTimeField('Дата создания', default=timezone.now, db_column='created_at')
+
+    class Meta:
+        managed = False
+        db_table = 'Session'
+        verbose_name = 'Сессия пользователя'
+        verbose_name_plural = 'Сессии пользователей'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Session for {self.user.login} ({self.id})"
 
 
 class Lesson(models.Model):

@@ -134,7 +134,7 @@ export const Register = () => {
 
                         <div style={{ textAlign: 'center', marginTop: '10px', fontSize: '14px', color: 'rgba(249,250,251,0.7)' }}>
                             Уже есть аккаунт?{' '}
-                            <Link to="/auth" style={{ color: 'var(--primary, #a855f7)', fontWeight: 600, textDecoration: 'none' }}>
+                            <Link to="/auth" style={{ color: 'var(--primary, #f59e0b)', fontWeight: 600, textDecoration: 'none' }}>
                                 Войти
                             </Link>
                         </div>

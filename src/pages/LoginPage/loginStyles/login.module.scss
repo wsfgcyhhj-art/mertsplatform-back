@@ -80,7 +80,7 @@
         &:focus {
             outline: none;
             border-color: var(--primary);
-            box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.3);
         }
     }
 
@@ -101,14 +101,14 @@
         transition: .3s all ease-in-out;
 
         &:disabled {
-            box-shadow: 0 10px 20px rgba(168, 85, 247, 0.3);
+            box-shadow: 0 10px 20px rgba(245, 158, 11, 0.3);
             background: var(--primary);
             cursor: not-allowed;
         }
 
         &:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(168, 85, 247, 0.3);
+            box-shadow: 0 10px 20px rgba(245, 158, 11, 0.3);
         }
     }
 }

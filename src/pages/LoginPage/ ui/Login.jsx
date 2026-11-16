@@ -89,7 +89,7 @@ export const Login = () => {
 
                         <div style={{ textAlign: 'center', marginTop: '10px', fontSize: '14px', color: 'rgba(249,250,251,0.7)' }}>
                             Еще нет аккаунта?{' '}
-                            <Link to="/register" style={{ color: 'var(--primary, #a855f7)', fontWeight: 600, textDecoration: 'none' }}>
+                            <Link to="/register" style={{ color: 'var(--primary, #f59e0b)', fontWeight: 600, textDecoration: 'none' }}>
                                 Зарегистрироваться
                             </Link>
                         </div>

@@ -33,7 +33,7 @@
                     width: 100%;
                 }
                 span {
-                    color: #a855f7;
+                    color: #f59e0b;
                     width: 50%;
                 }
                 p {
@@ -75,7 +75,7 @@
                     color: #fff;
                     transition: all 0.5s ease;
                     &:hover {
-                        box-shadow: 0 0 50px #A855F7;
+                        box-shadow: 0 0 50px #f59e0b;
                         cursor: pointer;
                         background: var(--primary);
                     }
@@ -97,7 +97,7 @@
     transition: box-shadow 1s ease;
 
     &:hover {
-        box-shadow: 0 0 50px #A855F7;
+        box-shadow: 0 0 50px #f59e0b;
         cursor: pointer;
     }
 }
@@ -148,7 +148,7 @@
         color: #fff;
         transition: all 0.5s ease;
         &:hover {
-            box-shadow: 0 0 50px #A855F7;
+            box-shadow: 0 0 50px #f59e0b;
             cursor: pointer;
             background: var(--primary);
         }
@@ -164,7 +164,7 @@
         right: 200px;
         transition: all 1s ease;
         &:hover {
-            box-shadow: 0 0 50px #A855F7;
+            box-shadow: 0 0 50px #f59e0b;
             cursor: pointer;
         }
     }

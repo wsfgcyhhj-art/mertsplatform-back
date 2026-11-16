@@ -13,11 +13,11 @@
         }
         @keyframes highlight {
             0% {
-                box-shadow: 0 0 0 rgba(168, 85, 247, 0);
+                box-shadow: 0 0 0 rgba(245, 158, 11, 0);
             }
 
             50% {
-                box-shadow: 0 0 40px  rgba(168, 85, 247, 0.5);
+                box-shadow: 0 0 40px  rgba(245, 158, 11, 0.5);
             }
 
             100% {
@@ -29,13 +29,13 @@
             height: 570px;
             padding: 30px;
             background: var(--card);
-            box-shadow:  0 0 0 2px rgba(168, 85, 247, 0.12);
+            box-shadow:  0 0 0 2px rgba(245, 158, 11, 0.12);
             border-radius: 15px;
             .title {
                 width: auto;
 
                 span {
-                    color: #A855F7;
+                    color: #f59e0b;
                 }
                 h1 {
                     font-size: 33px;
@@ -59,7 +59,7 @@
                 }
                 .footer_desc {
                     margin-top: 20px;
-                    color: #A855F7;
+                    color: #f59e0b;
                 }
             }
             .buttons {
@@ -84,7 +84,7 @@
 
                     &:hover {
                         gap: 20px;
-                        box-shadow: 0 0 50px #A855F7;
+                        box-shadow: 0 0 50px #f59e0b;
                         cursor: pointer;
                         background: var(--primary);
                     }
@@ -98,7 +98,7 @@
             height: 570px;
             background: var(--card);
             padding: 30px;
-            box-shadow:  0 0 0 2px rgba(168, 85, 247, 0.12);
+            box-shadow:  0 0 0 2px rgba(245, 158, 11, 0.12);
             border-radius: 15px;
             h1 {
                 margin-bottom: 9px;
@@ -148,7 +148,7 @@
                     }
                     .imgs {
                         font-size: 30px;
-                        color: #A855F7;
+                        color: #f59e0b;
                     }
                     .hr {
                         width: 100px;

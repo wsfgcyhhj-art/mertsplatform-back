@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export function resolveMediaUrl(rawUrl, fallbackPath = null) {
   const val = String(rawUrl || '').trim();
@@ -11,11 +11,10 @@ export function resolveMediaUrl(rawUrl, fallbackPath = null) {
     return val;
   }
   if (val.startsWith('/api/v1/')) {
-    const serverOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
-    return `${serverOrigin}${val}`;
+    return val;
   }
   if (val.startsWith('/')) {
-    return `${API_BASE_URL.replace(/\/$/, '')}${val}`;
+    return `/api/v1${val}`;
   }
   return val;
 }

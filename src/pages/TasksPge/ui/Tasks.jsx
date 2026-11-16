@@ -247,7 +247,7 @@ export const TaskS = () => {
                                                     href={sub.solutionLink}
                                                     target="_blank"
                                                     rel="noreferrer"
-                                                    style={{ color: 'var(--primary, #a855f7)' }}
+                                                    style={{ color: 'var(--primary, #f59e0b)' }}
                                                 >
                                                     {sub.solutionLink}
                                                 </a>
@@ -262,7 +262,7 @@ export const TaskS = () => {
                                                 icon={<FaGithub />}
                                                 size="large"
                                                 onClick={() => openSubmitModal(t)}
-                                                style={{ background: 'var(--primary, #a855f7)', borderColor: 'var(--primary, #a855f7)' }}
+                                                style={{ background: 'var(--primary, #f59e0b)', borderColor: 'var(--primary, #f59e0b)' }}
                                             >
                                                 {isRevision ? 'Сдать исправленную версию' : 'Сдать ДЗ (GitHub)'}
                                             </Button>
@@ -297,7 +297,7 @@ export const TaskS = () => {
                         type="primary"
                         loading={submitting}
                         onClick={handleSendSubmission}
-                        style={{ background: 'var(--primary, #a855f7)', borderColor: 'var(--primary, #a855f7)' }}
+                        style={{ background: 'var(--primary, #f59e0b)', borderColor: 'var(--primary, #f59e0b)' }}
                     >
                         Отправить на проверку
                     </Button>,
@@ -395,8 +395,8 @@ export const TaskS = () => {
                                                 style={{
                                                     marginTop: '10px',
                                                     padding: '10px 14px',
-                                                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.12), rgba(239, 68, 68, 0.08))',
-                                                    border: '1px solid rgba(168, 85, 247, 0.3)',
+                                                    background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(239, 68, 68, 0.08))',
+                                                    border: '1px solid rgba(245, 158, 11, 0.3)',
                                                     borderRadius: '10px',
                                                     display: 'flex',
                                                     flexDirection: 'column',
@@ -404,7 +404,7 @@ export const TaskS = () => {
                                                 }}
                                             >
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#e9d5ff', fontSize: '13px', fontWeight: 600 }}>
-                                                    <FaMicrophone style={{ color: '#c084fc' }} />
+                                                    <FaMicrophone style={{ color: '#fbbf24' }} />
                                                     <span>Голосовой фидбек ментора</span>
                                                 </div>
                                                 <audio

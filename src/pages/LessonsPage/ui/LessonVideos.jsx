@@ -81,8 +81,8 @@ export const LessonVideos = () => {
                         style={{
                             padding: '4px 10px',
                             borderRadius: '8px',
-                            background: 'rgba(168, 85, 247, 0.15)',
-                            border: '1px solid rgba(168, 85, 247, 0.35)',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            border: '1px solid rgba(245, 158, 11, 0.35)',
                             color: '#e9d5ff',
                             fontSize: '13px',
                             fontWeight: 700,
@@ -108,10 +108,10 @@ export const LessonVideos = () => {
                                 padding: '6px 14px',
                                 borderRadius: '10px',
                                 border: isActive
-                                    ? '1px solid var(--primary, #a855f7)'
+                                    ? '1px solid var(--primary, #f59e0b)'
                                     : '1px solid rgba(255,255,255,0.12)',
                                 background: isActive
-                                    ? 'var(--primary, #a855f7)'
+                                    ? 'var(--primary, #f59e0b)'
                                     : 'rgba(255,255,255,0.04)',
                                 color: '#fff',
                                 fontSize: '13px',
@@ -133,11 +133,11 @@ export const LessonVideos = () => {
                             borderRadius: '10px',
                             border:
                                 selectedMonth === 'all'
-                                    ? '1px solid var(--primary, #a855f7)'
+                                    ? '1px solid var(--primary, #f59e0b)'
                                     : '1px solid rgba(255,255,255,0.12)',
                             background:
                                 selectedMonth === 'all'
-                                    ? 'var(--primary, #a855f7)'
+                                    ? 'var(--primary, #f59e0b)'
                                     : 'rgba(255,255,255,0.04)',
                             color: '#fff',
                             fontSize: '13px',

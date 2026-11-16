@@ -121,7 +121,7 @@ export const LeaderboardPage = () => {
             sorter: (a, b) => b.totalScore - a.totalScore,
             defaultSortOrder: 'ascend',
             render: (score) => (
-                <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--primary, #a855f7)' }}>
+                <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--primary, #f59e0b)' }}>
                     {score} <span style={{ fontSize: '12px' }}>pts</span>
                 </span>
             ),
@@ -176,7 +176,7 @@ export const LeaderboardPage = () => {
                             <Col xs={24} sm={12} md={8} lg={4} key={student.id} style={{ flex: '1 0 180px' }}>
                                 <Card
                                     style={{
-                                        background: idx === 0 ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(168, 85, 247, 0.1))' : 'var(--card, #131935)',
+                                        background: idx === 0 ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.1))' : 'var(--card, #131935)',
                                         border: idx === 0 ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.08)',
                                         borderRadius: '14px',
                                         textAlign: 'center',
@@ -202,7 +202,7 @@ export const LeaderboardPage = () => {
                                         {student.name || student.login}
                                     </div>
                                     <div style={{ fontSize: '12px', color: '#9ca3af' }}>Группа: {student.groupNumber || '—'}</div>
-                                    <div style={{ marginTop: '8px', fontSize: '18px', fontWeight: 700, color: 'var(--primary, #a855f7)' }}>
+                                    <div style={{ marginTop: '8px', fontSize: '18px', fontWeight: 700, color: 'var(--primary, #f59e0b)' }}>
                                         {student.totalScore} <span style={{ fontSize: '11px', color: '#9ca3af' }}>баллов</span>
                                     </div>
                                     <div style={{ fontSize: '12px', color: '#10b981', marginTop: '4px' }}>
