@@ -24,6 +24,10 @@ from .models import (
     MonthlyScoreArchive,
     MediaAsset,
 )
+from admin_panel.services.telegram_service import (
+    notify_lesson_published,
+    notify_task_published,
+)
 
 
 def extract_youtube_id(url: str) -> str:
@@ -98,6 +102,15 @@ class LessonAdmin(ModelAdmin):
     search_fields = ('title', 'group_number', 'youtube_id')
     list_editable = ('group_number', 'month', 'order')
     ordering = ('group_number', 'month', 'order')
+    actions = ['broadcast_lesson_telegram']
+
+    @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
+    def broadcast_lesson_telegram(self, request, queryset):
+        total = sum(notify_lesson_published(lesson) for lesson in queryset)
+        self.message_user(
+            request,
+            f"Уведомления о {queryset.count()} ур. успешно поставлены в очередь отправки (получателей: {total})."
+        )
 
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
@@ -144,6 +157,15 @@ class TaskAdmin(ModelAdmin):
     list_filter = ('month', 'is_bonus')
     search_fields = ('title', 'topic', 'description')
     ordering = ('month', 'order')
+    actions = ['broadcast_task_telegram']
+
+    @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
+    def broadcast_task_telegram(self, request, queryset):
+        total = sum(notify_task_published(task) for task in queryset)
+        self.message_user(
+            request,
+            f"Уведомления о {queryset.count()} ДЗ успешно поставлены в очередь отправки (получателей: {total})."
+        )
 
 
 class UserAdminForm(forms.ModelForm):

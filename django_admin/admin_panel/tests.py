@@ -419,3 +419,160 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertIn(f'src="{icon_url}"', preview_html)
         badge_html = admin_obj.icon_source_badge(ach_instance)
         self.assertIn('Кастомный файл (Neon DB)', badge_html)
+
+    def test_10_educational_notification_triggers_and_antispam(self):
+        from unittest.mock import patch, MagicMock
+        from django.contrib.admin.sites import AdminSite
+        from admin_panel.admin import LessonAdmin, TaskAdmin
+        from admin_panel.services.telegram_service import (
+            notify_lesson_published,
+            notify_task_published,
+            notify_submission_reviewed,
+            notify_achievement_unlocked,
+            notify_score_adjustment_granted,
+            notify_month_advanced,
+        )
+
+        # Create student and admin with telegram_chat_id
+        admin_user = User.objects.create(
+            login='admin_notif',
+            name='Админ Уведомлений',
+            password_hash='hash123',
+            role=RoleChoices.ADMIN,
+            telegram_chat_id='111222333',
+        )
+        student = User.objects.create(
+            login='student_notif',
+            name='Ученик Уведомлений',
+            password_hash='hash123',
+            role=RoleChoices.STUDENT,
+            current_month=1,
+            group_number='GRP-TG',
+            telegram_chat_id='987654321',
+        )
+
+        # 1. Lesson Creation Trigger & Content
+        with patch('admin_panel.services.telegram_service.async_broadcast_message') as mock_broadcast:
+            lesson = Lesson.objects.create(
+                title='Урок по Django Signals',
+                group_number='GRP-TG',
+                month=1,
+                order=5,
+                video_link='https://youtu.be/dQw4w9WgXcQ',
+            )
+            self.assertTrue(mock_broadcast.called)
+            chat_ids, message = mock_broadcast.call_args[0]
+            self.assertIn('987654321', chat_ids)
+            self.assertIn('Урок по Django Signals', message)
+            self.assertIn('lessons?month=1', message)
+
+        # 2. Task Creation Trigger & Content
+        with patch('admin_panel.services.telegram_service.async_broadcast_message') as mock_broadcast:
+            task = Task.objects.create(
+                title='ДЗ по Celery и Signals',
+                topic='Signals',
+                month=1,
+                order=5,
+                max_score=50,
+                is_bonus=True,
+            )
+            self.assertTrue(mock_broadcast.called)
+            chat_ids, message = mock_broadcast.call_args[0]
+            self.assertIn('987654321', chat_ids)
+            self.assertIn('ДЗ по Celery и Signals', message)
+            self.assertIn('Бонусное задание', message)
+            self.assertIn('tasks?month=1', message)
+
+        # 3. Submission Creation (SENT) -> no review notification
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            submission = Submission.objects.create(
+                user=student,
+                task=task,
+                solution_link='https://github.com/student/homework',
+                status=SubmissionStatusChoices.SENT,
+            )
+            self.assertFalse(mock_send_single.called)
+
+        # 3b. Submission Review (ACCEPTED with score and comment) -> notification triggered
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            submission.status = SubmissionStatusChoices.ACCEPTED
+            submission.score = 50
+            submission.reviewer_comment = 'Отличная работа!'
+            submission.save()
+            self.assertTrue(mock_send_single.called)
+            target_user_id, message = mock_send_single.call_args[0]
+            self.assertEqual(target_user_id, student.id)
+            self.assertIn('Принято', message)
+            self.assertIn('50 / 50', message)
+            self.assertIn('Отличная работа!', message)
+
+        # 3c. Anti-Spam Check: Save unchanged submission -> ZERO notifications
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            submission.save()
+            self.assertFalse(mock_send_single.called)
+
+        # 4. UserAchievement Trigger
+        ach = Achievement.objects.get(code='WELCOME')
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            UserAchievement.objects.create(
+                user=student,
+                achievement=ach,
+            )
+            self.assertTrue(mock_send_single.called)
+            target_user_id, message = mock_send_single.call_args[0]
+            self.assertEqual(target_user_id, student.id)
+            self.assertIn('Получена новая ачивка!', message)
+            self.assertIn(ach.title, message)
+
+        # 5. ScoreAdjustment Trigger
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            ScoreAdjustment.objects.create(
+                user=student,
+                admin=admin_user,
+                amount=15,
+                reason='Активность в чате',
+                month=1,
+            )
+            self.assertTrue(mock_send_single.called)
+            target_user_id, message = mock_send_single.call_args[0]
+            self.assertEqual(target_user_id, student.id)
+            self.assertIn('Корректировка баллов!', message)
+            self.assertIn('+15 баллов', message)
+            self.assertIn('Активность в чате', message)
+
+        # 6. User Month Advancement:
+        # 6a. Name change without month change -> no notification
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            student.name = 'Новое Имя'
+            student.save()
+            self.assertFalse(mock_send_single.called)
+
+        # 6b. Month advancement: 1 -> 2 -> notification triggered
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
+            student.current_month = 2
+            student.save()
+            self.assertTrue(mock_send_single.called)
+            target_user_id, message = mock_send_single.call_args[0]
+            self.assertEqual(target_user_id, student.id)
+            self.assertIn('Открыт новый этап обучения!', message)
+            self.assertIn('Месяца 2', message)
+
+        # 7. Unfold Admin Actions
+        site = AdminSite()
+        mock_request = MagicMock()
+        mock_messages = []
+        mock_request.user = admin_user
+
+        lesson_admin = LessonAdmin(Lesson, site)
+        lesson_admin.message_user = lambda req, msg: mock_messages.append(msg)
+        with patch('admin_panel.services.telegram_service.async_broadcast_message'):
+            lesson_admin.broadcast_lesson_telegram(mock_request, Lesson.objects.filter(id=lesson.id))
+        self.assertEqual(len(mock_messages), 1)
+        self.assertIn('поставлены в очередь', mock_messages[0])
+
+        task_admin = TaskAdmin(Task, site)
+        task_admin.message_user = lambda req, msg: mock_messages.append(msg)
+        with patch('admin_panel.services.telegram_service.async_broadcast_message'):
+            task_admin.broadcast_task_telegram(mock_request, Task.objects.filter(id=task.id))
+        self.assertEqual(len(mock_messages), 2)
+        self.assertIn('поставлены в очередь', mock_messages[1])

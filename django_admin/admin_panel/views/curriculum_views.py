@@ -299,13 +299,7 @@ class SubmissionDetailView(APIView):
 
         sub.reviewer = request.user
         sub.reviewed_at = timezone.now()
-        sub.save()  # Triggers post_save signal -> evaluates achievements
-
-        # Notify student via Telegram
-        try:
-            notify_submission_reviewed(sub)
-        except Exception:
-            pass
+        sub.save()  # Triggers post_save signal -> evaluates achievements and notifies student via on_commit
 
         serializer = SubmissionSerializer(sub)
         return Response(serializer.data)
