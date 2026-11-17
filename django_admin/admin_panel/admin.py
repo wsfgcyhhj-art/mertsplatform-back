@@ -2,11 +2,11 @@ import base64
 import os
 import re
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils import timezone
-from unfold.admin import ModelAdmin
+from unfold.admin import ModelAdmin, TabularInline
 from .achievement_icons import (
     PRESET_ACHIEVEMENT_ICONS,
     find_preset_icon,
@@ -15,6 +15,7 @@ from .achievement_icons import (
 )
 from .models import (
     User,
+    StudyGroup,
     Lesson,
     Task,
     Submission,
@@ -27,6 +28,12 @@ from .models import (
 from admin_panel.services.telegram_service import (
     notify_lesson_published,
     notify_task_published,
+    send_test_telegram_message,
+)
+from admin_panel.services.group_service import (
+    parse_month_from_group_name,
+    get_study_group_choices,
+    ensure_study_groups_synced,
 )
 
 
@@ -77,32 +84,114 @@ class SubmissionAdmin(ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-class DatalistTextInput(forms.TextInput):
-    def __init__(self, datalist_options=None, *args, **kwargs):
-        self.datalist_options = datalist_options or []
-        super().__init__(*args, **kwargs)
+class StudyGroupStudentInline(TabularInline):
+    model = User
+    fk_name = 'study_group'
+    extra = 0
+    fields = ('name', 'login', 'telegram_username', 'telegram_chat_id', 'current_month', 'streak_count')
+    readonly_fields = ('name', 'login', 'telegram_username', 'telegram_chat_id', 'current_month', 'streak_count')
+    can_delete = False
+    show_change_link = True
+    verbose_name = 'Студент'
+    verbose_name_plural = 'Студенты этой группы'
 
-    def render(self, name, value, attrs=None, renderer=None):
-        datalist_id = f"id_{name}_datalist"
-        attrs = dict(attrs or {})
-        attrs['list'] = datalist_id
-        attrs.setdefault('placeholder', 'Выберите из списка или введите номер группы (напр. 15)')
-        input_html = super().render(name, value, attrs, renderer)
-        options_html = ''.join(
-            f'<option value="{opt}"></option>' for opt in self.datalist_options if opt
-        )
-        return mark_safe(f'{input_html}<datalist id="{datalist_id}">{options_html}</datalist>')
+
+@admin.register(StudyGroup)
+class StudyGroupAdmin(ModelAdmin):
+    list_fullwidth = True
+    list_display = ('name', 'month', 'students_count_badge', 'lessons_count_badge', 'tasks_count_badge', 'created_at')
+    list_filter = ('month',)
+    search_fields = ('name',)
+    ordering = ('month', 'name')
+    inlines = [StudyGroupStudentInline]
+
+    @admin.display(description='Студентов')
+    def students_count_badge(self, obj):
+        cnt = obj.students_count
+        return format_html('<span style="font-weight:600;color:#10b981;">{} студ.</span>', cnt)
+
+    @admin.display(description='Видеоуроков')
+    def lessons_count_badge(self, obj):
+        cnt = obj.lessons_count
+        return format_html('<span style="font-weight:600;color:#38bdf8;">{} ур.</span>', cnt)
+
+    @admin.display(description='Заданий')
+    def tasks_count_badge(self, obj):
+        cnt = obj.tasks_count
+        return format_html('<span style="font-weight:600;color:#fbbf24;">{} ДЗ</span>', cnt)
+
+
+class LessonAdminForm(forms.ModelForm):
+    group_number = forms.ChoiceField(
+        label='Целевая учебная группа',
+        required=False,
+        help_text='Выберите группу для видеоурока или оставьте пустым для всех групп месяца.',
+    )
+
+    class Meta:
+        model = Lesson
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['group_number'].choices = get_study_group_choices(include_all=True)
+        if self.instance and self.instance.pk and self.instance.group_number:
+            self.initial['group_number'] = self.instance.group_number
+
+    def clean(self):
+        cleaned_data = super().clean()
+        video_link = (cleaned_data.get('video_link') or '').strip()
+        if video_link:
+            y_id = extract_youtube_id(video_link)
+            if not y_id:
+                self.add_error('video_link', 'Не удалось извлечь YouTube ID из ссылки. Проверьте формат ссылки.')
+            else:
+                cleaned_data['youtube_id'] = y_id
+
+        grp = (cleaned_data.get('group_number') or '').strip()
+        if grp:
+            cleaned_data['group_number'] = grp
+            if cleaned_data.get('month') == 1:
+                cleaned_data['month'] = parse_month_from_group_name(grp)
+        else:
+            cleaned_data['group_number'] = 'ALL'
+
+        return cleaned_data
 
 
 @admin.register(Lesson)
 class LessonAdmin(ModelAdmin):
+    form = LessonAdminForm
     list_fullwidth = True
-    list_display = ('title', 'group_number', 'month', 'order', 'youtube_id')
+    list_display = ('title', 'group_badge', 'month', 'order', 'youtube_id_click')
     list_filter = ('group_number', 'month')
     search_fields = ('title', 'group_number', 'youtube_id')
-    list_editable = ('group_number', 'month', 'order')
-    ordering = ('group_number', 'month', 'order')
+    ordering = ('month', 'group_number', 'order')
+    readonly_fields = ('youtube_id', 'created_at', 'updated_at')
     actions = ['broadcast_lesson_telegram']
+
+    @admin.display(description='Группа')
+    def group_badge(self, obj):
+        val = obj.group_number or 'ALL'
+        is_all = val.upper() == 'ALL'
+        color = '#a1a1aa' if is_all else '#38bdf8'
+        text = 'Все группы' if is_all else val
+        return format_html(
+            '<span style="padding:2px 8px;border-radius:6px;background:#18181b;border:1px solid #27272a;color:{};font-weight:600;font-size:12px;">{}</span>',
+            color,
+            text
+        )
+
+    @admin.display(description='YouTube')
+    def youtube_id_click(self, obj):
+        if obj.youtube_id:
+            url = f"https://www.youtube.com/watch?v={obj.youtube_id}"
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer" style="color:#ef4444;font-weight:600;">▶ {}</a>',
+                url,
+                obj.youtube_id
+            )
+        return '—'
 
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_lesson_telegram(self, request, queryset):
@@ -112,36 +201,6 @@ class LessonAdmin(ModelAdmin):
             f"Уведомления о {queryset.count()} ур. успешно поставлены в очередь отправки (получателей: {total})."
         )
 
-    def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
-        try:
-            user_groups = (
-                User.objects.exclude(group_number__isnull=True)
-                .exclude(group_number='')
-                .values_list('group_number', flat=True)
-                .distinct()
-            )
-            lesson_groups = (
-                Lesson.objects.exclude(group_number__isnull=True)
-                .exclude(group_number='')
-                .values_list('group_number', flat=True)
-                .distinct()
-            )
-            groups = sorted({g.strip() for g in list(user_groups) + list(lesson_groups) if g and g.strip()})
-        except Exception:
-            groups = []
-
-        if 'group_number' in form.base_fields:
-            existing_attrs = form.base_fields['group_number'].widget.attrs
-            form.base_fields['group_number'].widget = DatalistTextInput(
-                datalist_options=groups,
-                attrs=existing_attrs,
-            )
-            form.base_fields['group_number'].help_text = (
-                'Выберите существующую группу из выпадающего списка или введите номер новой группы.'
-            )
-        return form
-
     def save_model(self, request, obj, form, change):
         if obj.video_link and not obj.youtube_id:
             obj.youtube_id = extract_youtube_id(obj.video_link)
@@ -150,14 +209,54 @@ class LessonAdmin(ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
+class TaskAdminForm(forms.ModelForm):
+    group_number = forms.ChoiceField(
+        label='Целевая учебная группа',
+        required=False,
+        help_text='Выберите группу для персонального ДЗ или оставьте пустым для всех групп месяца.',
+    )
+
+    class Meta:
+        model = Task
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['group_number'].choices = get_study_group_choices(include_all=True)
+        if self.instance and self.instance.pk and self.instance.group_number:
+            self.initial['group_number'] = self.instance.group_number
+
+    def clean(self):
+        cleaned_data = super().clean()
+        grp = (cleaned_data.get('group_number') or '').strip()
+        if grp:
+            cleaned_data['group_number'] = grp
+            if cleaned_data.get('month') == 1:
+                cleaned_data['month'] = parse_month_from_group_name(grp)
+        else:
+            cleaned_data['group_number'] = None
+        return cleaned_data
+
+
 @admin.register(Task)
 class TaskAdmin(ModelAdmin):
+    form = TaskAdminForm
     list_fullwidth = True
-    list_display = ('title', 'topic', 'month', 'max_score', 'is_bonus')
-    list_filter = ('month', 'is_bonus')
-    search_fields = ('title', 'topic', 'description')
+    list_display = ('title', 'topic', 'group_badge', 'month', 'max_score', 'is_bonus')
+    list_filter = ('group_number', 'month', 'is_bonus')
+    search_fields = ('title', 'topic', 'description', 'group_number')
     ordering = ('month', 'order')
     actions = ['broadcast_task_telegram']
+
+    @admin.display(description='Группа')
+    def group_badge(self, obj):
+        val = obj.group_number
+        if not val or val.upper() == 'ALL':
+            return format_html('<span style="color:#a1a1aa;font-size:12px;">Все группы</span>')
+        return format_html(
+            '<span style="padding:2px 8px;border-radius:6px;background:#18181b;border:1px solid #27272a;color:#fbbf24;font-weight:600;font-size:12px;">{}</span>',
+            val
+        )
 
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_task_telegram(self, request, queryset):
@@ -168,17 +267,50 @@ class TaskAdmin(ModelAdmin):
         )
 
 
+class ScoreAdjustmentInline(TabularInline):
+    model = ScoreAdjustment
+    fk_name = 'user'
+    extra = 0
+    fields = ('amount', 'reason', 'month', 'admin', 'created_at')
+    readonly_fields = ('created_at',)
+    classes = ('collapse',)
+    verbose_name = 'Бонус / штраф'
+    verbose_name_plural = 'Бонусы и штрафы студента'
+
+
+class UserAchievementInline(TabularInline):
+    model = UserAchievement
+    fk_name = 'user'
+    extra = 0
+    fields = ('achievement', 'awarded_at')
+    readonly_fields = ('awarded_at',)
+    classes = ('collapse',)
+    verbose_name = 'Достижение'
+    verbose_name_plural = 'Разблокированные достижения'
+
+
 class UserAdminForm(forms.ModelForm):
+    group_selector = forms.ChoiceField(
+        label='Учебная группа',
+        required=False,
+        help_text='Выберите группу для студента. Месяц будет определен автоматически.',
+    )
     telegram_chat_id = forms.CharField(
         label='Telegram Chat ID',
         required=False,
-        help_text='Числовой Chat ID ментора в Telegram для получения карточек сдачи ДЗ',
+        help_text='Числовой Chat ID в Telegram для получения уведомлений. Заполняется автоматически при старте бота.',
         widget=forms.TextInput(attrs={'placeholder': 'например, 123456789 или -1001234567890'}),
     )
 
     class Meta:
         model = User
         fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['group_selector'].choices = get_study_group_choices(include_all=False)
+        if self.instance and self.instance.pk and self.instance.group_number:
+            self.initial['group_selector'] = self.instance.group_number
 
     def clean_telegram_chat_id(self):
         val = self.cleaned_data.get('telegram_chat_id')
@@ -189,6 +321,15 @@ class UserAdminForm(forms.ModelForm):
             raise forms.ValidationError('Chat ID должен состоять только из цифр (с возможным знаком минус для групп/каналов).')
         return val
 
+    def clean(self):
+        cleaned_data = super().clean()
+        grp = (cleaned_data.get('group_selector') or '').strip()
+        if grp:
+            cleaned_data['group_number'] = grp
+            if cleaned_data.get('current_month') == 1:
+                cleaned_data['current_month'] = parse_month_from_group_name(grp)
+        return cleaned_data
+
 
 @admin.register(User)
 class UserAdmin(ModelAdmin):
@@ -198,9 +339,7 @@ class UserAdmin(ModelAdmin):
         'login',
         'name',
         'mentor',
-        'telegram',
-        'telegram_username',
-        'telegram_chat_id',
+        'telegram_status_badge',
         'group_number',
         'current_month',
         'streak_count',
@@ -211,6 +350,26 @@ class UserAdmin(ModelAdmin):
     raw_id_fields = ('mentor',)
     ordering = ('-created_at',)
     readonly_fields = ('id', 'created_at', 'updated_at')
+    inlines = [ScoreAdjustmentInline, UserAchievementInline]
+    actions = ['test_telegram_connection']
+
+    @admin.display(description='Telegram')
+    def telegram_status_badge(self, obj):
+        if obj.telegram_chat_id:
+            tag = f"@{obj.telegram_username}" if obj.telegram_username else f"ID: {obj.telegram_chat_id}"
+            return format_html('<span style="color:#10b981;font-weight:600;">✓ {}</span>', tag)
+        if obj.telegram_username:
+            return format_html('<span style="color:#f59e0b;font-weight:500;">@{obj.telegram_username} (не активен)</span>')
+        return format_html('<span style="color:#71717a;">—</span>')
+
+    @admin.action(description="🧪 Проверить связь (отправить тест в Telegram)")
+    def test_telegram_connection(self, request, queryset):
+        for user in queryset:
+            ok, report = send_test_telegram_message(user)
+            if ok:
+                self.message_user(request, f"Успешно для @{user.login}: {report}", level=messages.SUCCESS)
+            else:
+                self.message_user(request, f"Внимание для @{user.login}: {report}", level=messages.WARNING)
 
     fieldsets = (
         ('Основная информация', {

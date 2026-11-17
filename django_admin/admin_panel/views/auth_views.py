@@ -5,10 +5,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
-from admin_panel.models import User, Session, RoleChoices
+from admin_panel.models import User, Session, RoleChoices, StudyGroup
 from admin_panel.serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer
 from admin_panel.authentication import generate_tokens_for_user
 from admin_panel.services.achievement_service import evaluate_user_achievements, TriggerTypeChoices
+from admin_panel.services.group_service import parse_month_from_group_name
 
 
 def set_auth_cookies(response, refresh_token: str):
@@ -70,14 +71,27 @@ class RegisterView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        group_num = data['groupNumber'].strip()
+        month_val = data.get('currentMonth')
+        if not month_val or month_val == 1:
+            month_val = parse_month_from_group_name(group_num)
+
+        # Ensure group exists in StudyGroup table
+        try:
+            StudyGroup.objects.get_or_create(
+                name=group_num,
+                defaults={'month': month_val}
+            )
+        except Exception:
+            pass
+
         user = User(
             login=login,
             role=RoleChoices.STUDENT,
             name=data.get('name') or None,
             telegram=data.get('telegram') or None,
-            group_number=data['groupNumber'].strip(),
-            group_id=data.get('groupId') or None,
-            current_month=data.get('currentMonth', 1),
+            group_number=group_num,
+            current_month=month_val,
             streak_count=1,
             last_active_date=timezone.now(),
         )

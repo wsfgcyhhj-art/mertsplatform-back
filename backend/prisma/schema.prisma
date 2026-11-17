@@ -84,6 +84,7 @@ model Task {
   title          String
   description    String
   topic          String
+  groupNumber    String?      @map("group_number")
   month          Int
   order          Int          @default(0)
   exampleLink    String?      @map("example_link")
@@ -97,6 +98,17 @@ model Task {
   submissions    Submission[]
 
   @@index([month, order])
+  @@index([groupNumber, month])
+}
+
+model StudyGroup {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  month     Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([name])
+  @@index([month])
 }
 
 model Submission {

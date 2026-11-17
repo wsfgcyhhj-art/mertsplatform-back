@@ -14,12 +14,14 @@ from admin_panel.models import (
     UserAchievement,
     MediaAsset,
     Session,
+    StudyGroup,
     RoleChoices,
     SubmissionStatusChoices,
 )
 from admin_panel.services.achievement_service import ensure_default_achievements
 
 UNMANAGED_MODELS = [
+    StudyGroup,
     User,
     Lesson,
     Task,
@@ -536,7 +538,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             self.assertTrue(mock_send_single.called)
             target_user_id, message = mock_send_single.call_args[0]
             self.assertEqual(target_user_id, student.id)
-            self.assertIn('Корректировка баллов!', message)
+            self.assertIn('Начислены бонусные баллы!', message)
             self.assertIn('+15 баллов', message)
             self.assertIn('Активность в чате', message)
 
@@ -576,3 +578,97 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             task_admin.broadcast_task_telegram(mock_request, Task.objects.filter(id=task.id))
         self.assertEqual(len(mock_messages), 2)
         self.assertIn('поставлены в очередь', mock_messages[1])
+
+    def test_11_smart_groups_and_telegram_diagnostics(self):
+        from unittest.mock import patch, MagicMock
+        from django.contrib.admin.sites import AdminSite
+        from admin_panel.services.group_service import (
+            parse_month_from_group_name,
+            ensure_study_groups_synced,
+            get_study_group_choices,
+        )
+        from admin_panel.services.telegram_service import (
+            send_test_telegram_message,
+            notify_score_adjustment_granted,
+            notify_task_published,
+        )
+        from admin_panel.admin import UserAdmin
+
+        # 1. Test smart month parsing logic
+        self.assertEqual(parse_month_from_group_name('js-02'), 2)
+        self.assertEqual(parse_month_from_group_name('md-03'), 3)
+        self.assertEqual(parse_month_from_group_name('py-01'), 1)
+        self.assertEqual(parse_month_from_group_name('04'), 4)
+        self.assertEqual(parse_month_from_group_name('frontend'), 1)
+        self.assertEqual(parse_month_from_group_name(''), 1)
+        self.assertEqual(parse_month_from_group_name(None), 1)
+
+        # 2. Test auto-assignment of month during registration
+        reg_payload = {
+            "login": "student_group_test",
+            "password": "Password123!",
+            "groupNumber": "js-02",
+            "name": "Студент Группы 2",
+        }
+        resp = self.client.post('/api/v1/auth/register', data=json.dumps(reg_payload), content_type='application/json')
+        self.assertEqual(resp.status_code, 201)
+        user_group = User.objects.get(login="student_group_test")
+        self.assertEqual(user_group.current_month, 2)
+        self.assertEqual(user_group.group_number, "js-02")
+        self.assertIsNotNone(user_group.study_group)
+        self.assertEqual(user_group.study_group.name, "js-02")
+
+        # 3. Test StudyGroup counts and sync
+        group = user_group.study_group
+        self.assertGreaterEqual(group.students_count, 1)
+        ensure_study_groups_synced()
+        choices = get_study_group_choices(include_all=True)
+        self.assertTrue(any('js-02' in c[0] for c in choices))
+
+        # 4. Test Penalty / Fine notification (ScoreAdjustment amount < 0)
+        admin_user = User.objects.filter(role=RoleChoices.ADMIN).first()
+        if not admin_user:
+            admin_user = User.objects.create(login='admin_fine', password_hash='hash', role=RoleChoices.ADMIN)
+        user_group.telegram_chat_id = "555666777"
+        user_group.save()
+
+        with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send:
+            ScoreAdjustment.objects.create(
+                user=user_group,
+                admin=admin_user,
+                amount=-10,
+                reason="Штраф за плагиат",
+                month=2,
+            )
+            self.assertTrue(mock_send.called)
+            target_id, msg = mock_send.call_args[0]
+            self.assertEqual(target_id, user_group.id)
+            self.assertIn('Начислен штраф!', msg)
+            self.assertIn('Списано: <b>-10 баллов</b>', msg)
+            self.assertIn('Штраф за плагиат', msg)
+
+        # 5. Test send_test_telegram_message diagnostic
+        user_no_tg = User.objects.create(login='no_tg', password_hash='hash', role=RoleChoices.STUDENT)
+        ok, report = send_test_telegram_message(user_no_tg)
+        self.assertFalse(ok)
+        self.assertIn('не заполнен Telegram Chat ID', report)
+
+        with patch('httpx.Client.post') as mock_post:
+            mock_post.return_value = MagicMock(status_code=200, json=lambda: {'ok': True}, headers={'content-type': 'application/json'})
+            with patch('admin_panel.services.telegram_service.get_bot_token', return_value='dummy_token'):
+                ok, report = send_test_telegram_message(user_group)
+                self.assertTrue(ok)
+                self.assertIn('успешно доставлено', report)
+
+        # 6. Test UserAdmin test_telegram_connection action
+        site = AdminSite()
+        user_admin = UserAdmin(User, site)
+        mock_req = MagicMock()
+        mock_msgs = []
+        user_admin.message_user = lambda req, msg, level=None: mock_msgs.append((msg, level))
+        with patch('httpx.Client.post') as mock_post:
+            mock_post.return_value = MagicMock(status_code=200, json=lambda: {'ok': True}, headers={'content-type': 'application/json'})
+            with patch('admin_panel.services.telegram_service.get_bot_token', return_value='dummy_token'):
+                user_admin.test_telegram_connection(mock_req, User.objects.filter(id=user_group.id))
+        self.assertEqual(len(mock_msgs), 1)
+        self.assertIn('Успешно', mock_msgs[0][0])

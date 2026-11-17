@@ -66,7 +66,15 @@ class User(models.Model):
     telegram_auth_code = models.CharField('Telegram код привязки', max_length=255, unique=True, blank=True, null=True)
     telegram_username = models.CharField('Telegram Username', max_length=255, blank=True, null=True)
     group_number = models.CharField('Номер группы', max_length=64, blank=True, null=True)
-    group_id = models.CharField('ID группы', max_length=64, blank=True, null=True)
+    study_group = models.ForeignKey(
+        'StudyGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='group_id',
+        related_name='students',
+        verbose_name='Учебная группа',
+    )
     current_month = models.IntegerField('Текущий месяц', default=1)
     avatar_url = models.TextField('URL аватара', blank=True, null=True)
     banner_url = models.TextField('URL баннера', blank=True, null=True)
@@ -142,6 +150,21 @@ class User(models.Model):
         self.updated_at = timezone.now()
         if self.telegram_chat_id:
             self.telegram_chat_id = self.telegram_chat_id.strip() or None
+        if self.study_group:
+            self.group_number = self.study_group.name
+        elif self.group_number:
+            self.group_number = self.group_number.strip()
+            try:
+                from admin_panel.models import StudyGroup
+                sg, _ = StudyGroup.objects.get_or_create(name=self.group_number)
+                self.study_group = sg
+            except Exception:
+                pass
+        if self.group_number and (not self.current_month or self.current_month == 1):
+            from admin_panel.services.group_service import parse_month_from_group_name
+            extracted = parse_month_from_group_name(self.group_number)
+            if extracted > 1:
+                self.current_month = extracted
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -170,6 +193,41 @@ class Session(models.Model):
 
     def __str__(self):
         return f"Session for {self.user.login} ({self.id})"
+
+
+class StudyGroup(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    name = models.CharField('Название группы', max_length=64, unique=True)
+    month = models.IntegerField('Месяц обучения', default=1)
+    created_at = models.DateTimeField('Дата создания', default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'StudyGroup'
+        verbose_name = 'Учебная группа'
+        verbose_name_plural = 'Учебные группы'
+        ordering = ['month', 'name']
+
+    def __str__(self):
+        return f"{self.name} (Месяц {self.month})"
+
+    def save(self, *args, **kwargs):
+        if not self.month or self.month == 1:
+            from admin_panel.services.group_service import parse_month_from_group_name
+            self.month = parse_month_from_group_name(self.name)
+        super().save(*args, **kwargs)
+
+    @property
+    def students_count(self) -> int:
+        return User.objects.filter(role=RoleChoices.STUDENT, group_number=self.name).count()
+
+    @property
+    def lessons_count(self) -> int:
+        return Lesson.objects.filter(group_number=self.name).count()
+
+    @property
+    def tasks_count(self) -> int:
+        return Task.objects.filter(group_number=self.name).count()
 
 
 class Lesson(models.Model):
@@ -203,6 +261,13 @@ class Task(models.Model):
     title = models.CharField('Название задания', max_length=255)
     description = models.TextField('Описание задания')
     topic = models.CharField('Тема (стек)', max_length=128)
+    group_number = models.CharField(
+        'Целевая группа',
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text='Оставьте пустым (или укажите ALL) для всех групп месяца или выберите конкретную группу',
+    )
     month = models.IntegerField('Месяц', default=1)
     order = models.IntegerField('Порядок', default=1)
     example_link = models.CharField('Ссылка на пример', max_length=500, blank=True, null=True)

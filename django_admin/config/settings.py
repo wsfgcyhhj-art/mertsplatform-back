@@ -204,6 +204,11 @@ UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
+                        "title": "Учебные группы (Groups)",
+                        "icon": "school",
+                        "link": reverse_lazy("admin:admin_panel_studygroup_changelist"),
+                    },
+                    {
                         "title": "Проверка ДЗ (Submissions)",
                         "icon": "fact_check",
                         "link": reverse_lazy("admin:admin_panel_submission_changelist"),

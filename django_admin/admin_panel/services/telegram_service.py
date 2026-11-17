@@ -3,6 +3,7 @@ import re
 import html
 import logging
 import threading
+import concurrent.futures
 from typing import Optional, Dict, Any, List, Union
 import httpx
 from django.conf import settings
@@ -17,6 +18,7 @@ from admin_panel.models import (
 )
 
 logger = logging.getLogger('telegram_service')
+_telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix='tg-notifier')
 
 
 def get_bot_token() -> str:
@@ -79,55 +81,47 @@ def send_telegram_notification(user_id: str, text: str, reply_markup: Optional[d
 
 def send_async_notification(user_id: str, text: str, reply_markup: Optional[dict] = None) -> None:
     """
-    Sends notification in background thread so HTTP response is instant.
+    Sends notification using ThreadPoolExecutor with bounded wait to ensure delivery on Render
+    before Gunicorn worker terminates.
     """
-    def _worker():
-        try:
-            send_telegram_notification(user_id, text, reply_markup=reply_markup)
-        except Exception as e:
-            logger.warning("Background notification error: %s", e)
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    future = _telegram_executor.submit(send_telegram_notification, user_id, text, reply_markup)
+    try:
+        future.result(timeout=1.5)
+    except concurrent.futures.TimeoutError:
+        pass
+    except Exception as e:
+        logger.warning("Notification send error: %s", e)
 
 
 def async_broadcast_message(chat_ids: List[str], text: str) -> None:
     """
-    Sends message to multiple chat_ids in background daemon thread.
+    Broadcasts message to multiple chat_ids using ThreadPoolExecutor with bounded wait.
     """
     unique_ids = list(set(cid for cid in chat_ids if cid and str(cid).strip()))
     if not unique_ids:
         return
 
-    def _worker():
-        token = get_bot_token()
-        if not token:
-            return
-        success_count = 0
-        for cid in unique_ids:
-            try:
-                if send_telegram_message(cid, text):
-                    success_count += 1
-            except Exception as e:
-                logger.warning(f"Error sending to {cid}: {e}")
-        logger.info(f"Broadcast completed: {success_count}/{len(unique_ids)} delivered.")
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    futures = [_telegram_executor.submit(send_telegram_message, cid, text) for cid in unique_ids]
+    try:
+        concurrent.futures.wait(futures, timeout=2.5)
+    except Exception as e:
+        logger.warning("Broadcast batch wait error: %s", e)
 
 
 # --- Educational Workflow Event Notifiers ---
 
 def notify_lesson_published(lesson: Lesson) -> int:
     """
-    1) New Video Lesson: sent to all students where current_month == lesson.month
+    1) New Video Lesson: sent to all students where current_month == lesson.month and group matches
     """
     frontend_url = get_frontend_url()
     lesson_link = f"{frontend_url}/lessons?month={lesson.month}"
 
+    group_str = f"Группа {lesson.group_number} • " if lesson.group_number and lesson.group_number.upper() != 'ALL' else ""
+
     msg = (
         f"🎬 <b>Вышел новый видеоурок!</b>\n\n"
-        f"📅 Месяц {lesson.month} • Урок #{lesson.order}\n"
+        f"📅 {group_str}Месяц {lesson.month} • Урок #{lesson.order}\n"
         f"<b>{escape_html(lesson.title)}</b>\n\n"
         f"👉 <a href=\"{lesson_link}\">Перейти к просмотру на платформе</a>"
     )
@@ -147,18 +141,19 @@ def notify_lesson_published(lesson: Lesson) -> int:
 
 def notify_task_published(task: Task) -> int:
     """
-    2) New Task: sent to all students where current_month == task.month
+    2) New Task: sent to all students where current_month == task.month and group matches
     """
     frontend_url = get_frontend_url()
     task_link = f"{frontend_url}/tasks?month={task.month}"
 
     bonus_badge = " 🔥 <b>Бонусное задание</b>" if task.is_bonus else ""
     max_score_text = f"{task.max_score} баллов" if task.has_score and task.max_score else "Зачетная работа"
+    group_str = f" • Группа {task.group_number}" if task.group_number and task.group_number.upper() != 'ALL' else ""
 
     msg = (
         f"📚 <b>Новое домашнее задание!</b>{bonus_badge}\n\n"
         f"<b>{escape_html(task.title)}</b>\n"
-        f"Тема: <i>{escape_html(task.topic)}</i>\n"
+        f"Тема: <i>{escape_html(task.topic)}</i> (Месяц {task.month}{group_str})\n"
         f"Максимальный балл: <b>{max_score_text}</b>\n\n"
         f"👉 <a href=\"{task_link}\">Открыть задание на платформе</a>"
     )
@@ -168,6 +163,9 @@ def notify_task_published(task: Task) -> int:
         current_month=task.month,
         telegram_chat_id__isnull=False,
     )
+    if task.group_number and task.group_number.upper() != 'ALL':
+        qs = qs.filter(group_number=task.group_number)
+
     chat_ids = [u.telegram_chat_id for u in qs if u.telegram_chat_id]
     async_broadcast_message(chat_ids, msg)
     return len(chat_ids)
@@ -273,17 +271,58 @@ def notify_score_adjustment_granted(adjustment: ScoreAdjustment):
     if not student.telegram_chat_id:
         return
 
-    sign = "+" if adjustment.amount > 0 else ""
     frontend_url = get_frontend_url()
     profile_link = f"{frontend_url}/profile"
 
+    if adjustment.amount > 0:
+        header = "⚡ <b>Начислены бонусные баллы!</b>"
+        amount_str = f"Начислено: <b>+{adjustment.amount} баллов</b>"
+    else:
+        header = "⚠️ <b>Начислен штраф!</b>"
+        amount_str = f"Списано: <b>{adjustment.amount} баллов</b>"
+
     msg = (
-        f"⚡ <b>Корректировка баллов!</b>\n\n"
-        f"Начислено: <b>{sign}{adjustment.amount} баллов</b>\n"
+        f"{header}\n\n"
+        f"{amount_str} (Месяц {adjustment.month})\n"
         f"Причина: <i>{escape_html(adjustment.reason)}</i>\n\n"
         f"👉 <a href=\"{profile_link}\">Открыть профиль и рейтинг</a>"
     )
     send_async_notification(student.id, msg)
+
+
+def send_test_telegram_message(user: User) -> tuple[bool, str]:
+    """
+    Sends a test message directly to verify Telegram connectivity for a specific user.
+    Returns (success: bool, report: str).
+    """
+    if not user.telegram_chat_id:
+        return False, f"У пользователя @{user.login} не заполнен Telegram Chat ID. Студент должен запустить бота (@{get_bot_username()})."
+
+    token = get_bot_token()
+    if not token:
+        return False, "TELEGRAM_BOT_TOKEN не настроен на сервере в .env"
+
+    text = (
+        "🧪 <b>Тестовое уведомление MertsPlatform</b>\n\n"
+        f"Здравствуйте, <b>{escape_html(user.name or user.login)}</b>!\n"
+        "Связь с Telegram настроена успешно. Вы будете получать уведомления об уроках, домашних заданиях и оценках."
+    )
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        'chat_id': str(user.telegram_chat_id).strip(),
+        'text': text,
+        'parse_mode': 'HTML',
+    }
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(url, json=payload)
+            data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
+            if resp.status_code == 200 and data.get('ok'):
+                return True, f"Сообщение успешно доставлено в Telegram (Chat ID: {user.telegram_chat_id})."
+            err_desc = data.get('description', resp.text)
+            return False, f"Ошибка Telegram API ({resp.status_code}): {err_desc}"
+    except Exception as e:
+        return False, f"Сетевая ошибка при обращении к Telegram: {str(e)}"
 
 
 def notify_month_advanced(user: User, new_month: int):
