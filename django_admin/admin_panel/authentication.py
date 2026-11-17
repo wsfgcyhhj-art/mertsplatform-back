@@ -1,48 +1,67 @@
-import uuid
-from datetime import datetime, timezone as dt_timezone, timedelta
-from django.conf import settings
+import hashlib
+import secrets
+from datetime import timedelta
+from django.utils import timezone
+from django.db import transaction
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
-from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from .models import User, Session
 
 
-class CustomAccessToken(AccessToken):
-    pass
+def refresh_digest(token):
+    return 'sha256:' + hashlib.sha256(token.encode()).hexdigest()
 
 
 class BcryptJWTAuthentication(JWTAuthentication):
-    """
-    JWT Authentication tailored for MertsPlatform User model with UUID primary keys.
-    """
     def get_user(self, validated_token):
-        user_id = validated_token.get('user_id') or validated_token.get('userId')
-        if not user_id:
-            raise InvalidToken('Token contained no recognizable user identification')
+        session = Session.objects.select_related('user').filter(
+            id=validated_token.get('sid'), user_id=validated_token.get('user_id'),
+            expires_at__gt=timezone.now()).first()
+        if not session:
+            raise AuthenticationFailed('Session expired or revoked')
+        return session.user
+
+
+def generate_tokens_for_user(user, session=None):
+    refresh = secrets.token_urlsafe(48)
+    if session is None:
+        session = Session.objects.create(user=user, refresh_token=refresh_digest(refresh), expires_at=timezone.now() + timedelta(days=30))
+    else:
+        session.refresh_token = refresh_digest(refresh)
+        session.save(update_fields=['refresh_token'])
+    access = AccessToken()
+    access['user_id'] = user.pk
+    access['sid'] = session.pk
+    return str(access), refresh, session
+
+
+@transaction.atomic
+def rotate_refresh(token):
+    # Lock user before session to serialize refresh against password changes.
+    lookup = Session.objects.filter(refresh_token=refresh_digest(token)).values_list('user_id', flat=True).first()
+    if not lookup:
+        return None
+    user = User.objects.select_for_update().get(pk=lookup)
+    session = Session.objects.select_for_update().filter(refresh_token=refresh_digest(token)).first()
+    if not session or session.expires_at <= timezone.now():
+        return None
+    return generate_tokens_for_user(user, session=session)
+
+
+@transaction.atomic
+def revoke_session(refresh=None, access=None):
+    # Stable session ID lets logout revoke a concurrently rotated refresh token.
+    session = None
+    if access:
+        from rest_framework_simplejwt.exceptions import TokenError
         try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            raise AuthenticationFailed('User not found', code='user_not_found')
-        return user
-
-
-def generate_tokens_for_user(user: User) -> tuple[str, str, Session]:
-    """
-    Generates Access Token (JWT) and Refresh Token (UUID hex/string),
-    persisting the refresh session in Neon PostgreSQL Session table.
-    """
-    access_token = AccessToken()
-    access_token['user_id'] = user.id
-    access_token['role'] = user.role
-    access_token_str = str(access_token)
-
-    refresh_token_str = uuid.uuid4().hex + uuid.uuid4().hex
-    expires_at = datetime.now(dt_timezone.utc) + timedelta(days=30)
-
-    session = Session.objects.create(
-        user=user,
-        refresh_token=refresh_token_str,
-        expires_at=expires_at,
-    )
-
-    return access_token_str, refresh_token_str, session
+            token = AccessToken(access)
+            session = Session.objects.filter(pk=token.get('sid'), user_id=token.get('user_id')).first()
+        except TokenError:
+            pass
+    if not session and refresh:
+        session = Session.objects.filter(refresh_token=refresh_digest(refresh)).first()
+    if session:
+        User.objects.select_for_update().get(pk=session.user_id)
+        Session.objects.filter(pk=session.pk).delete()

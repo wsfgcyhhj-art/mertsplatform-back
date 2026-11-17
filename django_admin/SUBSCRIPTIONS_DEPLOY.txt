@@ -1,25 +1,88 @@
-Deployment requirements
+Production deployment and security upgrade
 
-Run before starting the updated application:
-  python manage.py install_subscriptions
-This is additive and idempotent. Existing users receive no automatic subscription.
-The first import preserves existing group names; only js-01 is initially active.
+1. Before rollout, set a unique SECRET_KEY (at least 50 random characters)
+   in the web service and delivery worker environments. No production fallback is
+   accepted. The test runner alone generates a disposable key. Keep the same key
+   across workers/restarts: queued Telegram payloads are encrypted with this key.
+   Drain the queue before rotating it, or reissue affected credentials afterwards.
+   Rotate previously exposed/default keys and administrator passwords separately.
 
-Owner Django Admin account in the audited database: imranchi, ID 1.
-PLATFORM_OWNER_ADMIN_ID defaults to 1; override for a different database.
-Swagger grant API accepts the owner's Django session (with CSRF) or a JWT
-whose user ID is explicitly configured in PLATFORM_OWNER_USER_ID.
+2. Configure DATABASE_URL, DEBUG=False, ALLOWED_HOSTS (exact backend hostnames),
+   FRONTEND_URL (HTTPS), CORS_ALLOWED_ORIGINS and CSRF_TRUSTED_ORIGINS (exact HTTPS
+   origins, comma separated). Cookies require HTTPS and same-site deployment;
+   put the API behind the frontend's reverse proxy for cross-site hosting.
+   Set TRUST_HTTPS_PROXY=1 only if the ingress strips untrusted forwarded-proto.
+   AUTH_TRUSTED_PROXY_HOPS defaults to 0 (use REMOTE_ADDR). Configure the verified
+   number of trusted append-only X-Forwarded-For hops so shared proxy addresses
+   do not cause all users to share an IP rate limit. Never trust arbitrary XFF.
 
-Configure TELEGRAM_WEBHOOK_SECRET on Render and register the Telegram webhook
-with the SAME secret_token and URL ending /api/v1/telegram/webhook.
-Unconfigured webhook requests fail closed. Alternatively run manage.py runbot
-as a single polling process and do not register a webhook concurrently.
-The audited bot currently has no registered webhook.
+3. Run once before starting the updated code:
+     python manage.py install_subscriptions
+     python manage.py install_security
+     python manage.py migrate --noinput
+     python manage.py collectstatic --noinput
+   Security schema changes are additive/idempotent: new outbox, update ledger,
+   auth rate buckets, unique attempt versions, nullable cached Telegram usernames,
+   score idempotency keys and hashed legacy refresh tokens. Existing attempts and
+   groups are retained. Duplicate attempt versions cause a fail-closed abort.
+   Existing sessions must sign in again after the upgrade. Old bcrypt passwords
+   remain valid and are upgraded to Django hashes after a successful plain-password
+   login over HTTPS. Server password validation requires at least 12 characters.
 
-Telegram sends run synchronously after commit, timeout 4 seconds per request.
-Admin reports accepted sendMessage requests and errors, not message readership.
-Network failures and process termination are not automatically retried.
-Large broadcasts must fit the hosting worker request timeout.
+4. Owner Django Admin account in the audited DB: imranchi, ID 1.
+   PLATFORM_OWNER_ADMIN_ID defaults to 1; override for another database.
+   PLATFORM_OWNER_USER_ID is the platform UUID for the optional owner JWT API.
+   The subscription API also accepts the owner's Django session with CSRF.
+   A fresh Telegram /start claims an unbound username reservation. A cached old
+   username never automatically grants access. After claim, numeric Telegram ID
+   is authoritative even if the username is removed or assigned to someone else.
+   Temporary passwords require a change. /reset issues a single-use 20-minute link.
 
-Temporary passwords require a change on login. /reset issues a single-use,
-20-minute password recovery link; existing passwords are never disclosed.
+5. Set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET, then register the webhook
+   with the same secret_token at /api/v1/telegram/webhook. Alternatively run one
+   manage.py runbot polling process without a webhook. The code does not register
+   or change your bot's webhook automatically.
+   Run a separate persistent Render background worker with the same image/env:
+     python manage.py deliver_telegram
+   Docker Compose includes this worker. For an external scheduler:
+     python manage.py deliver_telegram --once
+   An on_commit request attempts immediate delivery with a 4-second HTTP timeout.
+   The DB event is durable before the request; failures survive web-worker restarts.
+   The delivery worker reclaims 2-minute leases and retries with backoff, up to 10
+   attempts. Failed events can be retried by the owner in Django Admin. Inspect
+   chat_id, ok/error_code/description logs and outbox counters for verification.
+   Delivery is at-least-once, not guaranteed exactly-once: Telegram provides no
+   idempotency key for sendMessage. If Telegram accepts a message just before the
+   process dies, a retry can duplicate it. Blocked bots/network failures cannot
+   guarantee delivery. Inbound update_id is deduplicated transactionally.
+   Successful payloads are erased. Pending credentials are encrypted in the DB.
+
+API integration changes
+- Send plain passwords over HTTPS; remove client SHA-256 transforms.
+- GET /api/v1/auth/csrf returns csrfToken; send X-CSRFToken with cookie-auth POSTs.
+- Keep access tokens in memory. Refresh cookie is Secure, HttpOnly, SameSite=Lax.
+- Logout revokes the stable session ID, including concurrently rotated refresh.
+- POST /api/v1/admin/score-adjustments requires a unique Idempotency-Key per action;
+  retries reuse that key. A changed body with the same key returns 409.
+- Uploaded SVG is rejected. Raster uploads are verified, pixel/byte limited and
+  converted to WebP. Built-in trusted SVG presets remain available.
+- Only the latest accepted attempt contributes score for each user/task.
+
+Verification
+  python manage.py check --deploy
+  python manage.py spectacular --file schema.yml --validate --fail-on-warn
+  python manage.py test admin_panel --noinput
+  TEST_DATABASE_URL=<test-capable-postgres-url> python manage.py test admin_panel --noinput
+  npm run build
+  npm run test:e2e
+The browser harness uses a disposable SQLite DB and never sends real Telegram
+messages. PostgreSQL tests create/drop a separate test database; the DB role must
+have CREATEDB for that test run. Production runtime should use a least-privilege
+role; reserve schema-changing privileges for deployment.
+
+Dependency audit limitation
+Compatible npm updates were applied. The remaining npm audit chain is picomatch
+and build-time dependents; GHSA-fc5q-39xc-vjpf has no patched version as audited.
+Do not expose Vite's dev server publicly or accept untrusted glob patterns in builds.
+Production serves static dist/ output. Recheck the advisory before future upgrades:
+https://github.com/advisories/GHSA-fc5q-39xc-vjpf

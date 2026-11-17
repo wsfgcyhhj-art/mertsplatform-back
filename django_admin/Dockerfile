@@ -21,8 +21,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app/
 
-RUN python manage.py collectstatic --noinput || true
-
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "config.wsgi:application"]
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 config.wsgi:application"]

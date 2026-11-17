@@ -1,3 +1,7 @@
+from django.db import transaction
+from admin_panel.models import User
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.permissions import HasCourseAccess
 from django.db.models import Q
@@ -18,6 +22,7 @@ from admin_panel.serializers import (
     LessonSerializer,
     TaskSerializer,
     SubmissionSerializer,
+    SubmissionReviewSerializer,
 )
 from admin_panel.services.telegram_service import (
     notify_submission_created,
@@ -142,6 +147,7 @@ class TaskDetailView(APIView):
         return Response(serializer.data)
 
     @extend_schema(summary="Обновить задание (только для ментора/админа)")
+    @transaction.atomic
     def patch(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -214,8 +220,9 @@ class SubmissionsView(APIView):
         return Response({"submissions": serializer.data})
 
     @extend_schema(summary="Сдать решение задания на проверку ментору")
+    @transaction.atomic
     def post(self, request):
-        user = request.user
+        user = User.objects.select_for_update().get(pk=request.user.pk)
         task_id = request.data.get('taskId')
         solution_link = (request.data.get('solutionLink') or '').strip()
         comment = (request.data.get('comment') or '').strip() or None
@@ -237,6 +244,10 @@ class SubmissionsView(APIView):
         if user.role != RoleChoices.ADMIN and (task.month > user.current_month or task.group_number not in (None, '', 'ALL', user.group_number)):
             return Response({'message': 'Forbidden'}, status=403)
 
+        try:
+            URLValidator(schemes=['https', 'http'])(solution_link)
+        except ValidationError:
+            return Response({'message': 'Укажите HTTP(S) ссылку на решение.'}, status=400)
         # Calculate version
         last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
         version = (last_sub.version + 1) if last_sub else 1
@@ -251,10 +262,7 @@ class SubmissionsView(APIView):
         )
 
         # Notify mentors via Telegram
-        try:
-            notify_submission_created(submission)
-        except Exception:
-            pass
+        notify_submission_created(submission)
 
         serializer = SubmissionSerializer(submission)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -283,7 +291,8 @@ class SubmissionDetailView(APIView):
         serializer = SubmissionSerializer(sub)
         return Response(serializer.data)
 
-    @extend_schema(summary="Проверка ДЗ ментором (выставление статуса, баллов, комментария)")
+    @extend_schema(summary="Проверка ДЗ ментором (выставление статуса, баллов, комментария)", request=SubmissionReviewSerializer)
+    @transaction.atomic
     def patch(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -292,20 +301,25 @@ class SubmissionDetailView(APIView):
             )
 
         try:
-            sub = Submission.objects.select_related('user', 'task').get(id=id)
+            sub = Submission.objects.select_for_update(of=('self',)).select_related('user', 'task').get(id=id)
         except Submission.DoesNotExist:
             return Response(
                 {"statusCode": 404, "error": "Not Found", "message": "Submission not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        data = request.data
+        review = SubmissionReviewSerializer(data=request.data)
+        review.is_valid(raise_exception=True)
+        data = review.validated_data
         if 'status' in data:
             new_status = data['status'].upper()
             if new_status in SubmissionStatusChoices.values:
                 sub.status = new_status
         if 'score' in data:
-            sub.score = data['score']
+            score = data['score']
+            if type(score) is not int or not 0 <= score <= (sub.task.max_score or 0):
+                return Response({'message': 'Оценка вне допустимого диапазона.'}, status=400)
+            sub.score = score
         if 'reviewerComment' in data:
             sub.reviewer_comment = data['reviewerComment'] or None
         if 'voiceFeedbackUrl' in data:

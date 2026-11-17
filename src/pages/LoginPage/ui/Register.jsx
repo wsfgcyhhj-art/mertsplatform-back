@@ -7,7 +7,6 @@ import { IoEyeSharp } from 'react-icons/io5';
 import { FaEyeSlash } from 'react-icons/fa';
 import { api } from '../../../api/client.js';
 import { showAchievementToast } from '../../../components/AchievementToast.jsx';
-import { hashPasswordClient } from '../../../utils/crypto.js';
 import { AuthBackground } from '../../../components/AuthBackground/AuthBackground.jsx';
 
 export const Register = () => {
@@ -55,7 +54,7 @@ export const Register = () => {
         setLoading(true);
 
         try {
-            const hashedPassword = await hashPasswordClient(cleanPassword);
+            const hashedPassword = cleanPassword;
 
             const res = await api.post('/auth/register', {
                 login: cleanLogin,
@@ -64,7 +63,6 @@ export const Register = () => {
             });
 
             if (res.data?.user && res.data?.accessToken) {
-                localStorage.setItem('accessToken', res.data.accessToken);
                 addUser(res.data.user, res.data.accessToken);
                 toast.success('Регистрация успешна! Добро пожаловать!');
                 setTimeout(() => {

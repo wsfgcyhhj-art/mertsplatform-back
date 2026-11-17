@@ -1,89 +1,51 @@
 import io
-from typing import Optional, Literal
+import warnings
 from PIL import Image, ImageOps
-from admin_panel.models import MediaAsset
+from django.db import transaction
+from admin_panel.models import MediaAsset, User
 
-ALLOWED_IMAGE_MIMES = {
-    'image/jpeg',
-    'image/jpg',
-    'image/png',
-    'image/webp',
-    'image/gif',
-    'image/svg+xml',
-}
-
-KindType = Literal['AVATAR', 'BANNER', 'ACHIEVEMENT_ICON', 'GENERAL']
+LIMITS = {'AVATAR': 2 * 1024**2, 'BANNER': 5 * 1024**2, 'ACHIEVEMENT_ICON': 512 * 1024, 'GENERAL': 5 * 1024**2}
+FORMATS = {'JPEG', 'PNG', 'WEBP', 'GIF'}
+MAX_PIXELS = 16_000_000
 
 
-def save_optimized_media_asset(
-    buffer: bytes,
-    mime_type: str,
-    kind: KindType = 'GENERAL',
-    owner_id: Optional[str] = None,
-) -> dict:
-    """
-    Optimizes uploaded image (WebP) using Pillow, persists in Neon PostgreSQL MediaAsset table,
-    and removes previous asset of the same kind for owner_id to prevent storage bloat.
-    """
-    normalized_mime = mime_type.lower().strip()
-    if normalized_mime not in ALLOWED_IMAGE_MIMES:
-        raise ValueError('Неподдерживаемый формат изображения. Разрешены: JPEG, PNG, WebP, GIF, SVG')
+def read_upload(file, kind):
+    limit = LIMITS[kind]
+    if file.size > limit:
+        raise ValueError('Файл превышает допустимый размер.')
+    data = file.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError('Файл превышает допустимый размер.')
+    return data
 
-    if normalized_mime == 'image/svg+xml':
-        head = buffer[:512].decode('utf-8', errors='ignore').lower()
-        if '<svg' not in head:
-            raise ValueError('Некорректный SVG-файл: отсутствует тег <svg>')
-        output_buffer = buffer
-        output_mime = 'image/svg+xml'
-    else:
-        try:
-            image = Image.open(io.BytesIO(buffer))
-        except Exception as e:
-            raise ValueError(f'Не удалось прочитать изображение: {str(e)}')
 
-        # Convert palette/transparency to RGBA or RGB
-        if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-            image = image.convert('RGBA')
-        elif image.mode != 'RGB':
-            image = image.convert('RGB')
-
-        if kind == 'AVATAR':
-            # 256x256 cover crop
-            image = ImageOps.fit(image, (256, 256), method=Image.Resampling.LANCZOS)
-            quality = 85
-        elif kind == 'BANNER':
-            # 1600x400 cover crop
-            image = ImageOps.fit(image, (1600, 400), method=Image.Resampling.LANCZOS)
-            quality = 85
-        elif kind == 'ACHIEVEMENT_ICON':
-            image.thumbnail((128, 128), Image.Resampling.LANCZOS)
-            quality = 90
-        else:
-            quality = 85
-
-        out_io = io.BytesIO()
-        image.save(out_io, format='WEBP', quality=quality)
-        output_buffer = out_io.getvalue()
-        output_mime = 'image/webp'
-
-    # Auto-cleanup previous user media to prevent storage leaks
-    if owner_id and kind in ('AVATAR', 'BANNER'):
-        try:
-            MediaAsset.objects.filter(owner_id=owner_id, kind=kind).delete()
-        except Exception:
-            pass
-
-    asset = MediaAsset.objects.create(
-        kind=kind,
-        mime_type=output_mime,
-        data=output_buffer,
-        size_bytes=len(output_buffer),
-        owner_id=owner_id,
-    )
-
-    return {
-        'id': asset.id,
-        'url': f'/api/v1/media/{asset.id}',
-        'mimeType': asset.mime_type,
-        'sizeBytes': asset.size_bytes,
-    }
+@transaction.atomic
+def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None):
+    if mime_type.lower().strip() not in {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}:
+        raise ValueError('Разрешены только JPEG, PNG, WebP и GIF. SVG запрещён.')
+    if len(buffer) > LIMITS[kind]:
+        raise ValueError('Файл превышает допустимый размер.')
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(buffer)) as source:
+                if source.format not in FORMATS or source.width * source.height > MAX_PIXELS:
+                    raise ValueError('Недопустимый формат или размер изображения.')
+                source.verify()
+            with Image.open(io.BytesIO(buffer)) as source:
+                image = ImageOps.exif_transpose(source).convert('RGBA')
+                if kind in ('AVATAR', 'BANNER'):
+                    image = ImageOps.fit(image, (256, 256) if kind == 'AVATAR' else (1600, 400), method=Image.Resampling.LANCZOS)
+                elif kind == 'ACHIEVEMENT_ICON':
+                    image.thumbnail((128, 128))
+                output = io.BytesIO()
+                image.save(output, format='WEBP', quality=85)
+    except (OSError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise ValueError('Не удалось прочитать безопасное растровое изображение.') from exc
+    user = User.objects.select_for_update().get(pk=owner_id) if owner_id else None
+    asset = MediaAsset.objects.create(kind=kind, mime_type='image/webp', data=output.getvalue(), size_bytes=len(output.getvalue()), owner_id=owner_id)
+    if user and kind in ('AVATAR', 'BANNER'):
+        field = 'avatar_url' if kind == 'AVATAR' else 'banner_url'
+        User.objects.filter(pk=user.pk).update(**{field: f'/api/v1/media/{asset.pk}'})
+        MediaAsset.objects.filter(owner_id=owner_id, kind=kind).exclude(pk=asset.pk).delete()
+    return {'id': asset.pk, 'url': f'/api/v1/media/{asset.pk}', 'mimeType': 'image/webp', 'sizeBytes': asset.size_bytes}

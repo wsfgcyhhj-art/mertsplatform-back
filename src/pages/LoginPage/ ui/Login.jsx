@@ -6,7 +6,6 @@ import { useFindUser } from "../../../store/userStore.js";
 import { IoEyeSharp } from "react-icons/io5";
 import { FaEyeSlash } from "react-icons/fa";
 import { api } from "../../../api/client.js";
-import { hashPasswordClient } from "../../../utils/crypto.js";
 import { AuthBackground } from "../../../components/AuthBackground/AuthBackground.jsx";
 
 export const Login = () => {
@@ -23,14 +22,14 @@ export const Login = () => {
     const verifyClick = async (e) => {
         if (e) e.preventDefault();
         if (resetToken || changeRequired) {
-            if (newPassword.length < 8) { toast.warning('Минимум 8 символов'); return; }
+            if (newPassword.length < 12) { toast.warning('Минимум 12 символов'); return; }
             setLoading(true);
             try {
-                const hashed = await hashPasswordClient(newPassword);
+                const hashed = newPassword;
                 if (resetToken) {
                     await api.post('/auth/reset-password', {token: resetToken, new_password: hashed});
                 } else {
-                    await api.put('/users/me/password', {currentPassword: await hashPasswordClient(passwords), newPassword: hashed});
+                    await api.put('/users/me/password', {currentPassword: passwords, newPassword: hashed});
                 }
                 window.location.assign('/login');
             } catch (err) { toast.error(err.response?.data?.message || 'Не удалось изменить пароль'); }
@@ -38,7 +37,7 @@ export const Login = () => {
             return;
         }
         const cleanLogin = login.trim();
-        const cleanPassword = passwords.trim();
+        const cleanPassword = passwords;
 
         if (cleanLogin === '' || cleanPassword === '') {
             toast.warning('Заполните все поля!');
@@ -48,7 +47,7 @@ export const Login = () => {
         setLoading(true);
 
         try {
-            const hashedPassword = await hashPasswordClient(cleanPassword);
+            const hashedPassword = cleanPassword;
 
             const res = await api.post('/auth/login', {
                 login: cleanLogin,
@@ -56,7 +55,6 @@ export const Login = () => {
             });
 
             if (res.data?.user && res.data?.accessToken) {
-                localStorage.setItem('accessToken', res.data.accessToken);
                 addUser(res.data.user, res.data.accessToken);
                 if (res.data.user.must_change_password) { setChangeRequired(true); setLoading(false); return; }
                 toast.success('Успешный вход!');
@@ -103,7 +101,7 @@ export const Login = () => {
                             </div>
                         </div>
                         </>}
-                        {(resetToken || changeRequired) && <><p>Установите новый пароль</p><input type="password" minLength={8} value={newPassword} onChange={e => setNewPassword(e.target.value)} required autoComplete="new-password" /></>}
+                        {(resetToken || changeRequired) && <><p>Установите новый пароль</p><input type="password" minLength={12} value={newPassword} onChange={e => setNewPassword(e.target.value)} required autoComplete="new-password" /></>}
                         <button type="submit" disabled={loading}>
                             {loading ? 'Вход...' : 'Войти'}
                         </button>

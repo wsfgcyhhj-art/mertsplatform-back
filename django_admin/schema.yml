@@ -26,8 +26,26 @@ paths:
     post:
       operationId: admin_score_adjustment
       summary: Начисление или списание бонусных баллов ментором
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        schema:
+          type: string
+        required: true
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScoreAdjustmentRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ScoreAdjustmentRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ScoreAdjustmentRequestRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
@@ -135,6 +153,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
+          description: ''
+  /api/v1/auth/csrf:
+    get:
+      operationId: v1_auth_csrf_retrieve
+      tags:
+      - v1
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
           description: ''
   /api/v1/auth/login:
     post:
@@ -510,13 +541,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PatchedSubmissionRequest'
+              $ref: '#/components/schemas/PatchedSubmissionReviewRequest'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/PatchedSubmissionRequest'
+              $ref: '#/components/schemas/PatchedSubmissionReviewRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/PatchedSubmissionRequest'
+              $ref: '#/components/schemas/PatchedSubmissionReviewRequest'
       security:
       - jwtAuth: []
       responses:
@@ -919,7 +950,8 @@ components:
           minLength: 1
         newPassword:
           type: string
-          minLength: 8
+          minLength: 12
+          maxLength: 1024
       required:
       - currentPassword
       - newPassword
@@ -952,6 +984,7 @@ components:
           maxLength: 255
         videoLink:
           type: string
+          format: uri
         youtubeId:
           type: string
         groupNumber:
@@ -991,48 +1024,30 @@ components:
         password:
           type: string
           minLength: 1
+          maxLength: 1024
       required:
       - login
       - password
-    PatchedSubmissionRequest:
+    PatchedSubmissionReviewRequest:
       type: object
       properties:
-        userId:
-          type: string
-          minLength: 1
-        taskId:
-          type: string
-          minLength: 1
-        version:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          title: Попытка (версия)
-        comment:
-          type: string
-          nullable: true
-          title: Комментарий студента
-        solutionLink:
-          type: string
-          minLength: 1
         status:
-          allOf:
-          - $ref: '#/components/schemas/StatusEnum'
-          title: Статус
+          $ref: '#/components/schemas/StatusEnum'
         score:
           type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          nullable: true
-          title: Баллы
+          minimum: 0
         reviewerComment:
           type: string
           nullable: true
-          minLength: 1
+          maxLength: 10000
         voiceFeedbackUrl:
-          type: string
           nullable: true
-          minLength: 1
+          oneOf:
+          - type: string
+            format: uri
+            maxLength: 2048
+          - type: string
+            maxLength: 0
     PatchedTaskRequest:
       type: object
       properties:
@@ -1065,10 +1080,12 @@ components:
           title: Порядок
         exampleLink:
           type: string
+          format: uri
           nullable: true
           minLength: 1
         attachmentLink:
           type: string
+          format: uri
           nullable: true
           minLength: 1
         hasScore:
@@ -1146,8 +1163,8 @@ components:
         new_password:
           type: string
           writeOnly: true
-          minLength: 8
-          maxLength: 255
+          minLength: 12
+          maxLength: 1024
       required:
       - new_password
       - token
@@ -1192,6 +1209,30 @@ components:
       - amount
       - createdAt
       - id
+      - reason
+      - userId
+    ScoreAdjustmentRequestRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        amount:
+          type: integer
+          maximum: 10000
+          minimum: -10000
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        month:
+          type: integer
+          maximum: 24
+          minimum: 1
+          default: 1
+      required:
+      - amount
       - reason
       - userId
     ShortTask:
@@ -1350,6 +1391,7 @@ components:
           type: integer
           maximum: 2147483647
           minimum: -2147483648
+          default: 1
           title: Попытка (версия)
         comment:
           type: string
@@ -1418,6 +1460,7 @@ components:
           type: integer
           maximum: 2147483647
           minimum: -2147483648
+          default: 1
           title: Попытка (версия)
         comment:
           type: string
@@ -1480,9 +1523,11 @@ components:
           title: Порядок
         exampleLink:
           type: string
+          format: uri
           nullable: true
         attachmentLink:
           type: string
+          format: uri
           nullable: true
         hasScore:
           type: boolean
@@ -1543,10 +1588,12 @@ components:
           title: Порядок
         exampleLink:
           type: string
+          format: uri
           nullable: true
           minLength: 1
         attachmentLink:
           type: string
+          format: uri
           nullable: true
           minLength: 1
         hasScore:

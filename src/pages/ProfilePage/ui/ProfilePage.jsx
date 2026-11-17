@@ -1,3 +1,4 @@
+import { safeUrl } from '../../../utils/safeUrl.js';
 import { useState, useEffect, useCallback } from "react";
 import cls from "../styles/profile.module.scss";
 import { useFindUser } from "../../../store/userStore.js";
@@ -48,12 +49,7 @@ export const ProfilePage = () => {
     const [refreshingTgStatus, setRefreshingTgStatus] = useState(false);
 
     const getAuthToken = useCallback(() => {
-        return (
-            localStorage.getItem('accessToken') ||
-            localStorage.getItem('token') ||
-            sessionStorage.getItem('accessToken') ||
-            extractAuthToken()
-        );
+        return extractAuthToken();
     }, []);
 
     const loadProfileData = useCallback(async () => {
@@ -68,8 +64,8 @@ export const ProfilePage = () => {
                 : undefined;
 
             const [meRes, achRes] = await Promise.all([
-                api.get('/me', { headers: authHeaders }),
-                api.get('/me/achievements', { headers: authHeaders }),
+                api.get('/users/me', { headers: authHeaders }),
+                api.get('/users/me/achievements', { headers: authHeaders }),
             ]);
 
             if (meRes.data?.user) {
@@ -112,9 +108,9 @@ export const ProfilePage = () => {
         const intervalId = setInterval(async () => {
             attempts += 1;
             const token =
-                localStorage.getItem('accessToken') ||
-                localStorage.getItem('token') ||
-                sessionStorage.getItem('accessToken') ||
+                extractAuthToken() ||
+                null ||
+                null ||
                 extractAuthToken();
 
             if (!token) {
@@ -162,9 +158,9 @@ export const ProfilePage = () => {
 
     const handleConnectTelegram = async () => {
         const token =
-            localStorage.getItem('accessToken') ||
-            localStorage.getItem('token') ||
-            sessionStorage.getItem('accessToken') ||
+            extractAuthToken() ||
+            null ||
+            null ||
             extractAuthToken();
 
         if (!token) {
@@ -197,7 +193,7 @@ export const ProfilePage = () => {
             }
 
             if (data?.link) {
-                window.open(data.link, '_blank', 'noopener,noreferrer');
+                window.open(safeUrl(data.link), '_blank', 'noopener,noreferrer');
                 setTgPolling(true);
                 message.info('Перейдите в открывшийся Telegram-бот и нажмите «Запустить» (/start)');
             }
@@ -210,9 +206,9 @@ export const ProfilePage = () => {
 
     const handleDisconnectTelegram = async () => {
         const token =
-            localStorage.getItem('accessToken') ||
-            localStorage.getItem('token') ||
-            sessionStorage.getItem('accessToken') ||
+            extractAuthToken() ||
+            null ||
+            null ||
             extractAuthToken();
 
         if (!token) {
@@ -260,9 +256,9 @@ export const ProfilePage = () => {
 
     const handleCheckTelegramStatus = async () => {
         const token =
-            localStorage.getItem('accessToken') ||
-            localStorage.getItem('token') ||
-            sessionStorage.getItem('accessToken') ||
+            extractAuthToken() ||
+            null ||
+            null ||
             extractAuthToken();
 
         if (!token) {
@@ -318,7 +314,7 @@ export const ProfilePage = () => {
         try {
             setSavingProfile(true);
             const token = getAuthToken();
-            const res = await api.patch('/users/me/profile', {
+            const res = await api.patch('/users/me', {
                 name: name.trim() || undefined,
                 telegram: telegram.trim() || undefined,
             });
@@ -368,7 +364,7 @@ export const ProfilePage = () => {
         try {
             setUploadingAvatar(true);
             const token = getAuthToken();
-            const res = await api.patch('/users/me/avatar', { avatarUrl: presetUrl });
+            const res = await api.patch('/users/me', { avatarUrl: presetUrl });
             if (res.data?.user) {
                 addUser(res.data.user, token);
                 message.success('Фирменный аватар установлен!');
@@ -399,18 +395,19 @@ export const ProfilePage = () => {
             message.warning('Введите старый и новый пароли');
             return;
         }
-        if (newPassword.length < 4) {
-            message.warning('Новый пароль должен содержать минимум 4 символа');
+        if (newPassword.length < 12) {
+            message.warning('Новый пароль должен содержать минимум 12 символов');
             return;
         }
 
         try {
             setChangingPassword(true);
-            await api.post('/me/change-password', {
+            await api.put('/users/me/password', {
                 currentPassword,
                 newPassword,
             });
             message.success('Пароль успешно изменен!');
+            window.location.assign('/login');
             setPasswordModalOpen(false);
             setCurrentPassword('');
             setNewPassword('');
@@ -917,7 +914,7 @@ export const ProfilePage = () => {
                             Новый пароль *
                         </label>
                         <Input.Password
-                            placeholder="Новый пароль (минимум 4 символа)"
+                            placeholder="Новый пароль (минимум 12 символов)"
                             value={newPassword}
                             onChange={(e) => setNewPassword(e.target.value)}
                         />

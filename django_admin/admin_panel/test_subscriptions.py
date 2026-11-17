@@ -10,35 +10,25 @@ class DeliveryAndClosedRegistrationTests(SimpleTestCase):
         response = RegisterView.as_view()(APIRequestFactory().post("/", {}))
         self.assertEqual(response.status_code, 403)
 
-    def test_broadcast_returns_actual_delivery_counts(self):
-        with patch.object(tg, "send_telegram_message", side_effect=[True, False]):
-            result = tg.async_broadcast_message(["10", "20", "10"], "test")
-        self.assertEqual(result, {"sent": 1, "errors": 1})
 
 
 from django.test import TransactionTestCase, override_settings
 from django.db import connection
-from admin_panel.tests import UNMANAGED_MODELS
+from admin_panel.test_support import UNMANAGED_MODELS, create_schema, clear_data, subscribe
 from admin_panel.models import User, StudyGroup, SubscriptionGrant
 from admin_panel.services.subscription_service import grant_subscription, handle_subscription_start
 from rest_framework.test import APIClient
 
 
+@override_settings(TELEGRAM_OUTBOX_EAGER=True)
 class SubscriptionIntegrationTests(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        with connection.schema_editor() as editor:
-            for model in UNMANAGED_MODELS:
-                if model._meta.db_table not in connection.introspection.table_names():
-                    editor.create_model(model)
+        create_schema()
 
     def setUp(self):
-        with connection.cursor() as cursor:
-            cursor.execute('PRAGMA foreign_keys = OFF')
-            for model in reversed(UNMANAGED_MODELS):
-                cursor.execute('DELETE FROM ' + connection.ops.quote_name(model._meta.db_table))
-            cursor.execute('PRAGMA foreign_keys = ON')
+        clear_data()
 
     def test_pending_subscription_claim_and_username_reuse(self):
         group = StudyGroup.objects.create(name='js-02', month=2)
@@ -49,7 +39,7 @@ class SubscriptionIntegrationTests(TransactionTestCase):
         self.assertEqual(grant.user.current_month, 2)
         self.assertTrue(grant.user.has_subscription)
         self.assertTrue(grant.user.must_change_password)
-        self.assertIn('Временный пароль', send.call_args.args[1])
+        self.assertIn('Временный пароль', send.call_args.kwargs['text'])
         handle_subscription_start('99999', 'student_test')
         grant.refresh_from_db()
         self.assertEqual(grant.telegram_user_id, '12345')
@@ -59,6 +49,10 @@ class SubscriptionIntegrationTests(TransactionTestCase):
         group = StudyGroup.objects.create(name='js-02', month=2)
         with patch.object(tg, 'send_telegram_message', return_value=True):
             grant = grant_subscription('student_test', group, None, 'owner')
+        self.assertIsNone(grant.user_id)
+        with patch.object(tg, 'send_telegram_message', return_value=True):
+            handle_subscription_start('12345', 'student_test')
+        grant.refresh_from_db()
         self.assertIsNotNone(grant.user_id)
 
     def test_course_requires_subscription_and_password_change(self):
@@ -67,6 +61,7 @@ class SubscriptionIntegrationTests(TransactionTestCase):
         client.force_authenticate(user)
         for path in ('lessons', 'tasks', 'submissions', 'achievements', 'leaderboard'):
             self.assertEqual(client.get('/api/v1/' + path).status_code, 403)
+        subscribe(user)
         user.has_subscription = True
         user.save()
         self.assertEqual(client.get('/api/v1/tasks').status_code, 200)
@@ -120,3 +115,9 @@ class SubscriptionIntegrationTests(TransactionTestCase):
         self.assertEqual(client.post('/api/v1/auth/reset-password', payload, format='json').status_code, 400)
         user.refresh_from_db()
         self.assertTrue(user.check_password('new-password-123'))
+
+
+    def test_broadcast_returns_actual_delivery_counts(self):
+        with patch.object(tg, 'send_telegram_message', side_effect=[True, False]):
+            result = tg.async_broadcast_message(['10', '20', '10'], 'test')
+        self.assertEqual(result, {'sent': 1, 'errors': 1, 'queued': 1})

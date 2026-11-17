@@ -1,5 +1,5 @@
 import uuid
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.core.validators import RegexValidator
 
@@ -47,10 +47,19 @@ class AchievementCategoryChoices(models.TextChoices):
     GENERAL = 'general', 'Общие (general)'
 
 
-class User(models.Model):
+class AtomicModel(models.Model):
+    class Meta:
+        abstract = True
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        return super().save(*args, **kwargs)
+
+
+class User(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     login = models.CharField('Логин', max_length=255, unique=True)
-    password_hash = models.CharField('Хэш пароля (bcrypt)', max_length=255)
+    password_hash = models.CharField('Хэш пароля', max_length=255)
     role = models.CharField('Роль', max_length=32, choices=RoleChoices.choices, default=RoleChoices.STUDENT)
     has_subscription = models.BooleanField(default=False, db_default=False)
     subscription_expires_at = models.DateTimeField(null=True, blank=True)
@@ -128,30 +137,36 @@ class User(models.Model):
         return self.role == RoleChoices.ADMIN
 
     def check_password(self, raw_password: str) -> bool:
-        if not self.password_hash or not raw_password:
+        from django.contrib.auth.hashers import check_password
+        import bcrypt, hashlib
+        if not raw_password or len(raw_password) > 1024:
             return False
-        import bcrypt
+        if not self.password_hash.startswith(('$2a$', '$2b$', '$2y$')):
+            return check_password(raw_password, self.password_hash)
+        # Existing accounts include bcrypt(raw) and bcrypt(SHA256(raw)).
+        candidates = [hashlib.sha256(raw_password.encode()).hexdigest().encode()]
+        if not self.password_uses_sha256 and len(raw_password.encode()) <= 72:
+            candidates.insert(0, raw_password.encode())
         try:
-            if self.password_uses_sha256 and len(raw_password) != 64:
-                import hashlib
-                raw_password = hashlib.sha256(raw_password.encode()).hexdigest()
-            return bcrypt.checkpw(raw_password.encode('utf-8'), self.password_hash.encode('utf-8'))
-        except Exception:
+            return any(bcrypt.checkpw(candidate, self.password_hash.encode()) for candidate in candidates)
+        except ValueError:
             return False
 
     def set_password(self, raw_password: str) -> None:
-        import bcrypt
-        salt = bcrypt.gensalt(rounds=10)
-        self.password_hash = bcrypt.hashpw(raw_password.encode('utf-8'), salt).decode('utf-8')
+        from django.contrib.auth.hashers import make_password
+        self.password_hash = make_password(raw_password)
+        self.password_uses_sha256 = False
 
     def calculate_total_score(self) -> int:
         from django.db.models import Sum
-        sub_score = self.submissions.filter(status=SubmissionStatusChoices.ACCEPTED).aggregate(s=Sum('score'))['s'] or 0
+        from admin_panel.services.score_service import latest_accepted
+        sub_score = latest_accepted(self.submissions.all()).aggregate(s=Sum('score'))['s'] or 0
         adj_score = self.score_adjustments.aggregate(s=Sum('amount'))['s'] or 0
         return sub_score + adj_score
 
     def accepted_tasks_count(self) -> int:
-        return self.submissions.filter(status=SubmissionStatusChoices.ACCEPTED).count()
+        from admin_panel.services.score_service import latest_accepted
+        return latest_accepted(self.submissions.all()).count()
 
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
@@ -239,7 +254,7 @@ class StudyGroup(models.Model):
         return Task.objects.filter(group_number=self.name).count()
 
 
-class Lesson(models.Model):
+class Lesson(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     title = models.CharField('Название урока', max_length=255)
     video_link = models.CharField('Ссылка на видео', max_length=500)
@@ -265,7 +280,7 @@ class Lesson(models.Model):
         return f"[Группа {self.group_number} | Месяц {self.month} | #{self.order}] {self.title}"
 
 
-class Task(models.Model):
+class Task(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     title = models.CharField('Название задания', max_length=255)
     description = models.TextField('Описание задания')
@@ -302,7 +317,7 @@ class Task(models.Model):
         return f"[Месяц {self.month}] {self.title} ({self.topic})"
 
 
-class Submission(models.Model):
+class Submission(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='submissions', verbose_name='Студент')
     task = models.ForeignKey(Task, models.DO_NOTHING, db_column='task_id', related_name='submissions', verbose_name='Задание')
@@ -330,6 +345,7 @@ class Submission(models.Model):
     class Meta:
         managed = False
         db_table = 'Submission'
+        constraints = [models.UniqueConstraint(fields=['user', 'task', 'version'], name='submission_attempt_unique')]
         verbose_name = 'Сдача ДЗ'
         verbose_name_plural = 'Сдачи ДЗ'
         ordering = ['-created_at']
@@ -342,7 +358,8 @@ class Submission(models.Model):
         return f"{self.user} — {self.task} (v{self.version}, {self.status})"
 
 
-class ScoreAdjustment(models.Model):
+class ScoreAdjustment(AtomicModel):
+    idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True)
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='score_adjustments', verbose_name='Студент')
     admin = models.ForeignKey(User, models.DO_NOTHING, db_column='admin_id', related_name='given_adjustments', verbose_name='Администратор')
@@ -406,7 +423,7 @@ class Achievement(models.Model):
         return f"{self.title} ({self.code})"
 
 
-class UserAchievement(models.Model):
+class UserAchievement(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='user_achievements', verbose_name='Студент')
     achievement = models.ForeignKey(Achievement, models.DO_NOTHING, db_column='achievement_id', related_name='user_achievements', verbose_name='Достижение')
@@ -488,7 +505,7 @@ class SubscriptionGrant(models.Model):
 
 class TelegramIdentity(models.Model):
     telegram_user_id = models.CharField(primary_key=True, max_length=64)
-    username = models.CharField(max_length=32, unique=True)
+    username = models.CharField(max_length=32, unique=True, null=True, blank=True)
 
     class Meta:
         managed = False
@@ -503,3 +520,35 @@ class PasswordResetTicket(models.Model):
     class Meta:
         managed = False
         db_table = 'PasswordResetTicket'
+
+
+class AuthRateBucket(models.Model):
+    key = models.CharField(primary_key=True, max_length=64)
+    started_at = models.DateTimeField(default=timezone.now)
+    attempts = models.IntegerField(default=0)
+    class Meta:
+        managed = False
+        db_table = 'AuthRateBucket'
+
+
+class TelegramUpdate(models.Model):
+    update_id = models.BigIntegerField(primary_key=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        managed = False
+        db_table = 'TelegramUpdate'
+
+
+class TelegramOutbox(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid)
+    dedupe_key = models.CharField(max_length=128, unique=True)
+    chat_id = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=16, default='pending', db_index=True)
+    attempts = models.IntegerField(default=0)
+    available_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_error = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        managed = False
+        db_table = 'TelegramOutbox'

@@ -64,7 +64,7 @@ class SystemConfigView(APIView):
                     "image/png",
                     "image/webp",
                     "image/gif",
-                    "image/svg+xml",
+
                 ],
             },
             "paginationDefaults": {

@@ -72,26 +72,20 @@ class LeaderboardView(APIView):
         if group_filter:
             students_qs = students_qs.filter(group_number=group_filter)
 
+        from admin_panel.services.score_service import latest_accepted
+        # Aggregate in SQL; month filters apply to both scores and counts.
+        accepted = latest_accepted(Submission.objects.filter(task__month=target_month))
+        score_map = {r['user_id']: r for r in accepted.values('user_id').annotate(score=Sum('score'), count=Count('id'))}
+        sent_map = dict(Submission.objects.filter(task__month=target_month).values('user_id').annotate(count=Count('id')).values_list('user_id', 'count'))
+        adjustment_map = dict(ScoreAdjustment.objects.filter(month=target_month).values('user_id').annotate(score=Sum('amount')).values_list('user_id', 'score'))
         results = []
-        for s in students_qs:
-            subs = Submission.objects.filter(user_id=s.id)
-            accepted = subs.filter(status=SubmissionStatusChoices.ACCEPTED)
-            sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
-            adj_score = ScoreAdjustment.objects.filter(user_id=s.id).aggregate(s=Sum('amount'))['s'] or 0
-            total_score = sub_score + adj_score
-
-            results.append({
-                'id': s.id,
-                'name': s.name,
-                'login': s.login,
-                'avatarUrl': s.avatar_url,
-                'groupNumber': s.group_number,
-                'currentMonth': s.current_month,
-                'totalScore': total_score,
-                'tasksSentCount': subs.count(),
-                'tasksAcceptedCount': accepted.count(),
-            })
-
+        for student in students_qs:
+            entry = score_map.get(student.pk, {})
+            results.append({'id': student.pk, 'name': student.name, 'login': student.login,
+                            'avatarUrl': student.avatar_url, 'groupNumber': student.group_number,
+                            'currentMonth': student.current_month,
+                            'totalScore': (entry.get('score') or 0) + adjustment_map.get(student.pk, 0),
+                            'tasksSentCount': sent_map.get(student.pk, 0), 'tasksAcceptedCount': entry.get('count', 0)})
         # Sort by totalScore desc, tasksAcceptedCount desc
         results.sort(key=lambda x: (x['totalScore'], x['tasksAcceptedCount']), reverse=True)
 
@@ -99,7 +93,15 @@ class LeaderboardView(APIView):
         for idx, item in enumerate(results):
             item['rank'] = idx + 1
 
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+            limit = min(200, max(1, int(request.query_params.get('limit', 50))))
+        except ValueError:
+            return Response({'message': 'Invalid pagination'}, status=400)
+        total = len(results)
+        results = results[(page - 1) * limit:page * limit]
         return Response({
+            "total": total, "page": page,
             "month": target_month,
             "leaderboard": results,
         })

@@ -1,3 +1,4 @@
+import { safeUrl } from '../../../utils/safeUrl.js';
 import { useState, useEffect } from 'react';
 import {
   Table,
@@ -163,7 +164,7 @@ export const LessonsTab = () => {
           >
             Смотреть
           </Button>
-          <Link href={r.videoLink} target="_blank" rel="noopener noreferrer">
+          <Link href={safeUrl(r.videoLink)} target="_blank" rel="noopener noreferrer">
             Открыть ссылку
           </Link>
         </Space>

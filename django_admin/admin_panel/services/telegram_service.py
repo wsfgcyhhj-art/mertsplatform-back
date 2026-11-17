@@ -2,7 +2,6 @@ import os
 import re
 import html
 import logging
-import threading
 
 from typing import Optional, Dict, Any, List, Union
 import httpx
@@ -35,7 +34,7 @@ def get_frontend_url() -> str:
 
 
 def escape_html(text: Any) -> str:
-    return html.escape(str(text))
+    return html.escape(str(text)[:1500])
 
 
 def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None) -> bool:
@@ -76,26 +75,38 @@ def send_telegram_notification(user_id: str, text: str, reply_markup: Optional[d
     try:
         user = User.objects.get(id=user_id)
         if user.telegram_chat_id:
-            return send_telegram_message(user.telegram_chat_id, text, reply_markup=reply_markup)
-    except Exception as exc:
-        logger.warning('Telegram user lookup failed user_id=%s error_type=%s', user_id, type(exc).__name__)
+            from .outbox_service import enqueue
+            return enqueue(user.telegram_chat_id, text, reply_markup=reply_markup)
+    except User.DoesNotExist:
+        logger.warning('Telegram user missing user_id=%s', user_id)
     return False
 
 
 def send_async_notification(user_id: str, text: str, reply_markup: Optional[dict] = None) -> bool:
-    """Compatibility name: delivery now completes in the on_commit caller."""
+    """Compatibility name: persists an outbox event, then attempts delivery after commit."""
     return send_telegram_notification(user_id, text, reply_markup)
 
 
 def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
-    """Bounded batches; never discard results or leave background work behind."""
-    counts = {"sent": 0, "errors": 0}
-    unique_ids = list(dict.fromkeys(str(cid).strip() for cid in chat_ids if cid and str(cid).strip()))
-    for offset in range(0, len(unique_ids), 20):
-        for chat_id in unique_ids[offset:offset + 20]:
-            ok = send_telegram_message(chat_id, text)
-            counts["sent" if ok else "errors"] += 1
-    logger.info("Telegram broadcast sent=%s errors=%s", counts["sent"], counts["errors"])
+    from django.db import transaction
+    from admin_panel.models import TelegramOutbox
+    from .outbox_service import enqueue, event_context
+    import uuid
+    counts = {'sent': 0, 'errors': 0, 'queued': 0}
+    batch = event_context.get() or str(uuid.uuid4())
+    keys = []
+    for chat_id in dict.fromkeys(str(cid).strip() for cid in chat_ids if cid and str(cid).strip()):
+        import hashlib
+        key = batch + ':' + hashlib.sha256((chat_id + text).encode()).hexdigest()
+        keys.append(key)
+        enqueue(chat_id, text, dedupe_key=key)
+    def report():
+        items = TelegramOutbox.objects.filter(dedupe_key__in=keys)
+        counts.update(sent=items.filter(status='sent').count(),
+                      errors=items.exclude(last_error='').count(),
+                      queued=items.filter(status__in=['pending', 'sending']).count())
+        logger.info('Telegram batch sent=%s errors=%s queued=%s', counts['sent'], counts['errors'], counts['queued'])
+    transaction.on_commit(report)
     return counts
 
 
@@ -166,10 +177,6 @@ def notify_submission_created(submission: Submission):
     """
     Notifies mentors and assigned reviewer when student submits work.
     """
-    token = get_bot_token()
-    if not token:
-        return
-
     student = submission.user
     task = submission.task
     msg = (
@@ -250,8 +257,8 @@ def notify_achievement_unlocked(user_id: str, achievement):
             f"👉 <a href=\"{profile_link}\">Посмотреть в профиле</a>"
         )
         send_async_notification(user_id, msg)
-    except Exception:
-        pass
+    except User.DoesNotExist:
+        logger.warning('Telegram achievement recipient missing user_id=%s', user_id)
 
 
 def notify_score_adjustment_granted(adjustment: ScoreAdjustment):
@@ -347,7 +354,13 @@ def handle_start_command(chat_id: str, code: str, username: Optional[str] = None
             "и нажмите кнопку «Подключить Telegram»."
         )
 
-    user = User.objects.filter(telegram_auth_code=clean_code).first()
+    from django.db import transaction
+    with transaction.atomic():
+        return _bind_start_code(chat_id, clean_code, username)
+
+
+def _bind_start_code(chat_id, clean_code, username):
+    user = User.objects.select_for_update().filter(telegram_auth_code=clean_code).first()
     if not user:
         return "❌ Неверный или устаревший код привязки. Сгенерируйте новую ссылку в профиле."
 
@@ -368,6 +381,25 @@ def handle_start_command(chat_id: str, code: str, username: Optional[str] = None
 
 
 def process_telegram_update(update: Dict[str, Any]) -> None:
+    from django.db import transaction
+    from admin_panel.models import TelegramUpdate
+    from .outbox_service import event_context
+    update_id = update.get('update_id')
+    if not isinstance(update_id, int):
+        return
+    with transaction.atomic():
+        _, created = TelegramUpdate.objects.get_or_create(update_id=update_id)
+        if not created:
+            return
+        context = event_context.set(str(update_id))
+        try:
+            _process_telegram_update(update)
+        finally:
+            event_context.reset(context)
+
+
+def _process_telegram_update(update):
+    from .outbox_service import enqueue
     message = update.get('message') or update.get('edited_message')
     if not message:
         return
@@ -387,15 +419,15 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         parts = text.split(maxsplit=1)
         code = parts[1] if len(parts) > 1 else ''
         reply = handle_start_command(chat_id, code, username)
-        send_telegram_message(chat_id, reply)
+        enqueue(chat_id, reply)
 
     elif text == '/reset':
         from .subscription_service import recovery_link
         user = User.objects.filter(telegram_chat_id=chat_id).first()
         if user:
-            send_telegram_message(chat_id, 'Одноразовое восстановление (20 минут): ' + recovery_link(user))
+            enqueue(chat_id, 'Одноразовое восстановление (20 минут): ' + recovery_link(user))
         else:
-            send_telegram_message(chat_id, 'Доступ закрыт.')
+            enqueue(chat_id, 'Доступ закрыт.')
 
     elif text.startswith('/help'):
         help_text = (
@@ -405,7 +437,7 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
             "/status — Проверить статус привязки аккаунта\n"
             "/help — Справка по боту"
         )
-        send_telegram_message(chat_id, help_text)
+        enqueue(chat_id, help_text)
 
     elif text.startswith('/status'):
         user = User.objects.filter(telegram_chat_id=chat_id).first()
@@ -420,7 +452,7 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
             )
         else:
             status_text = "❌ Ваш Telegram еще не привязан к аккаунту MertsPlatform."
-        send_telegram_message(chat_id, status_text)
+        enqueue(chat_id, status_text)
 
 
 def run_telegram_polling():
@@ -440,7 +472,9 @@ def run_telegram_polling():
                 if resp.status_code == 200:
                     data = resp.json()
                     for upd in data.get('result', []):
-                        offset = max(offset, upd['update_id'] + 1)
                         process_telegram_update(upd)
+                        offset = max(offset, upd['update_id'] + 1)
         except Exception as e:
-            logger.warning("Polling error: %s", e)
+            logger.warning("Polling error: %s", type(e).__name__)
+            import time
+            time.sleep(2)

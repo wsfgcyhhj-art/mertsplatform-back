@@ -30,5 +30,8 @@ class HasCourseAccess(BasePermission):
             return False
         if user.role == RoleChoices.ADMIN:
             return True
-        return (user.has_subscription and not user.must_change_password
-                and (user.subscription_expires_at is None or user.subscription_expires_at > timezone.now()))
+        from admin_panel.models import SubscriptionGrant
+        from django.db.models import Q
+        return (not user.must_change_password and SubscriptionGrant.objects.filter(
+            user=user, is_active=True, group__is_active=True,
+        ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())).exists())

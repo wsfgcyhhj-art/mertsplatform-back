@@ -1,3 +1,4 @@
+import { getAccessToken, setAccessToken } from './authToken.js';
 import axios from 'axios';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
@@ -19,32 +20,13 @@ export function resolveMediaUrl(rawUrl, fallbackPath = null) {
   return val;
 }
 
-export function extractAuthToken() {
-  try {
-    const directToken =
-      localStorage.getItem('accessToken') ||
-      localStorage.getItem('token') ||
-      sessionStorage.getItem('accessToken');
-
-    if (directToken) {
-      return directToken;
-    }
-
-    const rawData = localStorage.getItem('user-merts-chat');
-    if (rawData) {
-      const parsed = JSON.parse(rawData);
-      const storeToken = parsed?.state?.accessToken || parsed?.state?.userInfo?.accessToken;
-      if (storeToken) {
-        localStorage.setItem('accessToken', storeToken);
-        return storeToken;
-      }
-    }
-  } catch (err) {
-    console.error('Failed to parse user session for api client', err);
-  }
-  return null;
+export const extractAuthToken = getAccessToken;
+let csrfToken = null;
+let refreshPromise = null;
+async function csrf() {
+  if (!csrfToken) csrfToken = (await axios.get(`${API_BASE_URL}/auth/csrf`, {withCredentials: true})).data.csrfToken;
+  return csrfToken;
 }
-
 export const api = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
@@ -54,7 +36,8 @@ export const api = axios.create({
 });
 
 // Добавление Bearer токена к каждому запросу
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
+  if (!["get", "head", "options"].includes(config.method)) config.headers["X-CSRFToken"] = await csrf();
   const token = extractAuthToken();
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -71,29 +54,18 @@ api.interceptors.response.use(
       error.response?.status === 401 &&
       !originalRequest._retry &&
       !originalRequest.url?.includes('/auth/login') &&
-      !originalRequest.url?.includes('/auth/refresh')
+      !originalRequest.url?.includes('/auth/refresh') &&
+      !originalRequest.url?.includes('/auth/logout')
     ) {
       originalRequest._retry = true;
       try {
-        const refreshRes = await axios.post(
-          `${API_BASE_URL}/auth/refresh`,
-          {},
-          { withCredentials: true }
-        );
+        if (!refreshPromise) {
+          refreshPromise = csrf().then(value => axios.post(`${API_BASE_URL}/auth/refresh`, {}, {withCredentials: true, headers: {'X-CSRFToken': value}})).finally(() => { refreshPromise = null; });
+        }
+        const refreshRes = await refreshPromise;
         const newAccessToken = refreshRes.data?.accessToken;
         if (newAccessToken) {
-          localStorage.setItem('accessToken', newAccessToken);
-          const rawData = localStorage.getItem('user-merts-chat');
-          if (rawData) {
-            const parsed = JSON.parse(rawData);
-            if (parsed.state) {
-              parsed.state.accessToken = newAccessToken;
-              if (parsed.state.userInfo) {
-                parsed.state.userInfo.accessToken = newAccessToken;
-              }
-              localStorage.setItem('user-merts-chat', JSON.stringify(parsed));
-            }
-          }
+          setAccessToken(newAccessToken);
           originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
           return api(originalRequest);
         }

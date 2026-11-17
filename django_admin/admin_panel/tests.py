@@ -21,31 +21,17 @@ from admin_panel.models import (
 )
 from admin_panel.services.achievement_service import ensure_default_achievements
 
-UNMANAGED_MODELS = [
-    StudyGroup,
-    User,
-    Lesson,
-    Task,
-    Submission,
-    ScoreAdjustment,
-    Achievement,
-    UserAchievement,
-    MediaAsset,
-    Session,
-    SubscriptionGrant, TelegramIdentity, PasswordResetTicket,
-]
+from admin_panel.test_support import UNMANAGED_MODELS, create_user, create_schema, clear_data, subscribe
 
 
 class MertsPlatformFullAPITestCase(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        with connection.schema_editor() as editor:
-            for m in UNMANAGED_MODELS:
-                if m._meta.db_table not in connection.introspection.table_names():
-                    editor.create_model(m)
+        create_schema()
 
     def setUp(self):
+        clear_data()
         self.client = Client()
         ensure_default_achievements()
 
@@ -75,6 +61,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         user = User(login='test_student', has_subscription=True, group_number='GRP-101')
         user.set_password('Password123!')
         user.save()
+        subscribe(user)
         from admin_panel.services.achievement_service import evaluate_user_achievements
         evaluate_user_achievements(user.id, trigger_filter='ON_REGISTER')
         self.assertEqual(UserAchievement.objects.filter(user=user, achievement__code='WELCOME').count(), 1)
@@ -106,7 +93,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_04_user_profile_and_password_update(self):
         # Create user
-        user = User.objects.create(has_subscription=True,
+        user = create_user(has_subscription=True,
             login='student_profile',
             role=RoleChoices.STUDENT,
             name='Петр',
@@ -162,7 +149,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_05_media_persistence_and_webp_optimization(self):
         # Create student and mentor
-        user = User.objects.create(has_subscription=True, login='student_media', role=RoleChoices.STUDENT)
+        user = create_user(has_subscription=True, login='student_media', role=RoleChoices.STUDENT)
         user.set_password('Pass1234!')
         user.save()
 
@@ -218,11 +205,11 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_06_curriculum_submissions_and_dynamic_gamification(self):
         # 1. Create mentor and student
-        mentor = User.objects.create(has_subscription=True, login='mentor_test', role=RoleChoices.ADMIN)
+        mentor = create_user(has_subscription=True, login='mentor_test', role=RoleChoices.ADMIN)
         mentor.set_password('MentorPass123')
         mentor.save()
 
-        student = User.objects.create(has_subscription=True, login='student_hw', role=RoleChoices.STUDENT, group_number='GRP-1')
+        student = create_user(has_subscription=True, login='student_hw', role=RoleChoices.STUDENT, group_number='GRP-1')
         student.set_password('StudentPass123')
         student.save()
 
@@ -302,15 +289,15 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(me_resp.json()['stats']['tasksAcceptedCount'], 1)
 
     def test_07_leaderboard_ranking(self):
-        s1 = User.objects.create(has_subscription=True, login='stud1', role=RoleChoices.STUDENT, current_month=1)
-        s2 = User.objects.create(has_subscription=True, login='stud2', role=RoleChoices.STUDENT, current_month=1)
+        s1 = create_user(has_subscription=True, login='stud1', role=RoleChoices.STUDENT, current_month=1)
+        s2 = create_user(has_subscription=True, login='stud2', role=RoleChoices.STUDENT, current_month=1)
         s1.set_password('Pass123!')
         s2.set_password('Pass123!')
         s1.save()
         s2.save()
 
         # Score adjustments: stud2 has 30, stud1 has 10
-        admin = User.objects.create(has_subscription=True, login='admin_adj', role=RoleChoices.ADMIN)
+        admin = create_user(has_subscription=True, login='admin_adj', role=RoleChoices.ADMIN)
         ScoreAdjustment.objects.create(user=s2, admin=admin, amount=30, reason='Bonus', month=1)
         ScoreAdjustment.objects.create(user=s1, admin=admin, amount=10, reason='Bonus', month=1)
 
@@ -332,7 +319,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(board[0]['totalScore'], 30)
 
     def test_08_telegram_connect_and_disconnect(self):
-        user = User.objects.create(has_subscription=True, login='tg_user', role=RoleChoices.STUDENT)
+        user = create_user(has_subscription=True, login='tg_user', role=RoleChoices.STUDENT)
         user.set_password('Pass123!')
         user.save()
 
@@ -377,11 +364,13 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(form.cleaned_data['icon_url'], '/api/v1/media/presets/icons/sparkles.svg')
 
         # 2. Test custom file upload (PNG/SVG) to MediaAsset
-        svg_content = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>'
+        output = io.BytesIO()
+        Image.new('RGB', (16, 16)).save(output, format='PNG')
+        svg_content = output.getvalue()
         uploaded_file = SimpleUploadedFile(
-            name="custom_badge.svg",
+            name="custom_badge.png",
             content=svg_content,
-            content_type="image/svg+xml"
+            content_type="image/png"
         )
         form_data2 = {
             'code': 'CUSTOM_UPLOAD_TEST',
@@ -400,7 +389,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         media_id = icon_url.split('/')[-1]
         asset = MediaAsset.objects.get(id=media_id)
         self.assertEqual(asset.kind, 'ACHIEVEMENT_ICON')
-        self.assertEqual(asset.mime_type, 'image/svg+xml')
+        self.assertEqual(asset.mime_type, 'image/webp')
 
         # 3. Test AchievementAdmin badges
         site = AdminSite()
@@ -425,14 +414,14 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         )
 
         # Create student and admin with telegram_chat_id
-        admin_user = User.objects.create(has_subscription=True,
+        admin_user = create_user(has_subscription=True,
             login='admin_notif',
             name='Админ Уведомлений',
             password_hash='hash123',
             role=RoleChoices.ADMIN,
             telegram_chat_id='111222333',
         )
-        student = User.objects.create(has_subscription=True,
+        student = create_user(has_subscription=True,
             login='student_notif',
             name='Ученик Уведомлений',
             password_hash='hash123',
@@ -602,7 +591,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         resp = self.client.post('/api/v1/auth/register', data=json.dumps(reg_payload), content_type='application/json')
         self.assertEqual(resp.status_code, 403)
         StudyGroup.objects.get_or_create(name="js-02", defaults={"month": 2})
-        user_group = User.objects.create(has_subscription=True, login="student_group_test", password_hash="hash", group_number="js-02")
+        user_group = create_user(has_subscription=True, login="student_group_test", password_hash="hash", group_number="js-02")
         self.assertEqual(user_group.current_month, 2)
         self.assertEqual(user_group.group_number, "js-02")
         self.assertIsNotNone(user_group.study_group)
@@ -618,7 +607,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         # 4. Test Penalty / Fine notification (ScoreAdjustment amount < 0)
         admin_user = User.objects.filter(role=RoleChoices.ADMIN).first()
         if not admin_user:
-            admin_user = User.objects.create(has_subscription=True, login='admin_fine', password_hash='hash', role=RoleChoices.ADMIN)
+            admin_user = create_user(has_subscription=True, login='admin_fine', password_hash='hash', role=RoleChoices.ADMIN)
         user_group.telegram_chat_id = "555666777"
         user_group.save()
 
@@ -638,7 +627,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             self.assertIn('Штраф за плагиат', msg)
 
         # 5. Test send_test_telegram_message diagnostic
-        user_no_tg = User.objects.create(has_subscription=True, login='no_tg', password_hash='hash', role=RoleChoices.STUDENT)
+        user_no_tg = create_user(has_subscription=True, login='no_tg', password_hash='hash', role=RoleChoices.STUDENT)
         ok, report = send_test_telegram_message(user_no_tg)
         self.assertFalse(ok)
         self.assertIn('не заполнен Telegram Chat ID', report)

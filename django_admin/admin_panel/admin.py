@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.utils.html import format_html_join
+from django.utils.html import format_html_join, escape
 from admin_panel.permissions import is_admin_owner
 from admin_panel.models import SubscriptionGrant
 from admin_panel.services.subscription_service import grant_subscription, normalize_username
@@ -203,7 +203,6 @@ class LessonAdminForm(forms.ModelForm):
         return cleaned_data
 
 
-@admin.register(Lesson)
 class GroupSavingAdmin(ModelAdmin):
     def save_model(self, request, obj, form, change):
         from django.core.exceptions import PermissionDenied
@@ -217,10 +216,11 @@ class GroupSavingAdmin(ModelAdmin):
             def report():
                 counts = getattr(obj, '_telegram_delivery', None)
                 if counts:
-                    self.message_user(request, f'Отправлено: {counts["sent"]}, Ошибок: {counts["errors"]}')
+                    self.message_user(request, f'Отправлено: {counts["sent"]}, Ошибок: {counts["errors"]}, В очереди: {counts.get("queued", 0)}')
             transaction.on_commit(report)
 
 
+@admin.register(Lesson)
 class LessonAdmin(GroupSavingAdmin):
     form = LessonAdminForm
     list_fullwidth = True
@@ -477,7 +477,7 @@ class ScoreAdjustmentAdmin(ModelAdmin):
 
 class PresetIconGalleryWidget(forms.Widget):
     def render(self, name, value, attrs=None, renderer=None):
-        selected_val = value or ''
+        selected_val = escape(value or '')
         cards_html = []
         for item in PRESET_ACHIEVEMENT_ICONS:
             url = item['url']
@@ -502,7 +502,7 @@ class PresetIconGalleryWidget(forms.Widget):
                 '''
             )
 
-        initial_preview = resolve_icon_preview_src(selected_val)
+        initial_preview = escape(resolve_icon_preview_src(value or ''))
         html = f'''
         <div style="display:flex;flex-direction:column;gap:14px;">
             <input type="hidden" name="{name}" id="id_{name}" value="{selected_val}" />
@@ -576,10 +576,10 @@ class AchievementAdminForm(forms.ModelForm):
         widget=PresetIconGalleryWidget(),
     )
     custom_icon_file = forms.FileField(
-        label='Загрузить свою кастомную иконку (SVG / PNG / WebP)',
+        label='Загрузить свою кастомную иконку (PNG / WebP)',
         required=False,
         help_text='Максимальный размер: 512 КБ. При загрузке файла он автоматически кодируется и надежно сохраняется в БД Neon (не пропадает при редеплое на Render).',
-        widget=forms.ClearableFileInput(attrs={'accept': '.svg,.png,.webp,image/svg+xml,image/png,image/webp'}),
+        widget=forms.ClearableFileInput(attrs={'accept': '.png,.jpg,.webp,image/png,image/jpeg,image/webp'}),
     )
 
     class Meta:
@@ -668,20 +668,20 @@ class AchievementAdminForm(forms.ModelForm):
             cleaned_data['criteria'] = auto_criteria_map.get(trigger_type, '')
 
         if uploaded:
-            max_bytes = 1024 * 1024  # 1 MB
+            max_bytes = 512 * 1024
             if uploaded.size > max_bytes:
-                raise forms.ValidationError('Размер файла иконки не должен превышать 1 МБ.')
+                raise forms.ValidationError('Размер файла иконки не должен превышать 512 КБ.')
 
             ext = os.path.splitext(uploaded.name or '')[1].lower()
             allowed_map = {
-                '.svg': 'image/svg+xml',
+
                 '.png': 'image/png',
                 '.webp': 'image/webp',
                 '.jpg': 'image/jpeg',
                 '.jpeg': 'image/jpeg',
             }
             if ext not in allowed_map:
-                raise forms.ValidationError('Разрешены только файлы форматов .svg, .png, .webp или .jpg.')
+                raise forms.ValidationError('Разрешены только файлы форматов .png, .webp или .jpg.')
 
             raw_bytes = uploaded.read()
             mime_type = allowed_map[ext]
@@ -851,7 +851,7 @@ class MediaAssetAdmin(ModelAdmin):
 class SubscriptionGrantForm(forms.ModelForm):
     class Meta:
         model = SubscriptionGrant
-        fields = ('telegram_username', 'group', 'expires_at')
+        fields = ('telegram_username', 'group', 'expires_at', 'is_active')
 
     def clean_telegram_username(self):
         return normalize_username(self.cleaned_data['telegram_username'])
@@ -878,7 +878,7 @@ class SubscriptionGrantAdmin(ModelAdmin):
         return False
 
     def save_model(self, request, obj, form, change):
-        grant = grant_subscription(obj.telegram_username, obj.group, obj.expires_at, request.user.pk)
+        grant = grant_subscription(obj.telegram_username, obj.group, obj.expires_at, request.user.pk, active=obj.is_active)
         obj.pk = grant.pk
         obj.user = grant.user
         obj.telegram_user_id = grant.telegram_user_id
@@ -912,3 +912,31 @@ for auth_model in (get_user_model(), Group):
 
         admin.site.unregister(auth_model)
         admin.site.register(auth_model, OwnerOnlyAuthAdmin)
+
+
+from admin_panel.models import TelegramOutbox
+
+@admin.register(TelegramOutbox)
+class TelegramOutboxAdmin(ModelAdmin):
+    list_display = ('id', 'chat_id', 'status', 'attempts', 'available_at', 'last_error')
+    list_filter = ('status',)
+    exclude = ('payload',)
+    readonly_fields = ('id', 'dedupe_key', 'chat_id', 'status', 'attempts', 'available_at', 'last_error', 'created_at')
+    actions = ['retry_failed']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    @admin.action(description='Повторить неудачные отправки')
+    def retry_failed(self, request, queryset):
+        from django.utils import timezone
+        queryset.filter(status='failed').update(status='pending', attempts=0, available_at=timezone.now(), last_error='')

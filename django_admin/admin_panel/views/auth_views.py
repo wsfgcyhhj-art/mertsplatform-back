@@ -1,3 +1,10 @@
+from django.conf import settings
+from django.db import transaction
+from django.middleware.csrf import get_token
+from django.views.decorators.csrf import csrf_protect
+from django.utils.decorators import method_decorator
+from admin_panel.throttles import AuthThrottle
+from admin_panel.authentication import rotate_refresh, revoke_session
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
@@ -20,7 +27,7 @@ def set_auth_cookies(response, refresh_token: str):
         max_age=30 * 24 * 3600,
         httponly=True,
         samesite='Lax',
-        secure=False,
+        secure=True,
     )
 
 
@@ -61,7 +68,9 @@ class RegisterView(APIView):
         return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
 
 
+@method_decorator(csrf_protect, name='dispatch')
 class LoginView(APIView):
+    throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
@@ -71,6 +80,7 @@ class LoginView(APIView):
         request=LoginSerializer,
         responses={200: dict, 401: dict}
     )
+    @transaction.atomic
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if not serializer.is_valid():
@@ -82,13 +92,17 @@ class LoginView(APIView):
         login = serializer.validated_data['login'].strip()
         password = serializer.validated_data['password']
 
-        user = User.objects.filter(login=login).first()
+        user = User.objects.select_for_update().filter(login=login).first()
         if not user or not user.check_password(password):
             return Response(
                 {"statusCode": 401, "error": "Unauthorized", "message": "Invalid credentials"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        # Upgrade legacy bcrypt only after successful verification of the plain password.
+        if user.password_hash.startswith(('$2a$', '$2b$', '$2y$')):
+            user.set_password(password)
+            user.save()
         streak_count = update_user_streak(user)
         access_token, refresh_token, session = generate_tokens_for_user(user)
         user_data = UserProfileSerializer(user, context={'request': request}).data
@@ -102,7 +116,9 @@ class LoginView(APIView):
         return response
 
 
+@method_decorator(csrf_protect, name='dispatch')
 class RefreshTokenView(APIView):
+    throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
@@ -123,19 +139,10 @@ class RefreshTokenView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        session = Session.objects.filter(refresh_token=incoming_token).select_related('user').first()
-        if not session or session.expires_at < timezone.now():
-            if session:
-                session.delete()
-            return Response(
-                {"statusCode": 401, "error": "Unauthorized", "message": "Invalid or expired refresh token"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        user = session.user
-        session.delete()  # Rotate token
-
-        access_token, new_refresh_token, new_session = generate_tokens_for_user(user)
+        rotated = rotate_refresh(incoming_token)
+        if not rotated:
+            return Response({'message': 'Invalid or expired refresh token'}, status=401)
+        access_token, new_refresh_token, new_session = rotated
         response = Response({
             "accessToken": access_token,
             "refreshToken": new_refresh_token,
@@ -144,7 +151,9 @@ class RefreshTokenView(APIView):
         return response
 
 
+@method_decorator(csrf_protect, name='dispatch')
 class LogoutView(APIView):
+    throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
@@ -159,9 +168,18 @@ class LogoutView(APIView):
             request.COOKIES.get('refreshToken')
             or request.data.get('refreshToken')
         )
-        if incoming_token:
-            Session.objects.filter(refresh_token=incoming_token).delete()
+        authorization = request.headers.get('Authorization', '')
+        access = authorization[7:] if authorization.startswith('Bearer ') else None
+        revoke_session(incoming_token, access)
 
         response = Response({"message": "Successfully logged out"})
         response.delete_cookie('refreshToken')
         return response
+
+
+class CsrfTokenView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+    @extend_schema(responses={200: dict})
+    def get(self, request):
+        return Response({'csrfToken': get_token(request)})

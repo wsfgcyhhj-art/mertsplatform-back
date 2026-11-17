@@ -72,7 +72,7 @@ export const ProfileBanner = () => {
         try {
             setUploading(true);
             const token = extractAuthToken();
-            const res = await api.patch('/users/me/banner', { bannerUrl: presetUrl });
+            const res = await api.patch('/users/me', { bannerUrl: presetUrl });
             if (res.data?.user) {
                 addUser(res.data.user, token);
                 addBannerUrlImg(res.data.user.bannerUrl || '');

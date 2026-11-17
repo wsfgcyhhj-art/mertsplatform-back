@@ -25,21 +25,34 @@ _load_env_file(BASE_DIR / '.env')
 _load_env_file(BASE_DIR.parent / '.env')
 _load_env_file(BASE_DIR.parent / 'backend' / '.env')
 
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure--z%w@n92g0x!2qz3+n=ak-5d0f4!#&o+xb(&#e+!=8(vj_3d7u')
-
-DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
-
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver', '.onrender.com']
-
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+import sys
+import secrets
+from django.core.exceptions import ImproperlyConfigured
+TESTING = 'test' in sys.argv
+SECRET_KEY = secrets.token_urlsafe(64) if TESTING else os.getenv("SECRET_KEY", "")
+if len(SECRET_KEY) < 50 or SECRET_KEY.startswith('django-insecure-'):
+    raise ImproperlyConfigured('Set SECRET_KEY to a random secret of at least 50 characters.')
+DEBUG = False if TESTING else os.getenv('DEBUG', 'False').lower() in ('true', '1')
+ALLOWED_HOSTS = [v.strip() for v in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if v.strip()]
+if TESTING:
+    ALLOWED_HOSTS.append('testserver')
 if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
-    ALLOWED_HOSTS.append(os.getenv('RENDER_EXTERNAL_HOSTNAME', ''))
-
-CSRF_TRUSTED_ORIGINS = [
-    'https://*.onrender.com',
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-]
+    ALLOWED_HOSTS.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+CSRF_TRUSTED_ORIGINS = [v for v in os.getenv('CSRF_TRUSTED_ORIGINS', FRONTEND_URL).split(',') if v]
+CORS_ALLOWED_ORIGINS = [v for v in os.getenv('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if v]
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+SECURE_SSL_REDIRECT = not (TESTING or DEBUG)
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+# Enable only behind a proxy that strips client-supplied forwarding headers.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if os.getenv('TRUST_HTTPS_PROXY') == '1' else None
+SECURE_REFERRER_POLICY = 'same-origin'
 
 INSTALLED_APPS = [
     "unfold",
@@ -66,6 +79,7 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+    'admin_panel.throttles.AdminLoginThrottleMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -96,8 +110,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': ':memory:',
-    } if 'test' in sys.argv else dj_database_url.config(
-        default=os.getenv('DATABASE_URL'),
+    } if TESTING and not os.getenv('TEST_DATABASE_URL') else dj_database_url.parse(
+        os.getenv('TEST_DATABASE_URL') if TESTING else os.getenv('DATABASE_URL', ''),
         conn_max_age=600,
         ssl_require=True
     )
@@ -109,6 +123,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 12},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -280,7 +295,7 @@ REST_FRAMEWORK = {
         'admin_panel.authentication.BcryptJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_FILTER_BACKENDS': (
@@ -300,13 +315,13 @@ SPECTACULAR_SETTINGS = {
     'COMPONENT_SPLIT_REQUEST': True,
     'SWAGGER_UI_SETTINGS': {
         'deepLinking': True,
-        'persistAuthorization': True,
+        'persistAuthorization': False,
         'displayOperationId': True,
     },
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': False,
@@ -317,7 +332,7 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept',
@@ -329,6 +344,7 @@ CORS_ALLOW_HEADERS = [
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
+    'idempotency-key',
 ]
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
@@ -344,3 +360,7 @@ LOGGING = {
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'loggers': {'telegram_service': {'handlers': ['console'], 'level': 'INFO', 'propagate': False}},
 }
+
+TELEGRAM_OUTBOX_EAGER = not TESTING
+AUTH_RATE_LIMIT = 10
+AUTH_TRUSTED_PROXY_HOPS = max(0, int(os.getenv('AUTH_TRUSTED_PROXY_HOPS', '0')))

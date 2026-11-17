@@ -1,0 +1,30 @@
+import { test, expect } from '@playwright/test';
+
+test('temporary password, mandatory change, refresh, logout and server revocation', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByPlaceholder('Логин', { exact: true }).fill('browser_student');
+  await page.getByPlaceholder('Пароль', { exact: true }).fill('Temporary-For-Browser-2026!');
+  const firstLogin = page.waitForResponse(r => r.url().endsWith('/auth/login') && r.status() === 200);
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  const firstToken = (await (await firstLogin).json()).accessToken;
+  await expect(page.getByText('Установите новый пароль')).toBeVisible();
+  await page.locator('input[autocomplete="new-password"]').fill('Changed-Browser-Password-2026!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page.getByPlaceholder('Логин', { exact: true })).toBeVisible();
+  expect((await page.request.get('/api/v1/users/me', { headers: { Authorization: `Bearer ${firstToken}` } })).status()).toBe(401);
+  await page.getByPlaceholder('Логин', { exact: true }).fill('browser_student');
+  await page.getByPlaceholder('Пароль', { exact: true }).fill('Changed-Browser-Password-2026!');
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page).toHaveURL(/\/lessons$/);
+  const refreshed = page.waitForResponse(r => r.url().endsWith('/auth/refresh') && r.status() === 200);
+  await page.reload();
+  const currentToken = (await (await refreshed).json()).accessToken;
+  await expect(page.getByText('Выйти', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => ['accessToken', 'token', 'user-merts-chat'].map(k => localStorage.getItem(k)))).toEqual([null, null, null]);
+  const logout = page.waitForResponse(r => r.url().endsWith('/auth/logout'));
+  await page.getByText('Выйти', { exact: true }).click();
+  expect((await logout).status()).toBe(200);
+  expect((await page.request.get('/api/v1/users/me', { headers: { Authorization: `Bearer ${currentToken}` } })).status()).toBe(401);
+  await page.reload();
+  await expect(page.getByPlaceholder('Логин', { exact: true })).toBeVisible();
+});

@@ -1,3 +1,15 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
+
+
+def validate_new_password(value):
+    try:
+        validate_password(value)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(exc.messages)
+    return value
+
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
 from admin_panel.models import (
@@ -87,16 +99,16 @@ class RegisterSerializer(serializers.Serializer):
 
 class LoginSerializer(serializers.Serializer):
     login = serializers.CharField()
-    password = serializers.CharField()
+    password = serializers.CharField(max_length=1024, trim_whitespace=False)
 
 
 class ChangePasswordSerializer(serializers.Serializer):
     currentPassword = serializers.CharField()
-    newPassword = serializers.CharField(min_length=8)
+    newPassword = serializers.CharField(min_length=12, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
 
 
 class LessonSerializer(serializers.ModelSerializer):
-    videoLink = serializers.CharField(source='video_link')
+    videoLink = serializers.URLField(source='video_link')
     youtubeId = serializers.CharField(source='youtube_id')
     groupNumber = serializers.CharField(source='group_number')
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
@@ -119,8 +131,8 @@ class LessonSerializer(serializers.ModelSerializer):
 
 class TaskSerializer(serializers.ModelSerializer):
     groupNumber = serializers.CharField(source="group_number", required=False, allow_blank=True, allow_null=True)
-    exampleLink = serializers.CharField(source='example_link', allow_null=True, required=False)
-    attachmentLink = serializers.CharField(source='attachment_link', allow_null=True, required=False)
+    exampleLink = serializers.URLField(source='example_link', allow_null=True, required=False)
+    attachmentLink = serializers.URLField(source='attachment_link', allow_null=True, required=False)
     hasScore = serializers.BooleanField(source='has_score', default=False)
     maxScore = serializers.IntegerField(source='max_score', allow_null=True, required=False)
     isBonus = serializers.BooleanField(source='is_bonus', default=False)
@@ -262,3 +274,18 @@ class UserAchievementSerializer(serializers.ModelSerializer):
 class EmptyRequestSerializer(serializers.Serializer):
     """No structured request body for endpoints documented with explicit responses."""
     pass
+
+
+class SubmissionReviewSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=SubmissionStatusChoices.choices, required=False)
+    score = serializers.IntegerField(min_value=0, required=False)
+    reviewerComment = serializers.CharField(max_length=10000, required=False, allow_null=True, allow_blank=True)
+    voiceFeedbackUrl = serializers.CharField(max_length=2048, required=False, allow_null=True, allow_blank=True,
+                                            validators=[URLValidator(schemes=['http', 'https'])])
+
+
+class ScoreAdjustmentRequestSerializer(serializers.Serializer):
+    userId = serializers.CharField(max_length=64)
+    amount = serializers.IntegerField(min_value=-10000, max_value=10000)
+    reason = serializers.CharField(max_length=5000)
+    month = serializers.IntegerField(min_value=1, max_value=24, default=1)

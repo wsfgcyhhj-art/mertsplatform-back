@@ -8,7 +8,7 @@ import { IoMdExit } from "react-icons/io";
 import { ProfileImgMobile } from "./ProfileImgMobile.jsx";
 import { HiMiniQuestionMarkCircle } from "react-icons/hi2";
 import { useFindUser } from "../store/userStore.js";
-import { api } from "../api/client.js";
+import { api, extractAuthToken } from "../api/client.js";
 import { showAchievementToast } from "./AchievementToast.jsx";
 
 function getStreakWord(count) {
@@ -32,7 +32,7 @@ export const Header = () => {
         let isMounted = true;
         const fetchMe = async () => {
             try {
-                const res = await api.get('/me');
+                const res = await api.get('/users/me');
                 if (isMounted && res.data?.user) {
                     const resolvedStreak = res.data?.stats?.streakCount ?? res.data?.user?.streakCount ?? 0;
                     addUser({
@@ -46,7 +46,7 @@ export const Header = () => {
             }
         };
 
-        const token = localStorage.getItem('accessToken');
+        const token = extractAuthToken();
         if (token) {
             fetchMe();
         }
@@ -69,7 +69,7 @@ export const Header = () => {
             clickCountRef.current = 0;
             claimingRef.current = true;
             try {
-                const res = await api.post('/me/claim-easter-egg');
+                const res = await api.post('/users/me/easter-egg');
                 if (res.data?.achievement) {
                     showAchievementToast({
                         title: 'Любопытный хакер',
@@ -148,7 +148,8 @@ export const Header = () => {
         });
     }
 
-    const exit = () => {
+    const exit = async () => {
+        try { await api.post('/auth/logout'); } catch { window.alert('Не удалось завершить сессию'); return; }
         removeUser();
         localStorage.removeItem('user-merts-chat');
         navigate('/auth');

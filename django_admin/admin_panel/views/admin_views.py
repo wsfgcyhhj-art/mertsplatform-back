@@ -1,3 +1,6 @@
+from django.db import transaction
+from rest_framework import serializers
+from admin_panel.serializers import validate_new_password
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.permissions import is_owner
 from rest_framework.views import APIView
@@ -15,6 +18,7 @@ from admin_panel.models import (
 from admin_panel.serializers import (
     UserProfileSerializer,
     ScoreAdjustmentSerializer,
+    ScoreAdjustmentRequestSerializer,
 )
 
 
@@ -76,6 +80,10 @@ class AdminUsersListView(APIView):
             group_number=request.data.get('groupNumber') or 'ALL',
             current_month=request.data.get('currentMonth', 1),
         )
+        try:
+            validate_new_password(password)
+        except serializers.ValidationError as exc:
+            return Response({'message': exc.detail}, status=400)
         user.set_password(password)
         user.save()
 
@@ -107,7 +115,7 @@ class AdminUserRoleView(APIView):
         role = request.data.get('role', '').upper()
         if role in RoleChoices.values:
             target_user.role = role
-            target_user.save()
+            target_user.save(update_fields=['role', 'updated_at'])
 
         return Response(UserProfileSerializer(target_user, context={'request': request}).data)
 
@@ -116,7 +124,9 @@ class AdminScoreAdjustmentView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="admin_score_adjustment", summary="Начисление или списание бонусных баллов ментором", responses={201: ScoreAdjustmentSerializer})
+    @extend_schema(operation_id="admin_score_adjustment", summary="Начисление или списание бонусных баллов ментором",
+                   request=ScoreAdjustmentRequestSerializer, responses={201: ScoreAdjustmentSerializer},
+                   parameters=[OpenApiParameter('Idempotency-Key', str, OpenApiParameter.HEADER, required=True)])
     def post(self, request):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -124,10 +134,12 @@ class AdminScoreAdjustmentView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        user_id = request.data.get('userId')
-        amount = request.data.get('amount')
-        reason = (request.data.get('reason') or '').strip()
-        month = request.data.get('month', 1)
+        body = ScoreAdjustmentRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        user_id = body.validated_data['userId']
+        amount = body.validated_data['amount']
+        reason = body.validated_data['reason']
+        month = body.validated_data['month']
 
         if not user_id or amount is None or not reason:
             return Response(
@@ -143,13 +155,21 @@ class AdminScoreAdjustmentView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        adj = ScoreAdjustment.objects.create(
-            user=student,
-            admin=request.user,
-            amount=int(amount),
-            reason=reason,
-            month=int(month),
-        )
+        key = request.headers.get('Idempotency-Key', '')
+        if not key or len(key) > 100:
+            return Response({'message': 'Idempotency-Key is required (max 100 characters).'}, status=400)
+        try:
+            amount, month = int(amount), int(month)
+            if not -10000 <= amount <= 10000 or not 1 <= month <= 24:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({'message': 'Invalid amount or month'}, status=400)
+        with transaction.atomic():
+            adj, created = ScoreAdjustment.objects.get_or_create(
+                idempotency_key=key,
+                defaults=dict(user=student, admin=request.user, amount=amount, reason=reason, month=month))
+            if (adj.user_id, adj.admin_id, adj.amount, adj.reason, adj.month) != (student.pk, request.user.pk, amount, reason, month):
+                return Response({'message': 'Idempotency key conflicts with another request'}, status=409)
 
         serializer = ScoreAdjustmentSerializer(adj)
         return Response(serializer.data, status=status.HTTP_201_CREATED)

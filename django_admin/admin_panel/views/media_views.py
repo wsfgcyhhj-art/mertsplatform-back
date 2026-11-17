@@ -44,6 +44,8 @@ class MediaAssetDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if asset.mime_type not in ('image/webp', 'image/png', 'image/jpeg', 'image/gif'):
+            return Response({'message': 'Unsupported legacy media'}, status=415)
         data_bytes = bytes(asset.data)
         response = HttpResponse(data_bytes, content_type=asset.mime_type)
         response['Content-Length'] = len(data_bytes)

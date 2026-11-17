@@ -9,7 +9,8 @@ async function main() {
 
   // 1. Создание дефолтного администратора
   const adminLogin = 'admin';
-  const adminPassword = 'adminPassword123';
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!adminPassword) throw new Error('SEED_ADMIN_PASSWORD is required');
   const passwordHash = await bcrypt.hash(adminPassword, 10);
 
   const admin = await prisma.user.upsert({
@@ -29,7 +30,6 @@ async function main() {
 
   console.log(`✅ Администратор готов:`);
   console.log(`   Логин:  ${admin.login}`);
-  console.log(`   Пароль: ${adminPassword}`);
   console.log(`   Роль:   ${admin.role}`);
 
   // 2. Инициализация дефолтных ачивок без удаления кастомных ачивок администратора

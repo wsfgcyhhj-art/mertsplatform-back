@@ -84,7 +84,7 @@ export const StudentsTab = () => {
 
   // Начисление баллов
   const openScoreModal = (user) => {
-    setScoreModalUser(user);
+    setScoreModalUser({...user, adjustmentKey: crypto.randomUUID()});
     scoreForm.resetFields();
     scoreForm.setFieldsValue({
       amount: 10,
@@ -97,11 +97,12 @@ export const StudentsTab = () => {
       const values = await scoreForm.validateFields();
       setSubmittingScore(true);
 
-      await api.post(`/admin/users/${scoreModalUser.id}/score-adjust`, {
+      await api.post('/admin/score-adjustments', {
+        userId: scoreModalUser.id,
         amount: Number(values.amount),
         reason: values.reason.trim(),
         month: Number(values.month),
-      });
+      }, {headers: {'Idempotency-Key': scoreModalUser.adjustmentKey}});
 
       message.success('Баллы успешно скорректированы');
       setScoreModalUser(null);

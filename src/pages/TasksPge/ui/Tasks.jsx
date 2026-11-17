@@ -1,3 +1,4 @@
+import { safeUrl } from '../../../utils/safeUrl.js';
 import { useState, useEffect } from "react";
 import cls from "../styles/task.module.scss";
 import { IoCheckmarkDoneCircleOutline, IoEyeSharp } from "react-icons/io5";
@@ -195,7 +196,7 @@ export const TaskS = () => {
                                             {t.exampleLink && (
                                                 <button
                                                     className={cls.button_primer}
-                                                    onClick={() => window.open(t.exampleLink, "_blank")}
+                                                    onClick={() => window.open(safeUrl(t.exampleLink), "_blank", "noopener,noreferrer")}
                                                 >
                                                     <IoEyeSharp />
                                                     Пример
@@ -244,7 +245,7 @@ export const TaskS = () => {
                                             <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '8px' }}>
                                                 Сданное решение:{' '}
                                                 <a
-                                                    href={sub.solutionLink}
+                                                    href={safeUrl(sub.solutionLink)}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                     style={{ color: 'var(--primary, #f59e0b)' }}
@@ -373,7 +374,7 @@ export const TaskS = () => {
                                         </div>
 
                                         <div style={{ marginTop: '8px', fontSize: '13px' }}>
-                                            <a href={subItem.solutionLink} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>
+                                            <a href={safeUrl(subItem.solutionLink)} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>
                                                 {subItem.solutionLink}
                                             </a>
                                         </div>

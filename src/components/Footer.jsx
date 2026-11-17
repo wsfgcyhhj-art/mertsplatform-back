@@ -22,7 +22,7 @@ export const Footer = () => {
             clickCountRef.current = 0;
             claimingRef.current = true;
             try {
-                const res = await api.post('/me/claim-easter-egg');
+                const res = await api.post('/users/me/easter-egg');
                 if (res.data?.achievement) {
                     showAchievementToast({
                         title: 'Любопытный хакер',

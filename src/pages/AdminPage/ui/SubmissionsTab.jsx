@@ -1,3 +1,4 @@
+import { safeUrl } from '../../../utils/safeUrl.js';
 import { useState, useEffect } from 'react';
 import {
   Table,
@@ -160,7 +161,7 @@ export const SubmissionsTab = () => {
       dataIndex: 'solutionLink',
       key: 'solutionLink',
       render: (link) => (
-        <Link href={link} target="_blank" rel="noopener noreferrer">
+        <Link href={safeUrl(link)} target="_blank" rel="noopener noreferrer">
           <GithubOutlined style={{ marginRight: 6 }} />
           Открыть репозиторий
         </Link>
@@ -258,7 +259,7 @@ export const SubmissionsTab = () => {
               </Paragraph>
               <Paragraph>
                 <Text strong>Ссылка на решение: </Text>
-                <Link href={selectedSub.solutionLink} target="_blank" rel="noopener noreferrer">
+                <Link href={safeUrl(selectedSub.solutionLink)} target="_blank" rel="noopener noreferrer">
                   <GithubOutlined /> {selectedSub.solutionLink}
                 </Link>
               </Paragraph>

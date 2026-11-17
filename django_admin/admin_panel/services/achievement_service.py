@@ -195,13 +195,6 @@ def award_achievement(user_id: str, code: str) -> Optional[Dict[str, Any]]:
     if not created:
         return None
 
-    # Try sending telegram notification if user linked their telegram
-    try:
-        from admin_panel.services.telegram_service import notify_achievement_unlocked
-        notify_achievement_unlocked(user_id, ach)
-    except Exception:
-        pass
-
     return {
         'id': ach.id,
         'code': ach.code,
@@ -256,7 +249,10 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
 
     adj_sum = ScoreAdjustment.objects.filter(user_id=user_id).aggregate(s=Sum('amount'))['s'] or 0
     accepted_subs = [s for s in all_submissions if s.status == SubmissionStatusChoices.ACCEPTED]
-    sub_score = sum((s.score or 0) for s in accepted_subs)
+    latest = {}
+    for submission in sorted(accepted_subs, key=lambda s: (s.version, s.created_at, s.id)):
+        latest[submission.task_id] = submission
+    sub_score = sum((s.score or 0) for s in latest.values())
     total_score = sub_score + adj_sum
 
     # Group by task

@@ -1,3 +1,4 @@
+from django.db import transaction
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from rest_framework.views import APIView
@@ -13,7 +14,7 @@ from admin_panel.serializers import (
     ChangePasswordSerializer,
     UserAchievementSerializer,
 )
-from admin_panel.services.media_service import save_optimized_media_asset
+from admin_panel.services.media_service import save_optimized_media_asset, read_upload
 from admin_panel.services.achievement_service import award_achievement, evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.telegram_service import get_bot_username
 
@@ -41,18 +42,22 @@ class CurrentUserView(APIView):
     @extend_schema(operation_id="users_me_update", summary="Обновить данные профиля (имя, контакты, оформление)", responses={200: UserProfileSerializer})
     def patch(self, request):
         user = request.user
-        allowed_fields = ('name', 'telegram', 'group_number', 'avatar_url', 'banner_url')
         field_map = {
             'name': 'name',
             'telegram': 'telegram',
             'avatarUrl': 'avatar_url',
             'bannerUrl': 'banner_url',
         }
+        from urllib.parse import urlsplit
+        for key in ('avatarUrl', 'bannerUrl'):
+            value = request.data.get(key)
+            if value and (not isinstance(value, str) or urlsplit(value).scheme not in ('', 'https', 'http') or str(value).startswith('//')):
+                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
         for json_key, model_key in field_map.items():
             if json_key in request.data:
                 setattr(user, model_key, request.data[json_key] or None)
 
-        user.save()
+        user.save(update_fields=[field_map[key] for key in field_map if key in request.data] + ['updated_at'])
         data = UserProfileSerializer(user, context={'request': request}).data
         return Response({"user": data})
 
@@ -62,6 +67,7 @@ class ChangePasswordView(APIView):
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_change_password", summary="Смена пароля пользователя", request=ChangePasswordSerializer, responses={200: dict})
+    @transaction.atomic
     def put(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
         if not serializer.is_valid():
@@ -70,7 +76,7 @@ class ChangePasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = request.user
+        user = User.objects.select_for_update().get(pk=request.user.pk)
         current_password = serializer.validated_data['currentPassword']
         new_password = serializer.validated_data['newPassword']
 
@@ -103,7 +109,7 @@ class AvatarUploadView(APIView):
             )
 
         try:
-            buffer = file_obj.read()
+            buffer = read_upload(file_obj, 'AVATAR')
             mime_type = file_obj.content_type or 'image/jpeg'
             asset = save_optimized_media_asset(
                 buffer=buffer,
@@ -111,13 +117,12 @@ class AvatarUploadView(APIView):
                 kind='AVATAR',
                 owner_id=request.user.id,
             )
-            request.user.avatar_url = asset['url']
-            request.user.save()
+
             return Response({
                 "avatarUrl": asset['url'],
                 "asset": asset,
             })
-        except Exception as e:
+        except ValueError as e:
             return Response(
                 {"statusCode": 400, "error": "Bad Request", "message": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -139,7 +144,7 @@ class BannerUploadView(APIView):
             )
 
         try:
-            buffer = file_obj.read()
+            buffer = read_upload(file_obj, 'BANNER')
             mime_type = file_obj.content_type or 'image/jpeg'
             asset = save_optimized_media_asset(
                 buffer=buffer,
@@ -147,13 +152,12 @@ class BannerUploadView(APIView):
                 kind='BANNER',
                 owner_id=request.user.id,
             )
-            request.user.banner_url = asset['url']
-            request.user.save()
+
             return Response({
                 "bannerUrl": asset['url'],
                 "asset": asset,
             })
-        except Exception as e:
+        except ValueError as e:
             return Response(
                 {"statusCode": 400, "error": "Bad Request", "message": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -202,7 +206,7 @@ class TelegramConnectView(APIView):
         user = request.user
         code = uuid.uuid4().hex[:16]
         user.telegram_auth_code = code
-        user.save()
+        user.save(update_fields=['telegram_auth_code', 'updated_at'])
 
         bot_username = get_bot_username()
         link = f"https://t.me/{bot_username}?start={code}"
@@ -223,5 +227,5 @@ class TelegramDisconnectView(APIView):
         user.telegram_chat_id = None
         user.telegram_username = None
         user.telegram_auth_code = None
-        user.save()
+        user.save(update_fields=['telegram_chat_id', 'telegram_username', 'telegram_auth_code', 'updated_at'])
         return Response({"success": True, "message": "Telegram успешно отвязан"})
