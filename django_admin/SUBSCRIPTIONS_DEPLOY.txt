@@ -86,3 +86,17 @@ and build-time dependents; GHSA-fc5q-39xc-vjpf has no patched version as audited
 Do not expose Vite's dev server publicly or accept untrusted glob patterns in builds.
 Production serves static dist/ output. Recheck the advisory before future upgrades:
 https://github.com/advisories/GHSA-fc5q-39xc-vjpf
+
+Render webhook setup (run in a private shell with environment variables set)
+  export BACKEND_URL="https://YOUR-SERVICE.onrender.com"
+  curl --fail-with-body --silent --show-error \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+    --data-urlencode "url=${BACKEND_URL}/api/v1/telegram/webhook" \
+    --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
+    --data-urlencode 'allowed_updates=["message"]'
+  curl --fail-with-body --silent --show-error \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+Expect ok=true; check result.url and last_error_message. Do not run polling
+concurrently. Never paste bot tokens or webhook secrets into tracked files.
+TELEGRAM_WEBHOOK_SECRET must use 1-256 characters from A-Z, a-z, 0-9, _ and -.
+Optional TELEGRAM_BOT_USERNAME contains the bot username without @.
