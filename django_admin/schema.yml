@@ -53,6 +53,41 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
+  /api/v1/admin/subscriptions/grant:
+    post:
+      operationId: v1_admin_subscriptions_grant_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/GrantRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GrantRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
   /api/v1/admin/users:
     get:
       operationId: admin_users_list
@@ -189,6 +224,38 @@ paths:
         required: true
       responses:
         '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/auth/reset-password:
+    post:
+      operationId: v1_auth_reset_password_create
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResetRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResetRequest'
+        required: true
+      responses:
+        '200':
           content:
             application/json:
               schema:
@@ -386,11 +453,27 @@ paths:
       summary: Сдать решение задания на проверку ментору
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SubmissionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SubmissionRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+          description: ''
   /api/v1/submissions/{id}:
     get:
       operationId: submission_detail
@@ -423,11 +506,26 @@ paths:
         required: true
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSubmissionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSubmissionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSubmissionRequest'
       security:
       - jwtAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+          description: ''
   /api/v1/system/config:
     get:
       operationId: v1_system_config_retrieve
@@ -465,11 +563,27 @@ paths:
       summary: Создать новое задание (только для ментора/админа)
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
   /api/v1/tasks/{id}:
     get:
       operationId: task_detail
@@ -502,11 +616,26 @@ paths:
         required: true
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTaskRequest'
       security:
       - jwtAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          description: ''
     delete:
       operationId: v1_tasks_destroy
       summary: Удалить задание (только для ментора/админа)
@@ -559,6 +688,17 @@ paths:
       summary: Обновить данные профиля (имя, контакты, оформление)
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserProfileRequest'
       security:
       - jwtAuth: []
       responses:
@@ -783,6 +923,23 @@ components:
       required:
       - currentPassword
       - newPassword
+    GrantRequest:
+      type: object
+      properties:
+        telegram_username:
+          type: string
+          minLength: 1
+          maxLength: 33
+        group_id:
+          type: string
+          minLength: 1
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - group_id
+      - telegram_username
     Lesson:
       type: object
       properties:
@@ -837,6 +994,117 @@ components:
       required:
       - login
       - password
+    PatchedSubmissionRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+          minLength: 1
+        taskId:
+          type: string
+          minLength: 1
+        version:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Попытка (версия)
+        comment:
+          type: string
+          nullable: true
+          title: Комментарий студента
+        solutionLink:
+          type: string
+          minLength: 1
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          title: Статус
+        score:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Баллы
+        reviewerComment:
+          type: string
+          nullable: true
+          minLength: 1
+        voiceFeedbackUrl:
+          type: string
+          nullable: true
+          minLength: 1
+    PatchedTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          title: Название задания
+          maxLength: 255
+        description:
+          type: string
+          minLength: 1
+          title: Описание задания
+        topic:
+          type: string
+          minLength: 1
+          title: Тема (стек)
+          maxLength: 128
+        groupNumber:
+          type: string
+          nullable: true
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        exampleLink:
+          type: string
+          nullable: true
+          minLength: 1
+        attachmentLink:
+          type: string
+          nullable: true
+          minLength: 1
+        hasScore:
+          type: boolean
+          default: false
+        maxScore:
+          type: integer
+          nullable: true
+        isBonus:
+          type: boolean
+          default: false
+    PatchedUserProfileRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          minLength: 1
+          title: Логин
+          maxLength: 255
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: Роль
+        name:
+          type: string
+          nullable: true
+          title: Имя
+          maxLength: 255
+        telegram:
+          type: string
+          nullable: true
+          maxLength: 255
+        created_at:
+          type: string
+          format: date-time
+          title: Дата создания
     RegisterRequest:
       type: object
       properties:
@@ -868,6 +1136,21 @@ components:
       - groupNumber
       - login
       - password
+    ResetRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 128
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+          maxLength: 255
+      required:
+      - new_password
+      - token
     RoleEnum:
       enum:
       - STUDENT
@@ -946,6 +1229,38 @@ components:
       required:
       - id
       - title
+    ShortTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          title: Название задания
+          maxLength: 255
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        has_score:
+          type: boolean
+          title: Оценивается баллами
+        max_score:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Макс. балл
+        is_bonus:
+          type: boolean
+          title: Бонусное задание
+      required:
+      - title
     ShortUser:
       type: object
       properties:
@@ -976,6 +1291,34 @@ components:
           maxLength: 64
       required:
       - id
+      - login
+    ShortUserRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          minLength: 1
+          title: Логин
+          maxLength: 255
+        name:
+          type: string
+          nullable: true
+          title: Имя
+          maxLength: 255
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: Роль
+        avatar_url:
+          type: string
+          nullable: true
+          title: URL аватара
+        group_number:
+          type: string
+          nullable: true
+          title: Номер группы
+          maxLength: 64
+      required:
       - login
     StatusEnum:
       enum:
@@ -1062,6 +1405,49 @@ components:
       - updatedAt
       - user
       - userId
+    SubmissionRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+          minLength: 1
+        taskId:
+          type: string
+          minLength: 1
+        version:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Попытка (версия)
+        comment:
+          type: string
+          nullable: true
+          title: Комментарий студента
+        solutionLink:
+          type: string
+          minLength: 1
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          title: Статус
+        score:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Баллы
+        reviewerComment:
+          type: string
+          nullable: true
+          minLength: 1
+        voiceFeedbackUrl:
+          type: string
+          nullable: true
+          minLength: 1
+      required:
+      - solutionLink
+      - taskId
+      - userId
     Task:
       type: object
       properties:
@@ -1079,6 +1465,9 @@ components:
           type: string
           title: Тема (стек)
           maxLength: 128
+        groupNumber:
+          type: string
+          nullable: true
         month:
           type: integer
           maximum: 2147483647
@@ -1122,6 +1511,57 @@ components:
       - title
       - topic
       - updatedAt
+    TaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          title: Название задания
+          maxLength: 255
+        description:
+          type: string
+          minLength: 1
+          title: Описание задания
+        topic:
+          type: string
+          minLength: 1
+          title: Тема (стек)
+          maxLength: 128
+        groupNumber:
+          type: string
+          nullable: true
+        month:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Месяц
+        order:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Порядок
+        exampleLink:
+          type: string
+          nullable: true
+          minLength: 1
+        attachmentLink:
+          type: string
+          nullable: true
+          minLength: 1
+        hasScore:
+          type: boolean
+          default: false
+        maxScore:
+          type: integer
+          nullable: true
+        isBonus:
+          type: boolean
+          default: false
+      required:
+      - description
+      - title
+      - topic
     UserAchievement:
       type: object
       properties:
@@ -1168,6 +1608,16 @@ components:
           type: string
           nullable: true
           maxLength: 255
+        has_subscription:
+          type: boolean
+          readOnly: true
+        subscription_expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+        must_change_password:
+          type: boolean
+          readOnly: true
         isTelegramConnected:
           type: boolean
           readOnly: true
@@ -1208,14 +1658,21 @@ components:
       - currentMonth
       - groupId
       - groupNumber
+      - has_subscription
       - id
       - isTelegramConnected
       - login
+      - must_change_password
       - streakCount
+      - subscription_expires_at
       - tasksAcceptedCount
       - telegramUsername
       - totalScore
   securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
     jwtAuth:
       type: http
       scheme: bearer

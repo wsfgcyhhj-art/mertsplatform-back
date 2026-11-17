@@ -52,6 +52,10 @@ class User(models.Model):
     login = models.CharField('Логин', max_length=255, unique=True)
     password_hash = models.CharField('Хэш пароля (bcrypt)', max_length=255)
     role = models.CharField('Роль', max_length=32, choices=RoleChoices.choices, default=RoleChoices.STUDENT)
+    has_subscription = models.BooleanField(default=False, db_default=False)
+    subscription_expires_at = models.DateTimeField(null=True, blank=True)
+    must_change_password = models.BooleanField(default=False, db_default=False)
+    password_uses_sha256 = models.BooleanField(default=False, db_default=False)
     name = models.CharField('Имя', max_length=255, blank=True, null=True)
     telegram = models.CharField('Telegram', max_length=255, blank=True, null=True)
     telegram_chat_id = models.CharField(
@@ -128,6 +132,9 @@ class User(models.Model):
             return False
         import bcrypt
         try:
+            if self.password_uses_sha256 and len(raw_password) != 64:
+                import hashlib
+                raw_password = hashlib.sha256(raw_password.encode()).hexdigest()
             return bcrypt.checkpw(raw_password.encode('utf-8'), self.password_hash.encode('utf-8'))
         except Exception:
             return False
@@ -154,12 +161,7 @@ class User(models.Model):
             self.group_number = self.study_group.name
         elif self.group_number:
             self.group_number = self.group_number.strip()
-            try:
-                from admin_panel.models import StudyGroup
-                sg, _ = StudyGroup.objects.get_or_create(name=self.group_number)
-                self.study_group = sg
-            except Exception:
-                pass
+            self.study_group = StudyGroup.objects.filter(name=self.group_number).first()
         if self.group_number and (not self.current_month or self.current_month == 1):
             from admin_panel.services.group_service import parse_month_from_group_name
             extracted = parse_month_from_group_name(self.group_number)
@@ -196,6 +198,13 @@ class Session(models.Model):
 
 
 class StudyGroup(models.Model):
+    def clean(self):
+        super().clean()
+        if self.is_active:
+            from admin_panel.services.group_service import validate_group_name
+            self.name = validate_group_name(self.name)
+
+    is_active = models.BooleanField(default=True, db_default=True)
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     name = models.CharField('Название группы', max_length=64, unique=True)
     month = models.IntegerField('Месяц обучения', default=1)
@@ -454,3 +463,43 @@ class MediaAsset(models.Model):
 
     def __str__(self):
         return f"[{self.kind}] {self.id} ({self.mime_type}, {self.size_bytes} bytes)"
+
+
+class SubscriptionGrant(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    telegram_username = models.CharField(max_length=32, unique=True)
+    telegram_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    user = models.OneToOneField(User, on_delete=models.PROTECT, null=True, blank=True)
+    group = models.ForeignKey(StudyGroup, on_delete=models.PROTECT)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    granted_by = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'SubscriptionGrant'
+        verbose_name = 'Подписка'
+        verbose_name_plural = 'Подписки'
+
+    def __str__(self):
+        return '@' + self.telegram_username
+
+
+class TelegramIdentity(models.Model):
+    telegram_user_id = models.CharField(primary_key=True, max_length=64)
+    username = models.CharField(max_length=32, unique=True)
+
+    class Meta:
+        managed = False
+        db_table = 'TelegramIdentity'
+
+
+class PasswordResetTicket(models.Model):
+    token_hash = models.CharField(primary_key=True, max_length=64)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'PasswordResetTicket'

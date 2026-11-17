@@ -16,9 +16,27 @@ export const Login = () => {
     const [passwords, setPasswords] = useState('');
     const [togglePassword, setTogglePassword] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [changeRequired, setChangeRequired] = useState(false);
+    const [newPassword, setNewPassword] = useState('');
+    const resetToken = new URLSearchParams(window.location.search).get('reset');
 
     const verifyClick = async (e) => {
         if (e) e.preventDefault();
+        if (resetToken || changeRequired) {
+            if (newPassword.length < 8) { toast.warning('Минимум 8 символов'); return; }
+            setLoading(true);
+            try {
+                const hashed = await hashPasswordClient(newPassword);
+                if (resetToken) {
+                    await api.post('/auth/reset-password', {token: resetToken, new_password: hashed});
+                } else {
+                    await api.put('/users/me/password', {currentPassword: await hashPasswordClient(passwords), newPassword: hashed});
+                }
+                window.location.assign('/login');
+            } catch (err) { toast.error(err.response?.data?.message || 'Не удалось изменить пароль'); }
+            finally { setLoading(false); }
+            return;
+        }
         const cleanLogin = login.trim();
         const cleanPassword = passwords.trim();
 
@@ -40,6 +58,7 @@ export const Login = () => {
             if (res.data?.user && res.data?.accessToken) {
                 localStorage.setItem('accessToken', res.data.accessToken);
                 addUser(res.data.user, res.data.accessToken);
+                if (res.data.user.must_change_password) { setChangeRequired(true); setLoading(false); return; }
                 toast.success('Успешный вход!');
                 setTimeout(() => {
                     if (res.data.user.role === 'ADMIN') {
@@ -64,7 +83,7 @@ export const Login = () => {
                     <h1>Добро пожаловать 👋</h1>
                     <p>Войдите в свой аккаунт MertsPlatform</p>
                     <form onSubmit={verifyClick} className={cls.login_item}>
-                        <input
+                        {!(resetToken || changeRequired) && <><input
                             type="text"
                             placeholder="Логин"
                             value={login}
@@ -83,12 +102,14 @@ export const Login = () => {
                                 {togglePassword ? <FaEyeSlash /> : <IoEyeSharp />}
                             </div>
                         </div>
+                        </>}
+                        {(resetToken || changeRequired) && <><p>Установите новый пароль</p><input type="password" minLength={8} value={newPassword} onChange={e => setNewPassword(e.target.value)} required autoComplete="new-password" /></>}
                         <button type="submit" disabled={loading}>
                             {loading ? 'Вход...' : 'Войти'}
                         </button>
 
                         <div style={{ textAlign: 'center', marginTop: '10px', fontSize: '14px', color: 'rgba(249,250,251,0.7)' }}>
-                            Еще нет аккаунта?{' '}
+                            Доступ выдаёт владелец через Telegram.{' '}
                             <Link to="/register" style={{ color: 'var(--primary, #f59e0b)', fontWeight: 600, textDecoration: 'none' }}>
                                 Зарегистрироваться
                             </Link>

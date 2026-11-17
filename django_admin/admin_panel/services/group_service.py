@@ -48,15 +48,6 @@ def ensure_study_groups_synced() -> None:
         existing_names = set(StudyGroup.objects.values_list('name', flat=True))
         missing = all_names - existing_names
 
-        for name in missing:
-            month = parse_month_from_group_name(name)
-            StudyGroup.objects.get_or_create(
-                name=name,
-                defaults={
-                    'id': str(uuid.uuid4()),
-                    'month': month,
-                }
-            )
     except Exception as e:
         logger.warning("Error syncing study groups: %s", e)
 
@@ -73,7 +64,7 @@ def get_study_group_choices(include_all: bool = True) -> List[Tuple[str, str]]:
         choices.append(('', '— Все группы месяца (общий доступ) —'))
 
     try:
-        groups = StudyGroup.objects.all().order_by('month', 'name')
+        groups = StudyGroup.objects.filter(is_active=True).order_by('month', 'name')
         for g in groups:
             st_count = User.objects.filter(role=RoleChoices.STUDENT, group_number=g.name).count()
             count_label = f"{st_count} студ." if st_count > 0 else "нет студентов"
@@ -83,3 +74,11 @@ def get_study_group_choices(include_all: bool = True) -> List[Tuple[str, str]]:
         pass
 
     return choices
+
+
+def validate_group_name(name):
+    from django.core.exceptions import ValidationError
+    name = str(name or '').strip().lower()
+    if not re.fullmatch(r'[a-z]{2,12}-[0-9]{2}', name) or not 1 <= int(name.rsplit('-', 1)[1]) <= 24:
+        raise ValidationError('Формат группы: js-02 (месяц 01–24).')
+    return name

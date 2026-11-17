@@ -1,3 +1,5 @@
+from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.permissions import HasCourseAccess
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -24,7 +26,8 @@ from admin_panel.services.telegram_service import (
 
 
 class LessonsListView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(
         operation_id="lessons_list",
@@ -72,7 +75,8 @@ class LessonsListView(APIView):
 
 
 class TasksListView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = TaskSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(
         operation_id="tasks_list",
@@ -85,6 +89,8 @@ class TasksListView(APIView):
     def get(self, request):
         user = request.user
         qs = Task.objects.all().order_by('month', 'order', 'created_at')
+        if user.role != RoleChoices.ADMIN:
+            qs = qs.filter(month__lte=user.current_month).filter(Q(group_number=user.group_number) | Q(group_number='ALL') | Q(group_number='') | Q(group_number__isnull=True))
 
         raw_month = request.query_params.get('month')
         if raw_month and raw_month.lower() != 'all':
@@ -118,7 +124,8 @@ class TasksListView(APIView):
 
 
 class TaskDetailView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = TaskSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(operation_id="task_detail", summary="Детальная информация о задании", responses={200: TaskSerializer})
     def get(self, request, id: str):
@@ -129,6 +136,8 @@ class TaskDetailView(APIView):
                 {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if request.user.role != RoleChoices.ADMIN and (task.month > request.user.current_month or task.group_number not in (None, '', 'ALL', request.user.group_number)):
+            return Response({'message': 'Forbidden'}, status=403)
         serializer = TaskSerializer(task, context={'request': request})
         return Response(serializer.data)
 
@@ -169,7 +178,8 @@ class TaskDetailView(APIView):
 
 
 class SubmissionsView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = SubmissionSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(
         operation_id="submissions_list",
@@ -224,6 +234,9 @@ class SubmissionsView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if user.role != RoleChoices.ADMIN and (task.month > user.current_month or task.group_number not in (None, '', 'ALL', user.group_number)):
+            return Response({'message': 'Forbidden'}, status=403)
+
         # Calculate version
         last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
         version = (last_sub.version + 1) if last_sub else 1
@@ -248,7 +261,8 @@ class SubmissionsView(APIView):
 
 
 class SubmissionDetailView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = SubmissionSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(operation_id="submission_detail", summary="Детальная информация о сдаче ДЗ", responses={200: SubmissionSerializer})
     def get(self, request, id: str):

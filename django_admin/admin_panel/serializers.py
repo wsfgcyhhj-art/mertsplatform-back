@@ -26,6 +26,9 @@ class ShortTaskSerializer(serializers.ModelSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    has_subscription = serializers.BooleanField(read_only=True)
+    subscription_expires_at = serializers.DateTimeField(read_only=True)
+    must_change_password = serializers.BooleanField(read_only=True)
     isTelegramConnected = serializers.SerializerMethodField()
     telegramUsername = serializers.CharField(source='telegram_username', read_only=True)
     avatarUrl = serializers.CharField(source='avatar_url', read_only=True)
@@ -45,6 +48,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'role',
             'name',
             'telegram',
+            'has_subscription', 'subscription_expires_at', 'must_change_password',
             'isTelegramConnected',
             'telegramUsername',
             'groupNumber',
@@ -114,6 +118,7 @@ class LessonSerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
+    groupNumber = serializers.CharField(source="group_number", required=False, allow_blank=True, allow_null=True)
     exampleLink = serializers.CharField(source='example_link', allow_null=True, required=False)
     attachmentLink = serializers.CharField(source='attachment_link', allow_null=True, required=False)
     hasScore = serializers.BooleanField(source='has_score', default=False)
@@ -123,13 +128,22 @@ class TaskSerializer(serializers.ModelSerializer):
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
 
+    def validate_groupNumber(self, value):
+        from admin_panel.models import StudyGroup
+        if value in (None, '', 'ALL'):
+            return value
+        value = value.strip().lower()
+        if not StudyGroup.objects.filter(name=value, is_active=True).exists():
+            raise serializers.ValidationError('Выберите активную учебную группу.')
+        return value
+
     class Meta:
         model = Task
         fields = (
             'id',
             'title',
             'description',
-            'topic',
+            'topic', 'groupNumber',
             'month',
             'order',
             'exampleLink',
@@ -243,3 +257,8 @@ class UserAchievementSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAchievement
         fields = ('id', 'userId', 'achievementId', 'achievement', 'awardedAt')
+
+
+class EmptyRequestSerializer(serializers.Serializer):
+    """No structured request body for endpoints documented with explicit responses."""
+    pass

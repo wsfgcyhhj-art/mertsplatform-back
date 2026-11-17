@@ -1,0 +1,25 @@
+Deployment requirements
+
+Run before starting the updated application:
+  python manage.py install_subscriptions
+This is additive and idempotent. Existing users receive no automatic subscription.
+The first import preserves existing group names; only js-01 is initially active.
+
+Owner Django Admin account in the audited database: imranchi, ID 1.
+PLATFORM_OWNER_ADMIN_ID defaults to 1; override for a different database.
+Swagger grant API accepts the owner's Django session (with CSRF) or a JWT
+whose user ID is explicitly configured in PLATFORM_OWNER_USER_ID.
+
+Configure TELEGRAM_WEBHOOK_SECRET on Render and register the Telegram webhook
+with the SAME secret_token and URL ending /api/v1/telegram/webhook.
+Unconfigured webhook requests fail closed. Alternatively run manage.py runbot
+as a single polling process and do not register a webhook concurrently.
+The audited bot currently has no registered webhook.
+
+Telegram sends run synchronously after commit, timeout 4 seconds per request.
+Admin reports accepted sendMessage requests and errors, not message readership.
+Network failures and process termination are not automatically retried.
+Large broadcasts must fit the hosting worker request timeout.
+
+Temporary passwords require a change on login. /reset issues a single-use,
+20-minute password recovery link; existing passwords are never disclosed.

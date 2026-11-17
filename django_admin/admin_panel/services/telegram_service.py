@@ -3,7 +3,7 @@ import re
 import html
 import logging
 import threading
-import concurrent.futures
+
 from typing import Optional, Dict, Any, List, Union
 import httpx
 from django.conf import settings
@@ -18,7 +18,7 @@ from admin_panel.models import (
 )
 
 logger = logging.getLogger('telegram_service')
-_telegram_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix='tg-notifier')
+
 
 
 def get_bot_token() -> str:
@@ -41,6 +41,7 @@ def escape_html(text: Any) -> str:
 def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None) -> bool:
     token = get_bot_token()
     if not token or not chat_id:
+        logger.warning('Telegram skipped chat_id=%s reason=%s', chat_id, 'missing_token' if not token else 'missing_chat_id')
         return False
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -54,18 +55,20 @@ def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] 
         payload['reply_markup'] = reply_markup
 
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=4.0) as client:
             resp = client.post(url, json=payload)
-            if resp.status_code == 200 and resp.json().get('ok'):
+            data = resp.json()
+            logger.info('Telegram response chat_id=%s http=%s ok=%s error_code=%s description=%s', chat_id, resp.status_code, data.get('ok'), data.get('error_code'), data.get('description', ''))
+            if resp.status_code == 200 and data.get('ok'):
                 return True
             # Handle 403 Forbidden (bot blocked by user) gracefully
-            if resp.status_code == 403 or (resp.json() and resp.json().get('error_code') == 403):
+            if resp.status_code == 403 or (data and data.get('error_code') == 403):
                 logger.info(f"User {chat_id} blocked bot (403 Forbidden).")
                 return False
-            logger.warning("Telegram send failed: %s %s", resp.status_code, resp.text)
+            logger.warning("Telegram send failed chat_id=%s http=%s", chat_id, resp.status_code)
             return False
     except Exception as e:
-        logger.warning("Telegram network error: %s", e)
+        logger.warning("Telegram request failed chat_id=%s error_type=%s", chat_id, type(e).__name__)
         return False
 
 
@@ -74,43 +77,31 @@ def send_telegram_notification(user_id: str, text: str, reply_markup: Optional[d
         user = User.objects.get(id=user_id)
         if user.telegram_chat_id:
             return send_telegram_message(user.telegram_chat_id, text, reply_markup=reply_markup)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Telegram user lookup failed user_id=%s error_type=%s', user_id, type(exc).__name__)
     return False
 
 
-def send_async_notification(user_id: str, text: str, reply_markup: Optional[dict] = None) -> None:
-    """
-    Sends notification using ThreadPoolExecutor with bounded wait to ensure delivery on Render
-    before Gunicorn worker terminates.
-    """
-    future = _telegram_executor.submit(send_telegram_notification, user_id, text, reply_markup)
-    try:
-        future.result(timeout=1.5)
-    except concurrent.futures.TimeoutError:
-        pass
-    except Exception as e:
-        logger.warning("Notification send error: %s", e)
+def send_async_notification(user_id: str, text: str, reply_markup: Optional[dict] = None) -> bool:
+    """Compatibility name: delivery now completes in the on_commit caller."""
+    return send_telegram_notification(user_id, text, reply_markup)
 
 
-def async_broadcast_message(chat_ids: List[str], text: str) -> None:
-    """
-    Broadcasts message to multiple chat_ids using ThreadPoolExecutor with bounded wait.
-    """
-    unique_ids = list(set(cid for cid in chat_ids if cid and str(cid).strip()))
-    if not unique_ids:
-        return
-
-    futures = [_telegram_executor.submit(send_telegram_message, cid, text) for cid in unique_ids]
-    try:
-        concurrent.futures.wait(futures, timeout=2.5)
-    except Exception as e:
-        logger.warning("Broadcast batch wait error: %s", e)
+def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
+    """Bounded batches; never discard results or leave background work behind."""
+    counts = {"sent": 0, "errors": 0}
+    unique_ids = list(dict.fromkeys(str(cid).strip() for cid in chat_ids if cid and str(cid).strip()))
+    for offset in range(0, len(unique_ids), 20):
+        for chat_id in unique_ids[offset:offset + 20]:
+            ok = send_telegram_message(chat_id, text)
+            counts["sent" if ok else "errors"] += 1
+    logger.info("Telegram broadcast sent=%s errors=%s", counts["sent"], counts["errors"])
+    return counts
 
 
 # --- Educational Workflow Event Notifiers ---
 
-def notify_lesson_published(lesson: Lesson) -> int:
+def notify_lesson_published(lesson: Lesson) -> dict:
     """
     1) New Video Lesson: sent to all students where current_month == lesson.month and group matches
     """
@@ -132,14 +123,14 @@ def notify_lesson_published(lesson: Lesson) -> int:
         telegram_chat_id__isnull=False,
     )
     if lesson.group_number and lesson.group_number.upper() != 'ALL':
-        qs = qs.filter(group_number=lesson.group_number)
+        qs = qs.filter(group_number__iexact=lesson.group_number.strip())
 
     chat_ids = [u.telegram_chat_id for u in qs if u.telegram_chat_id]
-    async_broadcast_message(chat_ids, msg)
-    return len(chat_ids)
+    logger.info("Telegram recipients lesson_id=%s month=%s group=%s count=%s", lesson.pk, lesson.month, lesson.group_number, len(chat_ids))
+    return async_broadcast_message(chat_ids, msg)
 
 
-def notify_task_published(task: Task) -> int:
+def notify_task_published(task: Task) -> dict:
     """
     2) New Task: sent to all students where current_month == task.month and group matches
     """
@@ -164,11 +155,11 @@ def notify_task_published(task: Task) -> int:
         telegram_chat_id__isnull=False,
     )
     if task.group_number and task.group_number.upper() != 'ALL':
-        qs = qs.filter(group_number=task.group_number)
+        qs = qs.filter(group_number__iexact=task.group_number.strip())
 
     chat_ids = [u.telegram_chat_id for u in qs if u.telegram_chat_id]
-    async_broadcast_message(chat_ids, msg)
-    return len(chat_ids)
+    logger.info("Telegram recipients task_id=%s month=%s group=%s count=%s", task.pk, task.month, task.group_number, len(chat_ids))
+    return async_broadcast_message(chat_ids, msg)
 
 
 def notify_submission_created(submission: Submission):
@@ -314,7 +305,7 @@ def send_test_telegram_message(user: User) -> tuple[bool, str]:
         'parse_mode': 'HTML',
     }
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=4.0) as client:
             resp = client.post(url, json=payload)
             data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
             if resp.status_code == 200 and data.get('ok'):
@@ -322,7 +313,7 @@ def send_test_telegram_message(user: User) -> tuple[bool, str]:
             err_desc = data.get('description', resp.text)
             return False, f"Ошибка Telegram API ({resp.status_code}): {err_desc}"
     except Exception as e:
-        return False, f"Сетевая ошибка при обращении к Telegram: {str(e)}"
+        return False, f"Сетевая ошибка Telegram: {type(e).__name__}"
 
 
 def notify_month_advanced(user: User, new_month: int):
@@ -346,6 +337,9 @@ def notify_month_advanced(user: User, new_month: int):
 # --- Bot Command Handlers & Polling ---
 
 def handle_start_command(chat_id: str, code: str, username: Optional[str] = None) -> str:
+    from admin_panel.services.subscription_service import handle_subscription_start
+    if not code.strip():
+        return handle_subscription_start(chat_id, username)
     clean_code = code.strip()
     if not clean_code:
         return (
@@ -357,8 +351,12 @@ def handle_start_command(chat_id: str, code: str, username: Optional[str] = None
     if not user:
         return "❌ Неверный или устаревший код привязки. Сгенерируйте новую ссылку в профиле."
 
+    from admin_panel.models import SubscriptionGrant
+    bound_grant = SubscriptionGrant.objects.filter(user=user).first()
+    if bound_grant and bound_grant.telegram_user_id != str(chat_id).strip():
+        return "Подписка закреплена за другим Telegram аккаунтом. Обратитесь к владельцу."
     user.telegram_chat_id = str(chat_id).strip()
-    user.telegram_username = username or None
+    user.telegram_username = username.lower() if username else None
     user.telegram_auth_code = None
     user.save()
 
@@ -375,6 +373,8 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         return
 
     chat = message.get('chat', {})
+    if chat.get('type') != 'private' or str(chat.get('id')) != str(message.get('from', {}).get('id')):
+        return
     chat_id = str(chat.get('id', ''))
     from_user = message.get('from', {})
     username = from_user.get('username')
@@ -388,6 +388,14 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         code = parts[1] if len(parts) > 1 else ''
         reply = handle_start_command(chat_id, code, username)
         send_telegram_message(chat_id, reply)
+
+    elif text == '/reset':
+        from .subscription_service import recovery_link
+        user = User.objects.filter(telegram_chat_id=chat_id).first()
+        if user:
+            send_telegram_message(chat_id, 'Одноразовое восстановление (20 минут): ' + recovery_link(user))
+        else:
+            send_telegram_message(chat_id, 'Доступ закрыт.')
 
     elif text.startswith('/help'):
         help_text = (

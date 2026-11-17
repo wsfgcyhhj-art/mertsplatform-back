@@ -231,6 +231,11 @@ UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
+                        "title": "Закрытые подписки",
+                        "icon": "key",
+                        "link": reverse_lazy("admin:admin_panel_subscriptiongrant_changelist"),
+                    },
+                    {
                         "title": "Пользователи (Users)",
                         "icon": "group",
                         "link": reverse_lazy("admin:admin_panel_user_changelist"),
@@ -328,3 +333,14 @@ CORS_ALLOW_HEADERS = [
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
+
+
+# Fail closed until the immutable owner IDs and Telegram webhook secret are configured.
+PLATFORM_OWNER_USER_ID = os.getenv('PLATFORM_OWNER_USER_ID', '').strip()
+PLATFORM_OWNER_ADMIN_ID = os.getenv('PLATFORM_OWNER_ADMIN_ID', '1').strip()
+TELEGRAM_WEBHOOK_SECRET = os.getenv('TELEGRAM_WEBHOOK_SECRET', '').strip()
+LOGGING = {
+    'version': 1, 'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {'telegram_service': {'handlers': ['console'], 'level': 'INFO', 'propagate': False}},
+}

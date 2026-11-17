@@ -1,3 +1,4 @@
+from admin_panel.serializers import EmptyRequestSerializer
 import time
 from django.db import connection
 from rest_framework.views import APIView
@@ -31,6 +32,7 @@ ACHIEVEMENT_TRIGGER_TYPES = [
 
 
 class SystemConfigView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -82,6 +84,7 @@ class SystemConfigView(APIView):
 
 
 class HealthCheckView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 

@@ -1,3 +1,4 @@
+from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
@@ -47,6 +48,7 @@ def update_user_streak(user: User) -> int:
 
 
 class RegisterView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -56,67 +58,11 @@ class RegisterView(APIView):
         responses={201: dict, 400: dict}
     )
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                {"statusCode": 400, "error": "Bad Request", "message": serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        data = serializer.validated_data
-        login = data['login'].strip()
-        if User.objects.filter(login=login).exists():
-            return Response(
-                {"statusCode": 400, "error": "Bad Request", "message": "User with this login already exists"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        group_num = data['groupNumber'].strip()
-        month_val = data.get('currentMonth')
-        if not month_val or month_val == 1:
-            month_val = parse_month_from_group_name(group_num)
-
-        # Ensure group exists in StudyGroup table
-        try:
-            StudyGroup.objects.get_or_create(
-                name=group_num,
-                defaults={'month': month_val}
-            )
-        except Exception:
-            pass
-
-        user = User(
-            login=login,
-            role=RoleChoices.STUDENT,
-            name=data.get('name') or None,
-            telegram=data.get('telegram') or None,
-            group_number=group_num,
-            current_month=month_val,
-            streak_count=1,
-            last_active_date=timezone.now(),
-        )
-        user.set_password(data['password'])
-        user.save()
-
-        # Trigger ON_REGISTER achievements
-        evaluate_user_achievements(user.id, trigger_filter=TriggerTypeChoices.ON_REGISTER)
-
-        access_token, refresh_token, session = generate_tokens_for_user(user)
-        user_data = UserProfileSerializer(user, context={'request': request}).data
-
-        response = Response(
-            {
-                "accessToken": access_token,
-                "refreshToken": refresh_token,
-                "user": user_data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-        set_auth_cookies(response, refresh_token)
-        return response
+        return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
 
 
 class LoginView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -157,6 +103,7 @@ class LoginView(APIView):
 
 
 class RefreshTokenView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -198,6 +145,7 @@ class RefreshTokenView(APIView):
 
 
 class LogoutView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 

@@ -1,0 +1,31 @@
+from django.core.management.base import BaseCommand
+from django.db import connection
+from admin_panel.models import User, StudyGroup, SubscriptionGrant, TelegramIdentity, PasswordResetTicket
+
+
+class Command(BaseCommand):
+    help = "Apply additive subscription schema to unmanaged tables; existing users remain unsubscribed."
+
+    def handle(self, *args, **options):
+        with connection.cursor() as cursor:
+            columns = {c.name for c in connection.introspection.get_table_description(cursor, User._meta.db_table)}
+        with connection.schema_editor() as editor:
+            for name in ('has_subscription', 'subscription_expires_at', 'must_change_password', 'password_uses_sha256'):
+                if name not in columns:
+                    editor.add_field(User, User._meta.get_field(name))
+            with connection.cursor() as cursor:
+                group_columns = {c.name for c in connection.introspection.get_table_description(cursor, StudyGroup._meta.db_table)}
+            if 'is_active' not in group_columns:
+                editor.add_field(StudyGroup, StudyGroup._meta.get_field('is_active'))
+            tables = connection.introspection.table_names()
+            for model in (SubscriptionGrant, TelegramIdentity, PasswordResetTicket):
+                if model._meta.db_table not in tables:
+                    editor.create_model(model)
+        names = set(User.objects.exclude(group_number__isnull=True).exclude(group_number='').values_list('group_number', flat=True))
+        from admin_panel.services.group_service import parse_month_from_group_name
+        for name in names:
+            if name.upper() == 'ALL':
+                continue
+            group, _ = StudyGroup.objects.get_or_create(name=name, defaults={'month': parse_month_from_group_name(name), 'is_active': name == 'js-01'})
+            User.objects.filter(group_number=name, study_group__isnull=True).update(study_group=group)
+        self.stdout.write(self.style.SUCCESS('Subscription schema installed. Existing access remains closed.'))

@@ -47,3 +47,5 @@ table tbody th {
   background: rgba(139, 92, 246, 0.25);
   border-color: rgba(139, 92, 246, 0.5);
 }
+
+.dark select, .dark option, html[data-theme="dark"] select, html[data-theme="dark"] option {background:#18181b !important;color:#fafafa !important;color-scheme:dark;}

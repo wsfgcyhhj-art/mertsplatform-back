@@ -38,6 +38,7 @@ def on_submission_pre_save(sender, instance: Submission, **kwargs):
             instance._old_status = old.status
             instance._old_score = old.score
             instance._old_comment = old.reviewer_comment
+            instance._old_voice = old.voice_feedback_url
         except Submission.DoesNotExist:
             instance._old_status = None
             instance._old_score = None
@@ -73,7 +74,7 @@ def on_lesson_post_save(sender, instance: Lesson, created, **kwargs):
     if created:
         def _send():
             try:
-                notify_lesson_published(instance)
+                instance._telegram_delivery = notify_lesson_published(instance)
             except Exception as e:
                 logger.warning("Error dispatching lesson notification: %s", e)
 
@@ -88,7 +89,7 @@ def on_task_post_save(sender, instance: Task, created, **kwargs):
     if created:
         def _send():
             try:
-                notify_task_published(instance)
+                instance._telegram_delivery = notify_task_published(instance)
             except Exception as e:
                 logger.warning("Error dispatching task notification: %s", e)
 
@@ -121,6 +122,7 @@ def on_submission_post_save(sender, instance: Submission, created, **kwargs):
         instance.status != old_status
         or instance.score != old_score
         or instance.reviewer_comment != old_comment
+        or instance.voice_feedback_url != getattr(instance, '_old_voice', None)
     )
 
     if is_reviewed and changed:

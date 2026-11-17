@@ -1,3 +1,8 @@
+from django.db import transaction
+from django.utils.html import format_html_join
+from admin_panel.permissions import is_admin_owner
+from admin_panel.models import SubscriptionGrant
+from admin_panel.services.subscription_service import grant_subscription, normalize_username
 import base64
 import os
 import re
@@ -98,9 +103,28 @@ class StudyGroupStudentInline(TabularInline):
 
 @admin.register(StudyGroup)
 class StudyGroupAdmin(ModelAdmin):
+    def has_add_permission(self, request):
+        return is_admin_owner(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    actions = ['archive_groups', 'activate_groups']
+    list_filter = ('is_active', 'month')
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description='Архивировать выбранные группы')
+    def archive_groups(self, request, queryset):
+        queryset.update(is_active=False)
+
+    @admin.action(description='Активировать выбранные группы')
+    def activate_groups(self, request, queryset):
+        queryset.update(is_active=True)
+
     list_fullwidth = True
     list_display = ('name', 'month', 'students_count_badge', 'lessons_count_badge', 'tasks_count_badge', 'created_at')
-    list_filter = ('month',)
     search_fields = ('name',)
     ordering = ('month', 'name')
     inlines = [StudyGroupStudentInline]
@@ -121,8 +145,29 @@ class StudyGroupAdmin(ModelAdmin):
         return format_html('<span style="font-weight:600;color:#fbbf24;">{} ДЗ</span>', cnt)
 
 
+class SearchableGroupWidget(forms.TextInput):
+    def render(self, name, value, attrs=None, renderer=None):
+        attrs = dict(attrs or {})
+        list_id = 'groups_' + name
+        attrs['list'] = list_id
+        attrs['autocomplete'] = 'off'
+        options = format_html_join('', '<option value="{}">{}</option>', get_study_group_choices(False))
+        return format_html('{}<datalist id="{}">{}</datalist>', super().render(name, value, attrs, renderer), list_id, options)
+
+
+def clean_group(value):
+    from admin_panel.services.group_service import validate_group_name
+    if not value or value.upper() == 'ALL':
+        return ''
+    value = validate_group_name(value)
+    group = StudyGroup.objects.filter(name=value).first()
+    if group and not group.is_active:
+        raise forms.ValidationError('Группа в архиве.')
+    return value
+
+
 class LessonAdminForm(forms.ModelForm):
-    group_number = forms.ChoiceField(
+    group_number = forms.CharField(widget=SearchableGroupWidget(),
         label='Целевая учебная группа',
         required=False,
         help_text='Выберите группу для видеоурока или оставьте пустым для всех групп месяца.',
@@ -134,7 +179,6 @@ class LessonAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['group_number'].choices = get_study_group_choices(include_all=True)
         if self.instance and self.instance.pk and self.instance.group_number:
             self.initial['group_number'] = self.instance.group_number
 
@@ -148,7 +192,7 @@ class LessonAdminForm(forms.ModelForm):
             else:
                 cleaned_data['youtube_id'] = y_id
 
-        grp = (cleaned_data.get('group_number') or '').strip()
+        grp = clean_group((cleaned_data.get('group_number') or '').strip())
         if grp:
             cleaned_data['group_number'] = grp
             if cleaned_data.get('month') == 1:
@@ -160,7 +204,24 @@ class LessonAdminForm(forms.ModelForm):
 
 
 @admin.register(Lesson)
-class LessonAdmin(ModelAdmin):
+class GroupSavingAdmin(ModelAdmin):
+    def save_model(self, request, obj, form, change):
+        from django.core.exceptions import PermissionDenied
+        name = getattr(obj, 'group_number', None)
+        if name and name.upper() != 'ALL' and not StudyGroup.objects.filter(name=name).exists():
+            if not is_admin_owner(request.user):
+                raise PermissionDenied('Новые группы создаёт только владелец.')
+            StudyGroup.objects.create(name=name, month=parse_month_from_group_name(name))
+        super().save_model(request, obj, form, change)
+        if isinstance(obj, (Lesson, Task)) and not change:
+            def report():
+                counts = getattr(obj, '_telegram_delivery', None)
+                if counts:
+                    self.message_user(request, f'Отправлено: {counts["sent"]}, Ошибок: {counts["errors"]}')
+            transaction.on_commit(report)
+
+
+class LessonAdmin(GroupSavingAdmin):
     form = LessonAdminForm
     list_fullwidth = True
     list_display = ('title', 'group_badge', 'month', 'order', 'youtube_id_click')
@@ -195,10 +256,12 @@ class LessonAdmin(ModelAdmin):
 
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_lesson_telegram(self, request, queryset):
-        total = sum(notify_lesson_published(lesson) for lesson in queryset)
+        results = [notify_lesson_published(lesson) for lesson in queryset]
+        sent = sum(r["sent"] for r in results)
+        errors = sum(r["errors"] for r in results)
         self.message_user(
             request,
-            f"Уведомления о {queryset.count()} ур. успешно поставлены в очередь отправки (получателей: {total})."
+            f"Отправлено: {sent}, Ошибок: {errors}"
         )
 
     def save_model(self, request, obj, form, change):
@@ -210,7 +273,7 @@ class LessonAdmin(ModelAdmin):
 
 
 class TaskAdminForm(forms.ModelForm):
-    group_number = forms.ChoiceField(
+    group_number = forms.CharField(widget=SearchableGroupWidget(),
         label='Целевая учебная группа',
         required=False,
         help_text='Выберите группу для персонального ДЗ или оставьте пустым для всех групп месяца.',
@@ -222,13 +285,12 @@ class TaskAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['group_number'].choices = get_study_group_choices(include_all=True)
         if self.instance and self.instance.pk and self.instance.group_number:
             self.initial['group_number'] = self.instance.group_number
 
     def clean(self):
         cleaned_data = super().clean()
-        grp = (cleaned_data.get('group_number') or '').strip()
+        grp = clean_group((cleaned_data.get('group_number') or '').strip())
         if grp:
             cleaned_data['group_number'] = grp
             if cleaned_data.get('month') == 1:
@@ -239,7 +301,7 @@ class TaskAdminForm(forms.ModelForm):
 
 
 @admin.register(Task)
-class TaskAdmin(ModelAdmin):
+class TaskAdmin(GroupSavingAdmin):
     form = TaskAdminForm
     list_fullwidth = True
     list_display = ('title', 'topic', 'group_badge', 'month', 'max_score', 'is_bonus')
@@ -260,10 +322,12 @@ class TaskAdmin(ModelAdmin):
 
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_task_telegram(self, request, queryset):
-        total = sum(notify_task_published(task) for task in queryset)
+        results = [notify_task_published(task) for task in queryset]
+        sent = sum(r["sent"] for r in results)
+        errors = sum(r["errors"] for r in results)
         self.message_user(
             request,
-            f"Уведомления о {queryset.count()} ДЗ успешно поставлены в очередь отправки (получателей: {total})."
+            f"Отправлено: {sent}, Ошибок: {errors}"
         )
 
 
@@ -290,7 +354,7 @@ class UserAchievementInline(TabularInline):
 
 
 class UserAdminForm(forms.ModelForm):
-    group_selector = forms.ChoiceField(
+    group_selector = forms.CharField(widget=SearchableGroupWidget(),
         label='Учебная группа',
         required=False,
         help_text='Выберите группу для студента. Месяц будет определен автоматически.',
@@ -308,7 +372,6 @@ class UserAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['group_selector'].choices = get_study_group_choices(include_all=False)
         if self.instance and self.instance.pk and self.instance.group_number:
             self.initial['group_selector'] = self.instance.group_number
 
@@ -323,7 +386,7 @@ class UserAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        grp = (cleaned_data.get('group_selector') or '').strip()
+        grp = clean_group((cleaned_data.get('group_selector') or '').strip())
         if grp:
             cleaned_data['group_number'] = grp
             if cleaned_data.get('current_month') == 1:
@@ -332,7 +395,17 @@ class UserAdminForm(forms.ModelForm):
 
 
 @admin.register(User)
-class UserAdmin(ModelAdmin):
+class UserAdmin(GroupSavingAdmin):
+    def has_add_permission(self, request):
+        return is_admin_owner(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        # Password hashes, Telegram bindings and roles can otherwise bypass owner-only grants.
+        return is_admin_owner(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
     form = UserAdminForm
     list_fullwidth = True
     list_display = (
@@ -359,7 +432,7 @@ class UserAdmin(ModelAdmin):
             tag = f"@{obj.telegram_username}" if obj.telegram_username else f"ID: {obj.telegram_chat_id}"
             return format_html('<span style="color:#10b981;font-weight:600;">✓ {}</span>', tag)
         if obj.telegram_username:
-            return format_html('<span style="color:#f59e0b;font-weight:500;">@{obj.telegram_username} (не активен)</span>')
+            return format_html('<span style="color:#f59e0b;font-weight:500;">@{} (не активен)</span>', obj.telegram_username)
         return format_html('<span style="color:#71717a;">—</span>')
 
     @admin.action(description="🧪 Проверить связь (отправить тест в Telegram)")
@@ -380,7 +453,7 @@ class UserAdmin(ModelAdmin):
             'description': 'Настройки для бота Telegraf. Числовой Chat ID используется для роутинга карточек сдачи ДЗ менторам и отправки уведомлений.',
         }),
         ('Обучение и менторство', {
-            'fields': ('mentor', 'group_number', 'group_id', 'current_month', 'streak_count', 'last_active_date'),
+            'fields': ('mentor', 'group_selector', 'current_month', 'streak_count', 'last_active_date'),
         }),
         ('Оформление профиля', {
             'fields': ('avatar_url', 'banner_url'),
@@ -773,3 +846,69 @@ class MediaAssetAdmin(ModelAdmin):
     def api_endpoint(self, obj):
         path = f"/api/v1/media/{obj.id}"
         return format_html('<code style="font-size:12px;color:#fbbf24;">{}</code>', path)
+
+
+class SubscriptionGrantForm(forms.ModelForm):
+    class Meta:
+        model = SubscriptionGrant
+        fields = ('telegram_username', 'group', 'expires_at')
+
+    def clean_telegram_username(self):
+        return normalize_username(self.cleaned_data['telegram_username'])
+
+
+@admin.register(SubscriptionGrant)
+class SubscriptionGrantAdmin(ModelAdmin):
+    form = SubscriptionGrantForm
+    list_display = ('telegram_username', 'group', 'expires_at', 'is_active', 'user')
+
+    def has_module_permission(self, request):
+        return is_admin_owner(request.user)
+
+    def has_view_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    def has_add_permission(self, request):
+        return is_admin_owner(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        grant = grant_subscription(obj.telegram_username, obj.group, obj.expires_at, request.user.pk)
+        obj.pk = grant.pk
+        obj.user = grant.user
+        obj.telegram_user_id = grant.telegram_user_id
+        obj.granted_by = grant.granted_by
+        obj.is_active = grant.is_active
+        obj._state.adding = False
+
+
+# Django's built-in auth admin must not allow other superusers to take over the owner.
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+
+for auth_model in (get_user_model(), Group):
+    if admin.site.is_registered(auth_model):
+        original_admin = type(admin.site._registry[auth_model])
+        class OwnerOnlyAuthAdmin(original_admin):
+            def has_module_permission(self, request):
+                return is_admin_owner(request.user)
+
+            def has_view_permission(self, request, obj=None):
+                return is_admin_owner(request.user)
+
+            def has_add_permission(self, request):
+                return is_admin_owner(request.user)
+
+            def has_change_permission(self, request, obj=None):
+                return is_admin_owner(request.user)
+
+            def has_delete_permission(self, request, obj=None):
+                return is_admin_owner(request.user)
+
+        admin.site.unregister(auth_model)
+        admin.site.register(auth_model, OwnerOnlyAuthAdmin)

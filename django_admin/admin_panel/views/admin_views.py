@@ -1,3 +1,5 @@
+from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.permissions import is_owner
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -17,6 +19,7 @@ from admin_panel.serializers import (
 
 
 class AdminUsersListView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="admin_users_list", summary="Список всех пользователей для панели ментора", responses={200: UserProfileSerializer(many=True)})
@@ -41,6 +44,8 @@ class AdminUsersListView(APIView):
 
     @extend_schema(summary="Создать пользователя администратором")
     def post(self, request):
+        if not is_owner(request.user):
+            return Response({"message": "Owner privileges required"}, status=403)
         if request.user.role != RoleChoices.ADMIN:
             return Response(
                 {"statusCode": 403, "error": "Forbidden", "message": "Admin privileges required"},
@@ -78,10 +83,13 @@ class AdminUsersListView(APIView):
 
 
 class AdminUserRoleView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="admin_user_role", summary="Изменить роль пользователя (STUDENT / ADMIN)", responses={200: UserProfileSerializer})
     def patch(self, request, id: str):
+        if not is_owner(request.user):
+            return Response({"message": "Owner privileges required"}, status=403)
         if request.user.role != RoleChoices.ADMIN:
             return Response(
                 {"statusCode": 403, "error": "Forbidden", "message": "Admin privileges required"},
@@ -105,6 +113,7 @@ class AdminUserRoleView(APIView):
 
 
 class AdminScoreAdjustmentView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="admin_score_adjustment", summary="Начисление или списание бонусных баллов ментором", responses={201: ScoreAdjustmentSerializer})
@@ -147,6 +156,7 @@ class AdminScoreAdjustmentView(APIView):
 
 
 class AdminStatsView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="admin_stats", summary="Сводная статистика учебной активности", responses={200: dict})

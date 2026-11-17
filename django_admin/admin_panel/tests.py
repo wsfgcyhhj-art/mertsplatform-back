@@ -15,6 +15,7 @@ from admin_panel.models import (
     MediaAsset,
     Session,
     StudyGroup,
+    SubscriptionGrant, TelegramIdentity, PasswordResetTicket,
     RoleChoices,
     SubmissionStatusChoices,
 )
@@ -31,6 +32,7 @@ UNMANAGED_MODELS = [
     UserAchievement,
     MediaAsset,
     Session,
+    SubscriptionGrant, TelegramIdentity, PasswordResetTicket,
 ]
 
 
@@ -40,10 +42,8 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         super().setUpClass()
         with connection.schema_editor() as editor:
             for m in UNMANAGED_MODELS:
-                try:
+                if m._meta.db_table not in connection.introspection.table_names():
                     editor.create_model(m)
-                except Exception:
-                    pass
 
     def setUp(self):
         self.client = Client()
@@ -69,26 +69,15 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(resp_shallow.json()['mode'], 'shallow')
 
     def test_03_auth_flow_and_on_register_achievement(self):
-        # 1. Register student
-        reg_payload = {
-            "login": "test_student",
-            "password": "Password123!",
-            "groupNumber": "GRP-101",
-            "name": "Иван Студентов",
-        }
-        reg_resp = self.client.post(
-            '/api/v1/auth/register',
-            data=json.dumps(reg_payload),
-            content_type='application/json'
-        )
-        self.assertEqual(reg_resp.status_code, 201)
-        reg_data = reg_resp.json()
-        self.assertIn('accessToken', reg_data)
-        user_id = reg_data['user']['id']
-
-        # Verify ON_REGISTER achievement (WELCOME)
-        ach_count = UserAchievement.objects.filter(user_id=user_id, achievement__code='WELCOME').count()
-        self.assertEqual(ach_count, 1)
+        # Closed registration; existing provisioned accounts still authenticate.
+        reg_resp = self.client.post('/api/v1/auth/register', data={}, content_type='application/json')
+        self.assertEqual(reg_resp.status_code, 403)
+        user = User(login='test_student', has_subscription=True, group_number='GRP-101')
+        user.set_password('Password123!')
+        user.save()
+        from admin_panel.services.achievement_service import evaluate_user_achievements
+        evaluate_user_achievements(user.id, trigger_filter='ON_REGISTER')
+        self.assertEqual(UserAchievement.objects.filter(user=user, achievement__code='WELCOME').count(), 1)
 
         # 2. Login with valid credentials
         login_payload = {
@@ -117,7 +106,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_04_user_profile_and_password_update(self):
         # Create user
-        user = User.objects.create(
+        user = User.objects.create(has_subscription=True,
             login='student_profile',
             role=RoleChoices.STUDENT,
             name='Петр',
@@ -173,7 +162,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_05_media_persistence_and_webp_optimization(self):
         # Create student and mentor
-        user = User.objects.create(login='student_media', role=RoleChoices.STUDENT)
+        user = User.objects.create(has_subscription=True, login='student_media', role=RoleChoices.STUDENT)
         user.set_password('Pass1234!')
         user.save()
 
@@ -229,11 +218,11 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
     def test_06_curriculum_submissions_and_dynamic_gamification(self):
         # 1. Create mentor and student
-        mentor = User.objects.create(login='mentor_test', role=RoleChoices.ADMIN)
+        mentor = User.objects.create(has_subscription=True, login='mentor_test', role=RoleChoices.ADMIN)
         mentor.set_password('MentorPass123')
         mentor.save()
 
-        student = User.objects.create(login='student_hw', role=RoleChoices.STUDENT, group_number='GRP-1')
+        student = User.objects.create(has_subscription=True, login='student_hw', role=RoleChoices.STUDENT, group_number='GRP-1')
         student.set_password('StudentPass123')
         student.save()
 
@@ -313,15 +302,15 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(me_resp.json()['stats']['tasksAcceptedCount'], 1)
 
     def test_07_leaderboard_ranking(self):
-        s1 = User.objects.create(login='stud1', role=RoleChoices.STUDENT, current_month=1)
-        s2 = User.objects.create(login='stud2', role=RoleChoices.STUDENT, current_month=1)
+        s1 = User.objects.create(has_subscription=True, login='stud1', role=RoleChoices.STUDENT, current_month=1)
+        s2 = User.objects.create(has_subscription=True, login='stud2', role=RoleChoices.STUDENT, current_month=1)
         s1.set_password('Pass123!')
         s2.set_password('Pass123!')
         s1.save()
         s2.save()
 
         # Score adjustments: stud2 has 30, stud1 has 10
-        admin = User.objects.create(login='admin_adj', role=RoleChoices.ADMIN)
+        admin = User.objects.create(has_subscription=True, login='admin_adj', role=RoleChoices.ADMIN)
         ScoreAdjustment.objects.create(user=s2, admin=admin, amount=30, reason='Bonus', month=1)
         ScoreAdjustment.objects.create(user=s1, admin=admin, amount=10, reason='Bonus', month=1)
 
@@ -343,7 +332,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(board[0]['totalScore'], 30)
 
     def test_08_telegram_connect_and_disconnect(self):
-        user = User.objects.create(login='tg_user', role=RoleChoices.STUDENT)
+        user = User.objects.create(has_subscription=True, login='tg_user', role=RoleChoices.STUDENT)
         user.set_password('Pass123!')
         user.save()
 
@@ -436,14 +425,14 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         )
 
         # Create student and admin with telegram_chat_id
-        admin_user = User.objects.create(
+        admin_user = User.objects.create(has_subscription=True,
             login='admin_notif',
             name='Админ Уведомлений',
             password_hash='hash123',
             role=RoleChoices.ADMIN,
             telegram_chat_id='111222333',
         )
-        student = User.objects.create(
+        student = User.objects.create(has_subscription=True,
             login='student_notif',
             name='Ученик Уведомлений',
             password_hash='hash123',
@@ -567,17 +556,17 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
 
         lesson_admin = LessonAdmin(Lesson, site)
         lesson_admin.message_user = lambda req, msg: mock_messages.append(msg)
-        with patch('admin_panel.services.telegram_service.async_broadcast_message'):
+        with patch('admin_panel.services.telegram_service.async_broadcast_message', return_value={'sent': 1, 'errors': 0}):
             lesson_admin.broadcast_lesson_telegram(mock_request, Lesson.objects.filter(id=lesson.id))
         self.assertEqual(len(mock_messages), 1)
-        self.assertIn('поставлены в очередь', mock_messages[0])
+        self.assertEqual('Отправлено: 1, Ошибок: 0', mock_messages[0])
 
         task_admin = TaskAdmin(Task, site)
         task_admin.message_user = lambda req, msg: mock_messages.append(msg)
-        with patch('admin_panel.services.telegram_service.async_broadcast_message'):
+        with patch('admin_panel.services.telegram_service.async_broadcast_message', return_value={'sent': 1, 'errors': 0}):
             task_admin.broadcast_task_telegram(mock_request, Task.objects.filter(id=task.id))
         self.assertEqual(len(mock_messages), 2)
-        self.assertIn('поставлены в очередь', mock_messages[1])
+        self.assertEqual('Отправлено: 1, Ошибок: 0', mock_messages[1])
 
     def test_11_smart_groups_and_telegram_diagnostics(self):
         from unittest.mock import patch, MagicMock
@@ -611,8 +600,9 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             "name": "Студент Группы 2",
         }
         resp = self.client.post('/api/v1/auth/register', data=json.dumps(reg_payload), content_type='application/json')
-        self.assertEqual(resp.status_code, 201)
-        user_group = User.objects.get(login="student_group_test")
+        self.assertEqual(resp.status_code, 403)
+        StudyGroup.objects.get_or_create(name="js-02", defaults={"month": 2})
+        user_group = User.objects.create(has_subscription=True, login="student_group_test", password_hash="hash", group_number="js-02")
         self.assertEqual(user_group.current_month, 2)
         self.assertEqual(user_group.group_number, "js-02")
         self.assertIsNotNone(user_group.study_group)
@@ -628,7 +618,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         # 4. Test Penalty / Fine notification (ScoreAdjustment amount < 0)
         admin_user = User.objects.filter(role=RoleChoices.ADMIN).first()
         if not admin_user:
-            admin_user = User.objects.create(login='admin_fine', password_hash='hash', role=RoleChoices.ADMIN)
+            admin_user = User.objects.create(has_subscription=True, login='admin_fine', password_hash='hash', role=RoleChoices.ADMIN)
         user_group.telegram_chat_id = "555666777"
         user_group.save()
 
@@ -648,7 +638,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             self.assertIn('Штраф за плагиат', msg)
 
         # 5. Test send_test_telegram_message diagnostic
-        user_no_tg = User.objects.create(login='no_tg', password_hash='hash', role=RoleChoices.STUDENT)
+        user_no_tg = User.objects.create(has_subscription=True, login='no_tg', password_hash='hash', role=RoleChoices.STUDENT)
         ok, report = send_test_telegram_message(user_no_tg)
         self.assertFalse(ok)
         self.assertIn('не заполнен Telegram Chat ID', report)

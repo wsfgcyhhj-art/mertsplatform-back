@@ -1,3 +1,4 @@
+from admin_panel.serializers import EmptyRequestSerializer
 import re
 from django.http import HttpResponse, JsonResponse
 from rest_framework.views import APIView
@@ -14,6 +15,7 @@ from admin_panel.achievement_icons import find_preset_icon
 
 
 class MediaAssetDetailView(APIView):
+    serializer_class = EmptyRequestSerializer
     """
     Streams raw image binary (WebP, SVG, PNG) stored in Neon PostgreSQL MediaAsset table.
     Guarantees persistence across ephemeral cloud container restarts.
@@ -51,6 +53,7 @@ class MediaAssetDetailView(APIView):
 
 
 class MediaPresetsCatalogView(APIView):
+    serializer_class = EmptyRequestSerializer
     """
     Returns curated catalog of default Dark Zinc & Amber banners, avatars, and achievement icons.
     """
@@ -67,6 +70,7 @@ class MediaPresetsCatalogView(APIView):
 
 
 class PresetBannerDetailView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -84,6 +88,7 @@ class PresetBannerDetailView(APIView):
 
 
 class PresetAvatarDetailView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
@@ -101,6 +106,7 @@ class PresetAvatarDetailView(APIView):
 
 
 class PresetIconDetailView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 

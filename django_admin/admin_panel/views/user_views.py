@@ -1,3 +1,4 @@
+from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -5,6 +6,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from drf_spectacular.utils import extend_schema
+from admin_panel.permissions import HasCourseAccess
 from admin_panel.models import User, UserAchievement
 from admin_panel.serializers import (
     UserProfileSerializer,
@@ -17,6 +19,7 @@ from admin_panel.services.telegram_service import get_bot_username
 
 
 class CurrentUserView(APIView):
+    serializer_class = UserProfileSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_retrieve", summary="Получить текущий профиль пользователя и статистику", responses={200: UserProfileSerializer})
@@ -42,7 +45,6 @@ class CurrentUserView(APIView):
         field_map = {
             'name': 'name',
             'telegram': 'telegram',
-            'groupNumber': 'group_number',
             'avatarUrl': 'avatar_url',
             'bannerUrl': 'banner_url',
         }
@@ -56,6 +58,7 @@ class CurrentUserView(APIView):
 
 
 class ChangePasswordView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_change_password", summary="Смена пароля пользователя", request=ChangePasswordSerializer, responses={200: dict})
@@ -78,11 +81,15 @@ class ChangePasswordView(APIView):
             )
 
         user.set_password(new_password)
+        user.password_uses_sha256 = False
+        user.must_change_password = False
+        user.sessions.all().delete()
         user.save()
         return Response({"message": "Пароль успешно изменен"})
 
 
 class AvatarUploadView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
 
@@ -118,6 +125,7 @@ class AvatarUploadView(APIView):
 
 
 class BannerUploadView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
 
@@ -153,7 +161,8 @@ class BannerUploadView(APIView):
 
 
 class EasterEggView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(operation_id="users_me_easter_egg", summary="Активация пасхалки и получение ачивки", responses={200: dict})
     def post(self, request):
@@ -165,7 +174,8 @@ class EasterEggView(APIView):
 
 
 class UserAchievementsListView(APIView):
-    permission_classes = (IsAuthenticated,)
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated, HasCourseAccess)
 
     @extend_schema(operation_id="users_me_achievements", summary="Список достижений текущего пользователя", responses={200: UserAchievementSerializer(many=True)})
     def get(self, request):
@@ -179,6 +189,7 @@ class UserAchievementsListView(APIView):
 
 
 class TelegramConnectView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(
@@ -203,6 +214,7 @@ class TelegramConnectView(APIView):
 
 
 class TelegramDisconnectView(APIView):
+    serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_telegram_disconnect", summary="Отвязать Telegram-бота от аккаунта", responses={200: dict})
