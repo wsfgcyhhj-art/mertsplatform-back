@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { createHmac } from 'node:crypto';
 
 dotenv.config();
 
@@ -6,19 +7,28 @@ const isProd = process.env.NODE_ENV === 'production';
 const defaultAccessSecret = 'merts-jwt-access-secret-key-change-in-prod';
 const defaultRefreshSecret = 'merts-jwt-refresh-secret-key-change-in-prod';
 
-const accessSecret = (process.env.JWT_ACCESS_SECRET || defaultAccessSecret).trim();
-const refreshSecret = (process.env.JWT_REFRESH_SECRET || defaultRefreshSecret).trim();
+const legacySecret = process.env.JWT_SECRET?.trim() || '';
+function legacyJwtKey(purpose: 'access' | 'refresh'): string | undefined {
+  if (legacySecret.length < 32 || [defaultAccessSecret, defaultRefreshSecret].includes(legacySecret)) {
+    return undefined;
+  }
+  // Separate signing keys prevent a refresh token being accepted as an access token.
+  return createHmac('sha256', legacySecret).update(`merts-jwt:${purpose}`).digest('hex');
+}
+
+const accessSecret = process.env.JWT_ACCESS_SECRET?.trim() || legacyJwtKey('access') || defaultAccessSecret;
+const refreshSecret = process.env.JWT_REFRESH_SECRET?.trim() || legacyJwtKey('refresh') || defaultRefreshSecret;
 
 // Защита от запуска в production с дефолтными или пустыми секретами
 if (isProd) {
   if (!accessSecret || accessSecret === defaultAccessSecret || accessSecret.length < 32) {
     throw new Error(
-      '[Security] JWT_ACCESS_SECRET must be set and contain at least 32 characters in production!'
+      '[Security] Configure JWT_ACCESS_SECRET or JWT_SECRET with at least 32 characters in production.'
     );
   }
   if (!refreshSecret || refreshSecret === defaultRefreshSecret || refreshSecret.length < 32) {
     throw new Error(
-      '[Security] JWT_REFRESH_SECRET must be set and contain at least 32 characters in production!'
+      '[Security] Configure JWT_REFRESH_SECRET or JWT_SECRET with at least 32 characters in production.'
     );
   }
 } else if (accessSecret === defaultAccessSecret || refreshSecret === defaultRefreshSecret) {

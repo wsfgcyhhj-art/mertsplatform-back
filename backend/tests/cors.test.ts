@@ -1,6 +1,8 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo, Server } from 'node:net';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../src/prisma.js';
 
 let server: Server;
 let base: string;
@@ -40,5 +42,25 @@ test('cookie refresh rejects arbitrary previews and accepts local and configured
   ] as const) {
     const response = await fetch(base + '/refresh', { method: 'POST', headers: { Origin: origin } });
     assert.equal(response.status, code);
+  }
+});
+
+test('login returns readable CORS JSON when the database connection fails', async () => {
+  const findUnique = prisma.user.findUnique;
+  prisma.user.findUnique = () => {
+    throw new Prisma.PrismaClientInitializationError('private database details', 'test', 'P1001');
+  };
+  try {
+    const origin = 'http://localhost:5173';
+    const response = await fetch(base + '/login', {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login: 'login-test', password: 'unused' }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.equal((await response.json()).message, 'Database temporarily unavailable');
+  } finally {
+    prisma.user.findUnique = findUnique;
   }
 });

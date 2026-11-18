@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import transaction
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.utils.decorators import decorator_from_middleware, method_decorator
+from django.views.decorators.csrf import csrf_exempt
 import re
 from admin_panel.throttles import AuthThrottle
 from admin_panel.authentication import rotate_refresh, revoke_session
@@ -85,6 +86,7 @@ class RegisterView(APIView):
         return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     parser_classes = (JSONParser,)
     throttle_classes = (AuthThrottle,)

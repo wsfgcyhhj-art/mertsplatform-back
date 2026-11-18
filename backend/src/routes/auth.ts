@@ -14,6 +14,7 @@ import { updateStreak } from '../services/streakService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 import { formatUserMedia, toPublicUrl } from '../utils/url.js';
 import { eventBus } from '../services/eventBus.js';
+import { sendApiError } from '../middleware/errorHandler.js';
 
 export const authRouter = Router();
 
@@ -169,7 +170,7 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
   }
 });
 
-authRouter.post('/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
+async function loginRequest(req: Request, res: Response): Promise<void> {
   const { login, password } = req.body;
 
   if (!login || typeof login !== 'string' || !password || typeof password !== 'string') {
@@ -244,6 +245,20 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
       bannerUrl: user.bannerUrl,
       streakCount,
     }),
+  });
+}
+
+authRouter.post('/login', authLimiter, (req, res, next) => {
+  void loginRequest(req, res).catch((error: unknown) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    const unavailable = error instanceof Prisma.PrismaClientInitializationError
+      || (error instanceof Prisma.PrismaClientKnownRequestError
+        && ['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2037'].includes(error.code));
+    console.error('[Auth] Login failed:', error instanceof Error ? error.name : 'Unknown error');
+    sendApiError(res, unavailable ? 503 : 500, unavailable ? 'Database temporarily unavailable' : 'Login failed');
   });
 });
 
