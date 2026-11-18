@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from django.templatetags.static import static
 from django.urls import reverse_lazy
 import dj_database_url
@@ -113,14 +114,21 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 import sys
 
+database_url = os.getenv('TEST_DATABASE_URL') if TESTING else os.getenv('DATABASE_URL', '')
+database_parts = urlsplit(database_url or '')
+database_requires_ssl = (
+    database_parts.hostname not in ('db', 'localhost', '127.0.0.1')
+    and 'sslmode' not in parse_qs(database_parts.query, keep_blank_values=True)
+)
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': ':memory:',
     } if TESTING and not os.getenv('TEST_DATABASE_URL') else dj_database_url.parse(
-        os.getenv('TEST_DATABASE_URL') if TESTING else os.getenv('DATABASE_URL', ''),
+        database_url,
         conn_max_age=600,
-        ssl_require=True
+        ssl_require=database_requires_ssl
     )
 }
 

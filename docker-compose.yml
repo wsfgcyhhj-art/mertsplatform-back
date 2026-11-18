@@ -1,4 +1,21 @@
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   django_web:
     image: mertsplatform-django:latest
     build:
@@ -14,7 +31,7 @@ services:
       - >-
         python manage.py install_subscriptions &&
         python manage.py install_security &&
-        python manage.py install_shop &&
+        python manage.py install_shop --missing-only &&
         python manage.py migrate --noinput &&
         python manage.py collectstatic --noinput &&
         exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
@@ -29,9 +46,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+    depends_on:
+      db:
+        condition: service_healthy
 
   telegram_worker:
     image: mertsplatform-django:latest
+    pull_policy: never
     restart: unless-stopped
     env_file: .env
     command: ["python", "manage.py", "deliver_telegram"]
@@ -39,6 +60,8 @@ services:
       - media_data:/app/media
       - static_data:/app/staticfiles
     depends_on:
+      db:
+        condition: service_healthy
       django_web:
         condition: service_healthy
 
@@ -50,13 +73,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
-      LEGACY_TELEGRAM_POLLING: "false"
+      LEGACY_TELEGRAM_POLLING: "true"
     ports:
       - "127.0.0.1:5000:5000"
     depends_on:
+      db:
+        condition: service_healthy
       django_web:
         condition: service_healthy
 
 volumes:
+  postgres_data:
   media_data:
   static_data:
