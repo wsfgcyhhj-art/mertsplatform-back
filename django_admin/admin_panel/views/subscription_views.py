@@ -9,8 +9,6 @@ from rest_framework import serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.authentication import SessionAuthentication
-from admin_panel.authentication import BcryptJWTAuthentication
 from drf_spectacular.utils import extend_schema
 from admin_panel.models import StudyGroup, PasswordResetTicket
 from admin_panel.permissions import IsOwner
@@ -25,7 +23,6 @@ class GrantSerializer(serializers.Serializer):
 
 class SubscriptionGrantView(APIView):
     serializer_class = EmptyRequestSerializer
-    authentication_classes = (BcryptJWTAuthentication, SessionAuthentication)
     permission_classes = (IsAuthenticated, IsOwner)
 
     @extend_schema(request=GrantSerializer, responses={200: dict, 403: dict})

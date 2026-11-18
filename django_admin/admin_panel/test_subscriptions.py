@@ -162,15 +162,19 @@ class SubscriptionIntegrationTests(TransactionTestCase):
 
 
     @override_settings(PLATFORM_OWNER_ADMIN_ID='1')
-    def test_owner_can_grant_using_admin_session(self):
+    def test_owner_session_grants_in_admin_only(self):
         from django.contrib.auth import get_user_model
         owner = get_user_model().objects.create_superuser(pk=1, username='owner', password='test-owner-password')
         group = StudyGroup.objects.create(name='js-01')
         client = APIClient()
         client.force_login(owner)
         response = client.post('/api/v1/admin/subscriptions/grant', {'telegram_username': '@new_student', 'group_id': group.pk}, format='json')
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()['activated'])
+        self.assertEqual(response.status_code, 401)
+        response = client.post('/admin/admin_panel/subscriptiongrant/add/', {
+            'telegram_username': '@new_student', 'group': group.pk, 'is_active': 'on', '_save': 'Save',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(SubscriptionGrant.objects.filter(telegram_username='new_student', user__isnull=True).exists())
 
     def test_reset_token_is_single_use(self):
         from admin_panel.services.subscription_service import recovery_link

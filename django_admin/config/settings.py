@@ -36,8 +36,9 @@ DEBUG = False if TESTING else os.getenv('DEBUG', 'False').lower() in ('true', '1
 ALLOWED_HOSTS = [v.strip() for v in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if v.strip()]
 if TESTING:
     ALLOWED_HOSTS.append('testserver')
-if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
-    ALLOWED_HOSTS.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
+RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
+if RENDER_EXTERNAL_HOSTNAME:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
 CSRF_TRUSTED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CSRF_TRUSTED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]
 CORS_ALLOWED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]

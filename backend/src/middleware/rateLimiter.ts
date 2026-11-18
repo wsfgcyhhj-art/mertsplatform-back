@@ -1,4 +1,5 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { isIP } from 'node:net';
 
 /**
  * Rate Limiter для эндпоинтов авторизации (/api/v1/auth/login, /api/v1/auth/register).
@@ -11,6 +12,10 @@ export const authLimiter = rateLimit({
   standardHeaders: true, // возвращает стандартные заголовки RateLimit-*
   legacyHeaders: false, // отключает застарелые X-RateLimit-* заголовки
   skip: () => process.env.NODE_ENV === 'test', // пропускает лимит в тестах
+  keyGenerator: req => {
+    const renderIp = process.env.RENDER_EXTERNAL_HOSTNAME && req.get('CF-Connecting-IP');
+    return ipKeyGenerator(renderIp && isIP(renderIp) ? renderIp : req.ip || req.socket.remoteAddress || '');
+  },
   handler: (_req, res) => {
     res.status(429).json({
       statusCode: 429,

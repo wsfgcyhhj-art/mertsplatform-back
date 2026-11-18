@@ -11,6 +11,7 @@ from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.parsers import JSONParser
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
 from admin_panel.models import User, Session, RoleChoices, StudyGroup
@@ -21,6 +22,11 @@ from admin_panel.services.group_service import parse_month_from_group_name
 
 
 class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
+    def process_view(self, request, callback, callback_args, callback_kwargs):
+        if not request.COOKIES.get('refreshToken'):
+            return None
+        return super().process_view(request, callback, callback_args, callback_kwargs)
+
     def _origin_verified(self, request):
         origin = request.headers.get('Origin', '')
         return bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin)) or super()._origin_verified(request)
@@ -29,7 +35,9 @@ class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
 auth_csrf_protect = decorator_from_middleware(ApiAuthCsrfMiddleware)
 
 
-def set_auth_cookies(response, refresh_token: str):
+def set_auth_cookies(request, response, refresh_token: str):
+    if request.headers.get('Origin') and not ApiAuthCsrfMiddleware(lambda req: None)._origin_verified(request):
+        return
     response.set_cookie(
         key='refreshToken',
         value=refresh_token,
@@ -77,8 +85,8 @@ class RegisterView(APIView):
         return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
 
 
-@method_decorator(auth_csrf_protect, name='dispatch')
 class LoginView(APIView):
+    parser_classes = (JSONParser,)
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
@@ -121,7 +129,7 @@ class LoginView(APIView):
             "refreshToken": refresh_token,
             "user": user_data,
         })
-        set_auth_cookies(response, refresh_token)
+        set_auth_cookies(request, response, refresh_token)
         return response
 
 
@@ -156,7 +164,7 @@ class RefreshTokenView(APIView):
             "accessToken": access_token,
             "refreshToken": new_refresh_token,
         })
-        set_auth_cookies(response, new_refresh_token)
+        set_auth_cookies(request, response, new_refresh_token)
         return response
 
 

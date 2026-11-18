@@ -1,4 +1,4 @@
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.contrib import admin
 from admin_panel.models import Lesson, User
 from admin_panel.admin import LessonAdmin
@@ -15,6 +15,13 @@ class SecurityRegressionTests(SimpleTestCase):
             self.assertEqual(client_ip(request), '192.0.2.1')
         with override_settings(AUTH_TRUSTED_PROXY_HOPS=1):
             self.assertEqual(client_ip(request), '203.0.113.3')
+
+    @override_settings(RENDER_EXTERNAL_HOSTNAME='example.onrender.com', AUTH_TRUSTED_PROXY_HOPS=0)
+    def test_render_uses_edge_client_ip(self):
+        from django.test import RequestFactory
+        from admin_panel.throttles import client_ip
+        request = RequestFactory().get('/', REMOTE_ADDR='192.0.2.1', HTTP_CF_CONNECTING_IP='198.51.100.2')
+        self.assertEqual(client_ip(request), '198.51.100.2')
 
     def test_correct_lesson_admin_registered(self):
         self.assertIsInstance(admin.site._registry[Lesson], LessonAdmin)
@@ -55,7 +62,7 @@ class SecurityRegressionTests(SimpleTestCase):
                 save_optimized_media_asset.__wrapped__(buf.getvalue(), 'image/png')
 
 
-from django.test import TransactionTestCase, override_settings, skipUnlessDBFeature
+from django.test import TransactionTestCase, skipUnlessDBFeature
 from django.db import connection, connections, close_old_connections, transaction
 from admin_panel.test_support import create_schema, clear_data, create_user, subscribe
 from admin_panel.models import Lesson, Task, Submission, ScoreAdjustment, TelegramOutbox, TelegramUpdate, Session, MediaAsset, StudyGroup
@@ -133,9 +140,11 @@ class SecurityIntegrationTests(TransactionTestCase):
     def test_login_rate_limit(self):
         client = APIClient()
         payload = {'login': 'student', 'password': 'wrong'}
-        self.assertEqual(client.post('/api/v1/auth/login', payload).status_code, 401)
-        self.assertEqual(client.post('/api/v1/auth/login', payload).status_code, 401)
-        self.assertEqual(client.post('/api/v1/auth/login', payload).status_code, 429)
+        self.assertEqual(client.post('/api/v1/auth/login', payload, format='json').status_code, 401)
+        self.assertEqual(client.post('/api/v1/auth/login', payload, format='json').status_code, 401)
+        response = client.post('/api/v1/auth/login', payload, format='json')
+        self.assertEqual(response.status_code, 429)
+        self.assertIn('detail', response.json())
 
     def test_foreign_submission_and_admin_denied(self):
         other = create_user(login='other', has_subscription=True)
@@ -209,7 +218,15 @@ class SecurityIntegrationTests(TransactionTestCase):
 
     def test_csrf_required_for_cookie_auth_endpoints(self):
         client = APIClient(enforce_csrf_checks=True)
-        self.assertEqual(client.post('/api/v1/auth/login', {'login': 'student', 'password': 'Strong-Pass-2026!'}).status_code, 403)
+        credentials = {'login': 'student', 'password': 'Strong-Pass-2026!'}
+        self.assertEqual(client.post('/api/v1/auth/login', credentials).status_code, 415)
+        login = client.post('/api/v1/auth/login', credentials, format='json')
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(client.post('/api/v1/auth/refresh', {}, format='json').status_code, 403)
+        self.assertEqual(client.post('/api/v1/auth/logout', {}, format='json').status_code, 403)
+        client.cookies.clear()
+        self.assertEqual(client.post('/api/v1/auth/refresh', {'refreshToken': login.json()['refreshToken']},
+                                     format='json').status_code, 200)
 
     def test_cors_preflight_and_cookie_refresh_from_local_origin(self):
         client = APIClient(enforce_csrf_checks=True)
@@ -222,8 +239,12 @@ class SecurityIntegrationTests(TransactionTestCase):
 
         origin = 'http://localhost:5174'
         csrf = client.get('/api/v1/auth/csrf', secure=True, HTTP_ORIGIN=origin).json()['csrfToken']
-        login = client.post('/api/v1/auth/login', {'login': 'student', 'password': 'Strong-Pass-2026!'},
-                            secure=True, HTTP_ORIGIN=origin, HTTP_X_CSRFTOKEN=csrf)
+        credentials = {'login': 'student', 'password': 'Strong-Pass-2026!'}
+        preview_login = client.post('/api/v1/auth/login', credentials, format='json', secure=True,
+                                    HTTP_ORIGIN='https://untrusted-preview.vercel.app')
+        self.assertEqual(preview_login.status_code, 200)
+        self.assertNotIn('refreshToken', preview_login.cookies)
+        login = client.post('/api/v1/auth/login', credentials, format='json', secure=True, HTTP_ORIGIN=origin)
         self.assertEqual(login.status_code, 200)
         self.assertTrue(login.cookies['refreshToken']['secure'])
         self.assertEqual(login.cookies['refreshToken']['samesite'], 'None')

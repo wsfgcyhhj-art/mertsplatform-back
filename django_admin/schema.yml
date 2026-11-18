@@ -90,7 +90,6 @@ paths:
         required: true
       security:
       - jwtAuth: []
-      - cookieAuth: []
       responses:
         '200':
           content:
@@ -176,12 +175,6 @@ paths:
       requestBody:
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
-          multipart/form-data:
             schema:
               $ref: '#/components/schemas/LoginRequest'
         required: true
@@ -1996,10 +1989,6 @@ components:
       - telegramUsername
       - totalScore
   securitySchemes:
-    cookieAuth:
-      type: apiKey
-      in: cookie
-      name: sessionid
     jwtAuth:
       type: http
       scheme: bearer

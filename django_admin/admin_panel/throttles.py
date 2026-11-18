@@ -9,6 +9,11 @@ from ipaddress import ip_address
 
 
 def client_ip(request):
+    if settings.RENDER_EXTERNAL_HOSTNAME:
+        try:
+            return str(ip_address(request.META.get('HTTP_CF_CONNECTING_IP', '')))
+        except ValueError:
+            pass
     # Configure hops only for a controlled proxy chain that appends client addresses.
     hops = settings.AUTH_TRUSTED_PROXY_HOPS
     if hops:
