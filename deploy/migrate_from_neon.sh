@@ -34,26 +34,48 @@ if [[ "$objects" != 0 ]]; then
     exit 1
 fi
 
-# Use the PostgreSQL 16 client from db; newer source versions require a planned upgrade.
-source_version=$(docker compose exec -T -e NEON_DATABASE_URL db sh -ec '
+# PostgreSQL 18 clients can read Neon 16/17/18; restore uses the local PostgreSQL 17 db.
+source_version=$(docker run --rm -e NEON_DATABASE_URL postgres:18-alpine sh -ec '
     exec psql -X --no-password --dbname="$NEON_DATABASE_URL" -Atc "SHOW server_version_num"
 ')
-if [[ ! "$source_version" =~ ^[0-9]+$ ]] || (( source_version >= 170000 )); then
-    echo 'Source must be PostgreSQL 16 or older; cross-major downgrades are not supported.' >&2
+if [[ ! "$source_version" =~ ^[0-9]+$ ]] || (( source_version >= 190000 )); then
+    echo 'Source must be PostgreSQL 18 or older.' >&2
     exit 1
 fi
 
 dump=$(mktemp "deploy/backups/neon-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX.sql")
 trap 'echo "Migration failed; keep Neon stopped until reviewed. Dump (possibly incomplete): $dump" >&2' ERR
 echo "Saving complete schema and data to $dump"
-docker compose exec -T -e NEON_DATABASE_URL db sh -ec '
-    exec pg_dump --no-password --dbname="$NEON_DATABASE_URL" --format=plain --no-owner --no-acl --no-tablespaces
+docker run --rm -e NEON_DATABASE_URL postgres:18-alpine sh -ec '
+    exec pg_dump --no-password --dbname="$NEON_DATABASE_URL" --format=plain --no-owner --no-acl --no-tablespaces --quote-all-identifiers
 ' >"$dump"
 test -s "$dump"
-sha256sum "$dump" >"$dump.sha256"
+
+# Filter pg_dump metadata only: preserve COPY data and function bodies verbatim.
+awk '
+    BEGIN { header = 1; acl = 1 }
+    copy { print; if ($0 == "\\.") copy = 0; next }
+    /^COPY .* FROM stdin;$/ { copy = 1; print; next }
+    /^-- Name: .*; Type: / { header = 0; acl = ($0 ~ /; Type: (DEFAULT ACL|ACL);/) }
+    header && /^SET transaction_timeout[[:space:]]*=/ { next }
+    acl && /^(ALTER DEFAULT PRIVILEGES FOR ROLE|GRANT|REVOKE)[[:space:]]/ {
+        statement = $0
+        while (statement !~ /;[[:space:]]*$/ && (getline line) > 0)
+            statement = statement "\n" line
+        sql = statement
+        gsub(/[[:space:]]+/, " ", sql)
+        if (sql ~ /^ALTER DEFAULT PRIVILEGES FOR ROLE "?neon[[:alnum:]_]*"? / ||
+            sql ~ /^GRANT .* TO "?neon[[:alnum:]_]*"?([,; ]|$)/ ||
+            sql ~ /^REVOKE .* FROM "?neon[[:alnum:]_]*"?([,; ]|$)/) next
+        print statement
+        next
+    }
+    { print }
+' "$dump" >"$dump.restore"
+sha256sum "$dump" "$dump.restore" >"$dump.sha256"
 
 # Stop on the first SQL error and roll back the entire restore on failure.
-target_psql --single-transaction --file=- <"$dump"
+target_psql --single-transaction --file=- <"$dump.restore"
 target_psql -c ANALYZE
 trap - ERR
 echo "Restore completed. Keep the dump and checksum: $dump"
