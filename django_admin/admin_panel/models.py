@@ -306,7 +306,7 @@ class Task(AtomicModel):
         managed = False
         db_table = 'Task'
         verbose_name = 'Задание'
-        verbose_name_plural = 'Задания'
+        verbose_name_plural = 'Учебные задания'
         ordering = ['month', 'order']
 
     def save(self, *args, **kwargs):
@@ -347,7 +347,7 @@ class Submission(AtomicModel):
         db_table = 'Submission'
         constraints = [models.UniqueConstraint(fields=['user', 'task', 'version'], name='submission_attempt_unique')]
         verbose_name = 'Сдача ДЗ'
-        verbose_name_plural = 'Сдачи ДЗ'
+        verbose_name_plural = 'Проверка ДЗ'
         ordering = ['-created_at']
 
     def save(self, *args, **kwargs):
@@ -372,7 +372,7 @@ class ScoreAdjustment(AtomicModel):
         managed = False
         db_table = 'ScoreAdjustment'
         verbose_name = 'Корректировка баллов'
-        verbose_name_plural = 'Корректировки баллов'
+        verbose_name_plural = 'Бонусы и штрафы'
         ordering = ['-created_at']
 
     def __str__(self):
@@ -416,7 +416,7 @@ class Achievement(models.Model):
         managed = False
         db_table = 'Achievement'
         verbose_name = 'Достижение (Ачивка)'
-        verbose_name_plural = 'Достижения (Ачивки)'
+        verbose_name_plural = 'Каталог ачивок'
         ordering = ['created_at']
 
     def __str__(self):
@@ -496,8 +496,8 @@ class SubscriptionGrant(models.Model):
     class Meta:
         managed = False
         db_table = 'SubscriptionGrant'
-        verbose_name = 'Подписка'
-        verbose_name_plural = 'Подписки'
+        verbose_name = 'Доступ к платформе'
+        verbose_name_plural = 'Доступ к платформе'
 
     def __str__(self):
         return '@' + self.telegram_username

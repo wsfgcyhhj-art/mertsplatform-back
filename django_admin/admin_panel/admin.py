@@ -12,6 +12,7 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils import timezone
 from unfold.admin import ModelAdmin, TabularInline
+from unfold.contrib.filters.admin import DropdownFilter, RelatedDropdownFilter
 from .achievement_icons import (
     PRESET_ACHIEVEMENT_ICONS,
     find_preset_icon,
@@ -55,30 +56,53 @@ def extract_youtube_id(url: str) -> str:
     return url.strip()
 
 
+class StudyGroupDropdownFilter(DropdownFilter):
+    title = 'Учебная группа'
+    parameter_name = 'study_group_name'
+
+    def lookups(self, request, model_admin):
+        self.group_lookup = model_admin.group_lookup
+        return StudyGroup.objects.order_by('month', 'name').values_list('name', 'name')
+
+    def queryset(self, request, queryset):
+        if self.value():
+            return queryset.filter(**{self.group_lookup: self.value()})
+        return queryset
+
+
 @admin.register(Submission)
 class SubmissionAdmin(ModelAdmin):
+    list_filter_submit = True
+    group_lookup = 'user__group_number'
     list_fullwidth = True
     list_display = (
         'user',
         'task',
+        'status_badge',
         'status',
         'score',
         'solution_link_click',
-        'version',
-        'created_at',
     )
-    list_filter = ('status', 'task__month')
-    search_fields = ('user__login', 'user__name', 'solution_link')
+    list_filter = ('status', 'task__month', StudyGroupDropdownFilter)
+    search_fields = ('user__login', 'user__name', 'task__title', 'solution_link')
     list_editable = ('status', 'score')
     ordering = ('-created_at',)
 
-    @admin.display(description='Ссылка на GitHub')
+    @admin.display(description='Текущий статус', ordering='status')
+    def status_badge(self, obj):
+        label = obj.get_status_display()
+        return format_html(
+            '<span class="merts-badge" data-status="{}">{}</span>',
+            obj.status, label.split(' (', 1)[0],
+        )
+
+    @admin.display(description='GitHub')
     def solution_link_click(self, obj):
         if obj.solution_link:
             return format_html(
                 '<a href="{}" target="_blank" rel="noopener noreferrer" '
-                'style="font-weight: 600; color: #8b5cf6; text-decoration: underline;">'
-                '🔗 Открыть GitHub ↗</a>',
+                'class="merts-link">'
+                'Открыть ↗</a>',
                 obj.solution_link,
             )
         return '—'
@@ -110,7 +134,9 @@ class StudyGroupAdmin(ModelAdmin):
         return is_admin_owner(request.user)
 
     actions = ['archive_groups', 'activate_groups']
-    list_filter = ('is_active', 'month')
+    list_filter_submit = True
+    group_lookup = 'name'
+    list_filter = ('is_active', 'month', StudyGroupDropdownFilter)
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -124,7 +150,8 @@ class StudyGroupAdmin(ModelAdmin):
         queryset.update(is_active=True)
 
     list_fullwidth = True
-    list_display = ('name', 'month', 'students_count_badge', 'lessons_count_badge', 'tasks_count_badge', 'created_at')
+    list_display = ('name', 'month', 'is_active', 'students_count_badge', 'lessons_count_badge', 'tasks_count_badge')
+    list_editable = ('month',)
     search_fields = ('name',)
     ordering = ('month', 'name')
     inlines = [StudyGroupStudentInline]
@@ -132,17 +159,17 @@ class StudyGroupAdmin(ModelAdmin):
     @admin.display(description='Студентов')
     def students_count_badge(self, obj):
         cnt = obj.students_count
-        return format_html('<span style="font-weight:600;color:#10b981;">{} студ.</span>', cnt)
+        return format_html('<span class="merts-positive">{} студ.</span>', cnt)
 
     @admin.display(description='Видеоуроков')
     def lessons_count_badge(self, obj):
         cnt = obj.lessons_count
-        return format_html('<span style="font-weight:600;color:#38bdf8;">{} ур.</span>', cnt)
+        return format_html('<span class="merts-link">{} ур.</span>', cnt)
 
     @admin.display(description='Заданий')
     def tasks_count_badge(self, obj):
         cnt = obj.tasks_count
-        return format_html('<span style="font-weight:600;color:#fbbf24;">{} ДЗ</span>', cnt)
+        return format_html('<span class="merts-warning">{} ДЗ</span>', cnt)
 
 
 class SearchableGroupWidget(forms.TextInput):
@@ -222,10 +249,13 @@ class GroupSavingAdmin(ModelAdmin):
 
 @admin.register(Lesson)
 class LessonAdmin(GroupSavingAdmin):
+    list_filter_submit = True
+    group_lookup = 'group_number'
     form = LessonAdminForm
     list_fullwidth = True
     list_display = ('title', 'group_badge', 'month', 'order', 'youtube_id_click')
-    list_filter = ('group_number', 'month')
+    list_filter = (StudyGroupDropdownFilter, 'month')
+    list_editable = ('order',)
     search_fields = ('title', 'group_number', 'youtube_id')
     ordering = ('month', 'group_number', 'order')
     readonly_fields = ('youtube_id', 'created_at', 'updated_at')
@@ -234,21 +264,15 @@ class LessonAdmin(GroupSavingAdmin):
     @admin.display(description='Группа')
     def group_badge(self, obj):
         val = obj.group_number or 'ALL'
-        is_all = val.upper() == 'ALL'
-        color = '#a1a1aa' if is_all else '#38bdf8'
-        text = 'Все группы' if is_all else val
-        return format_html(
-            '<span style="padding:2px 8px;border-radius:6px;background:#18181b;border:1px solid #27272a;color:{};font-weight:600;font-size:12px;">{}</span>',
-            color,
-            text
-        )
+        text = 'Все группы' if val.upper() == 'ALL' else val
+        return format_html('<span class="merts-badge">{}</span>', text)
 
     @admin.display(description='YouTube')
     def youtube_id_click(self, obj):
         if obj.youtube_id:
             url = f"https://www.youtube.com/watch?v={obj.youtube_id}"
             return format_html(
-                '<a href="{}" target="_blank" rel="noopener noreferrer" style="color:#ef4444;font-weight:600;">▶ {}</a>',
+                '<a href="{}" target="_blank" rel="noopener noreferrer" class="merts-link">▶ {}</a>',
                 url,
                 obj.youtube_id
             )
@@ -302,23 +326,22 @@ class TaskAdminForm(forms.ModelForm):
 
 @admin.register(Task)
 class TaskAdmin(GroupSavingAdmin):
+    list_filter_submit = True
+    group_lookup = 'group_number'
     form = TaskAdminForm
     list_fullwidth = True
     list_display = ('title', 'topic', 'group_badge', 'month', 'max_score', 'is_bonus')
-    list_filter = ('group_number', 'month', 'is_bonus')
+    list_filter = (StudyGroupDropdownFilter, 'month', 'is_bonus')
+    list_editable = ('is_bonus',)
     search_fields = ('title', 'topic', 'description', 'group_number')
     ordering = ('month', 'order')
     actions = ['broadcast_task_telegram']
 
     @admin.display(description='Группа')
     def group_badge(self, obj):
-        val = obj.group_number
-        if not val or val.upper() == 'ALL':
-            return format_html('<span style="color:#a1a1aa;font-size:12px;">Все группы</span>')
-        return format_html(
-            '<span style="padding:2px 8px;border-radius:6px;background:#18181b;border:1px solid #27272a;color:#fbbf24;font-weight:600;font-size:12px;">{}</span>',
-            val
-        )
+        val = obj.group_number or 'ALL'
+        text = 'Все группы' if val.upper() == 'ALL' else val
+        return format_html('<span class="merts-badge">{}</span>', text)
 
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_task_telegram(self, request, queryset):
@@ -396,6 +419,9 @@ class UserAdminForm(forms.ModelForm):
 
 @admin.register(User)
 class UserAdmin(GroupSavingAdmin):
+    list_filter_submit = True
+    group_lookup = 'group_number'
+
     def has_add_permission(self, request):
         return is_admin_owner(request.user)
 
@@ -415,11 +441,11 @@ class UserAdmin(GroupSavingAdmin):
         'telegram_status_badge',
         'group_number',
         'current_month',
-        'streak_count',
         'role',
     )
-    list_filter = ('role', 'mentor', 'current_month', 'group_number')
+    list_filter = ('role', 'mentor', 'current_month', StudyGroupDropdownFilter)
     search_fields = ('login', 'name', 'telegram', 'telegram_username', 'telegram_chat_id', 'group_number')
+    list_editable = ('name',)
     raw_id_fields = ('mentor',)
     ordering = ('-created_at',)
     readonly_fields = ('id', 'created_at', 'updated_at')
@@ -430,10 +456,10 @@ class UserAdmin(GroupSavingAdmin):
     def telegram_status_badge(self, obj):
         if obj.telegram_chat_id:
             tag = f"@{obj.telegram_username}" if obj.telegram_username else f"ID: {obj.telegram_chat_id}"
-            return format_html('<span style="color:#10b981;font-weight:600;">✓ {}</span>', tag)
+            return format_html('<span class="merts-positive">✓ {}</span>', tag)
         if obj.telegram_username:
-            return format_html('<span style="color:#f59e0b;font-weight:500;">@{} (не активен)</span>', obj.telegram_username)
-        return format_html('<span style="color:#71717a;">—</span>')
+            return format_html('<span class="merts-warning">@{} (не активен)</span>', obj.telegram_username)
+        return '—'
 
     @admin.action(description="🧪 Проверить связь (отправить тест в Telegram)")
     def test_telegram_connection(self, request, queryset):
@@ -468,10 +494,13 @@ class UserAdmin(GroupSavingAdmin):
 
 @admin.register(ScoreAdjustment)
 class ScoreAdjustmentAdmin(ModelAdmin):
+    list_filter_submit = True
+    group_lookup = 'user__group_number'
     list_fullwidth = True
     list_display = ('user', 'amount', 'reason', 'month', 'admin', 'created_at')
-    list_filter = ('month',)
-    search_fields = ('user__login', 'user__name', 'reason')
+    list_editable = ('reason',)
+    list_filter = ('month', StudyGroupDropdownFilter)
+    search_fields = ('user__login', 'user__name', 'reason', 'user__group_number')
     ordering = ('-created_at',)
 
 
@@ -497,7 +526,7 @@ class PresetIconGalleryWidget(forms.Widget):
                                  border:1px solid rgba(245,158,11,0.3);display:inline-flex;align-items:center;justify-content:center;">
                         <img src="{item['data_uri']}" alt="{item['slug']}" style="width:20px;height:20px;object-fit:contain;" />
                     </span>
-                    <span style="font-size:12px;font-weight:600;line-height:1.25;">{item['label']}</span>
+                    <span style="font-size:0.9375rem;font-weight:600;line-height:1.25;">{item['label']}</span>
                 </button>
                 '''
             )
@@ -521,7 +550,7 @@ class PresetIconGalleryWidget(forms.Widget):
                     </div>
                 </div>
             </div>
-            <div id="merts_preset_gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;">
+            <div id="merts_preset_gallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:10px;">
                 {''.join(cards_html)}
             </div>
         </div>
@@ -712,14 +741,13 @@ class AchievementAdmin(ModelAdmin):
     list_display = (
         'icon_preview',
         'title',
-        'code',
         'category',
         'rule_badge',
         'points',
         'is_active',
         'icon_source_badge',
     )
-    list_display_links = ('title', 'code')
+    list_display_links = ('title',)
     list_editable = ('points', 'is_active')
     list_filter = ('category', 'trigger_type', 'is_active')
     search_fields = ('title', 'code', 'description', 'criteria')
@@ -781,17 +809,10 @@ class AchievementAdmin(ModelAdmin):
     def icon_source_badge(self, obj):
         preset = find_preset_icon(obj.icon_url)
         if preset:
-            return format_html(
-                '<span style="font-size:12px;font-weight:600;color:#fbbf24;">Предустановленная ({})</span>',
-                preset['slug'],
-            )
+            return format_html('<span class="merts-warning">Пресет ({})</span>', preset['slug'])
         if obj.icon_url and ('/api/v1/media/' in obj.icon_url or obj.icon_url.startswith('data:image/')):
-            return mark_safe(
-                '<span style="font-size:12px;font-weight:600;color:#10b981;">Кастомный файл (Neon DB)</span>'
-            )
-        return mark_safe(
-            '<span style="font-size:12px;font-weight:600;color:#a1a1aa;">Внешний URL</span>'
-        )
+            return format_html('<span class="merts-positive">{}</span>', 'Кастомный файл (Neon DB)')
+        return 'Внешний URL'
 
 
 @admin.register(UserAchievement)
@@ -852,6 +873,12 @@ class SubscriptionGrantForm(forms.ModelForm):
     class Meta:
         model = SubscriptionGrant
         fields = ('telegram_username', 'group', 'expires_at', 'is_active')
+        labels = {
+            'telegram_username': 'Telegram @username',
+            'group': 'Учебная группа',
+            'expires_at': 'Доступ до',
+            'is_active': 'Доступ активен',
+        }
 
     def clean_telegram_username(self):
         return normalize_username(self.cleaned_data['telegram_username'])
@@ -860,7 +887,14 @@ class SubscriptionGrantForm(forms.ModelForm):
 @admin.register(SubscriptionGrant)
 class SubscriptionGrantAdmin(ModelAdmin):
     form = SubscriptionGrantForm
+    list_filter_submit = True
     list_display = ('telegram_username', 'group', 'expires_at', 'is_active', 'user')
+    list_filter = (('group', RelatedDropdownFilter), 'is_active')
+    search_fields = ('telegram_username', 'user__login')
+    fieldsets = (('Доступ к платформе', {
+        'fields': ('telegram_username', 'group', 'expires_at', 'is_active'),
+        'description': 'Выдать доступ студенту по Telegram @username.',
+    }),)
 
     def has_module_permission(self, request):
         return is_admin_owner(request.user)

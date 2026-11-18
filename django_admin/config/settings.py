@@ -220,22 +220,22 @@ UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
-                        "title": "Учебные группы (Groups)",
+                        "title": "Учебные группы",
                         "icon": "school",
                         "link": reverse_lazy("admin:admin_panel_studygroup_changelist"),
                     },
                     {
-                        "title": "Проверка ДЗ (Submissions)",
+                        "title": "Проверка ДЗ",
                         "icon": "fact_check",
                         "link": reverse_lazy("admin:admin_panel_submission_changelist"),
                     },
                     {
-                        "title": "Видеоуроки (Lessons)",
+                        "title": "Видеоуроки",
                         "icon": "smart_display",
                         "link": reverse_lazy("admin:admin_panel_lesson_changelist"),
                     },
                     {
-                        "title": "Учебные задания (Tasks)",
+                        "title": "Учебные задания",
                         "icon": "assignment",
                         "link": reverse_lazy("admin:admin_panel_task_changelist"),
                     },
@@ -247,17 +247,17 @@ UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
-                        "title": "Закрытые подписки",
+                        "title": "Доступ к платформе",
                         "icon": "key",
                         "link": reverse_lazy("admin:admin_panel_subscriptiongrant_changelist"),
                     },
                     {
-                        "title": "Пользователи (Users)",
+                        "title": "Пользователи",
                         "icon": "group",
                         "link": reverse_lazy("admin:admin_panel_user_changelist"),
                     },
                     {
-                        "title": "Бонусы и штрафы (Scores)",
+                        "title": "Бонусы и штрафы",
                         "icon": "leaderboard",
                         "link": reverse_lazy("admin:admin_panel_scoreadjustment_changelist"),
                     },

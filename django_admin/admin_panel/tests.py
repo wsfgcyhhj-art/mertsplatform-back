@@ -680,6 +680,53 @@ class AdminSchemaRegressionTests(TransactionTestCase):
         with patch('admin_panel.admin.StudyGroupAdmin.get_queryset', side_effect=ProgrammingError('no such table: StudyGroup')):
             self.assertEqual(self.client.get('/admin/admin_panel/studygroup/').status_code, 503)
 
+    def test_admin_sections_search_and_group_filter(self):
+        self.client.force_login(self.owner)
+        group = StudyGroup.objects.create(name='audit-js')
+        other_group = StudyGroup.objects.create(name='audit-py')
+        mentor = create_user(login='mentor', role=RoleChoices.ADMIN)
+        for current_group in (group, other_group):
+            student = create_user(login=current_group.name, group_number=current_group.name)
+            lesson = Lesson.objects.create(title='Аудит', group_number=current_group.name)
+            task = Task.objects.create(title='Аудит', topic='Тема', group_number=current_group.name)
+            submission = Submission.objects.create(user=student, task=task)
+            adjustment = ScoreAdjustment.objects.create(user=student, admin=mentor, amount=1, reason='Аудит', month=1)
+            if current_group == group:
+                expected = {
+                    'studygroup': (group, 'audit'),
+                    'user': (student, 'audit'),
+                    'lesson': (lesson, 'Аудит'),
+                    'task': (task, 'Аудит'),
+                    'submission': (submission, 'Аудит'),
+                    'scoreadjustment': (adjustment, 'Аудит'),
+                }
+        for section, (record, query) in expected.items():
+            with self.subTest(section=section):
+                path = f'/admin/admin_panel/{section}/'
+                response = self.client.get(path, {'q': query, 'study_group_name': group.name})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'name="study_group_name"')
+                self.assertEqual(list(response.context['cl'].result_list), [record])
+                self.assertEqual(list(self.client.get(path, {'q': 'no-match'}).context['cl'].result_list), [])
+
+        achievement = Achievement.objects.create(code='ADMIN_AUDIT', title='Аудит')
+        response = self.client.get('/admin/admin_panel/achievement/', {'q': achievement.code})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context['cl'].result_list), [achievement])
+
+    def test_admin_quick_edit_preserves_task_group(self):
+        self.client.force_login(self.owner)
+        group = StudyGroup.objects.create(name='audit-js', month=2)
+        task = Task.objects.create(title='Аудит', topic='Тема', group_number=group.name, month=2)
+        response = self.client.post('/admin/admin_panel/task/', {
+            'form-TOTAL_FORMS': '1', 'form-INITIAL_FORMS': '1',
+            'form-0-id': task.pk, 'form-0-is_bonus': 'on', '_save': 'Сохранить',
+        })
+        self.assertEqual(response.status_code, 302)
+        task.refresh_from_db()
+        self.assertTrue(task.is_bonus)
+        self.assertEqual((task.group_number, task.month), (group.name, 2))
+
     def test_missing_login_rate_table_fails_closed(self):
         from unittest.mock import patch
         from django.db import ProgrammingError
