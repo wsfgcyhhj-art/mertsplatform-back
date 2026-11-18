@@ -1,57 +1,62 @@
-version: '3.8'
-
 services:
-  backend:
+  django_web:
+    image: mertsplatform-django:latest
     build:
       context: ./django_admin
-      dockerfile: Dockerfile
-    container_name: merts-backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
-    env_file:
-      - ./backend/.env
+    env_file: .env
     environment:
-      - DEBUG=False
-      - PYTHONUNBUFFERED=1
+      DEBUG: "False"
+      TRUST_HTTPS_PROXY: "1"
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py install_subscriptions &&
+        python manage.py install_security &&
+        python manage.py install_shop &&
+        python manage.py migrate --noinput &&
+        python manage.py collectstatic --noinput &&
+        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health?shallow=true"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "-H", "Host: localhost", "-H", "X-Forwarded-Proto: https", "http://127.0.0.1:8000/api/v1/health?shallow=true"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 120s
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: merts-frontend
+  telegram_worker:
+    image: mertsplatform-django:latest
     restart: unless-stopped
-    ports:
-      - "3000:80"
+    env_file: .env
+    command: ["python", "manage.py", "deliver_telegram"]
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
     depends_on:
-      backend:
+      django_web:
         condition: service_healthy
 
-  bot:
+  node_api:
     build:
-      context: ./django_admin
-      dockerfile: Dockerfile
-    container_name: merts-telegram-bot
+      context: ./backend
     restart: unless-stopped
-    command: ["python", "manage.py", "runbot"]
-    env_file:
-      - ./backend/.env
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      LEGACY_TELEGRAM_POLLING: "false"
+    ports:
+      - "127.0.0.1:5000:5000"
     depends_on:
-      - backend
+      django_web:
+        condition: service_healthy
 
-  telegram-delivery:
-    build:
-      context: ./django_admin
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    command: ["python", "manage.py", "deliver_telegram"]
-    env_file:
-      - ./backend/.env
-    depends_on:
-      - backend
+volumes:
+  media_data:
+  static_data:
