@@ -1,6 +1,7 @@
 .footer {
-    width: 1420px;
-    height: 30px;
+    width: min(100%, 1420px);
+    min-height: 30px;
+    padding-inline: 1rem;
     margin: 20px auto;
     display: flex;
     align-items: center;
