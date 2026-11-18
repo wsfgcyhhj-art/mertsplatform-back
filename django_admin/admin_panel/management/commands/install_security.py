@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
+from django.core.management import call_command
 from django.db import connection, transaction
 from django.db.models import Count
 from admin_panel.models import (ScoreAdjustment, Submission, Session, AuthRateBucket, TelegramUpdate, TelegramOutbox, TelegramIdentity)
@@ -9,6 +10,7 @@ class Command(BaseCommand):
     help = 'Install additive security schema and hash legacy refresh tokens. No user records removed.'
 
     def handle(self, *args, **options):
+        call_command('install_subscriptions', stdout=self.stdout)
         duplicate = Submission.objects.values('user_id', 'task_id', 'version').annotate(n=Count('id')).filter(n__gt=1).exists()
         if duplicate:
             raise CommandError('Duplicate attempt versions exist. Resolve before adding uniqueness; no changes applied.')

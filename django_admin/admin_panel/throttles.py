@@ -54,7 +54,16 @@ class AdminLoginThrottleMiddleware:
 
     def __call__(self, request):
         if request.method == 'POST' and request.path.rstrip('/') == '/admin/login':
-            if not consume_auth_attempt(client_ip(request), request.POST.get('username', '')):
+            from django.db import ProgrammingError, OperationalError
+            try:
+                allowed = consume_auth_attempt(client_ip(request), request.POST.get('username', ''))
+            except (ProgrammingError, OperationalError) as exc:
+                from .admin_schema import AdminSchemaGuard
+                response = AdminSchemaGuard(self.get_response).process_exception(request, exc)
+                if response is not None:
+                    return response
+                raise
+            if not allowed:
                 from django.http import HttpResponse
                 return HttpResponse('Слишком много попыток входа.', status=429, headers={'Retry-After': '300'})
         return self.get_response(request)

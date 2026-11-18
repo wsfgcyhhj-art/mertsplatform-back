@@ -7,6 +7,18 @@ class Command(BaseCommand):
     help = "Apply additive subscription schema to unmanaged tables; existing users remain unsubscribed."
 
     def handle(self, *args, **options):
+        # Unmanaged models are not created by migrate.
+        if connection.vendor == 'postgresql':
+            with connection.cursor() as cursor:
+                cursor.execute('''CREATE TABLE IF NOT EXISTS "StudyGroup" (
+                    "id" varchar(64) PRIMARY KEY, "name" varchar(64) UNIQUE NOT NULL,
+                    "month" integer NOT NULL DEFAULT 1,
+                    "created_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    "is_active" boolean NOT NULL DEFAULT true)''')
+                cursor.execute('ALTER TABLE "StudyGroup" ADD COLUMN IF NOT EXISTS "is_active" boolean NOT NULL DEFAULT true')
+        elif StudyGroup._meta.db_table not in connection.introspection.table_names():
+            with connection.schema_editor() as editor:
+                editor.create_model(StudyGroup)
         with connection.cursor() as cursor:
             columns = {c.name for c in connection.introspection.get_table_description(cursor, User._meta.db_table)}
         with connection.schema_editor() as editor:

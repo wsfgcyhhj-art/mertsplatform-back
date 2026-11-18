@@ -651,3 +651,45 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
                 user_admin.test_telegram_connection(mock_req, User.objects.filter(id=user_group.id))
         self.assertEqual(len(mock_msgs), 1)
         self.assertIn('Успешно', mock_msgs[0][0])
+
+
+class AdminSchemaRegressionTests(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        create_schema()
+
+    def setUp(self):
+        clear_data()
+        from django.contrib.auth import get_user_model
+        self.owner = get_user_model().objects.create_superuser(username='schema-owner', password='Test-Owner-Password-2026!')
+        self.client = Client()
+
+    def test_login_and_groups_open(self):
+        path = '/admin/admin_panel/studygroup/'
+        self.assertEqual(self.client.get('/admin/login/?next=' + path).status_code, 200)
+        self.assertEqual(self.client.get(path).status_code, 302)
+        self.client.force_login(self.owner)
+        StudyGroup.objects.create(name='js-01')
+        self.assertEqual(self.client.get(path).status_code, 200)
+
+    def test_missing_group_table_returns_503(self):
+        from unittest.mock import patch
+        from django.db import ProgrammingError
+        self.client.force_login(self.owner)
+        with patch('admin_panel.admin.StudyGroupAdmin.get_queryset', side_effect=ProgrammingError('no such table: StudyGroup')):
+            self.assertEqual(self.client.get('/admin/admin_panel/studygroup/').status_code, 503)
+
+    def test_missing_login_rate_table_fails_closed(self):
+        from unittest.mock import patch
+        from django.db import ProgrammingError
+        with patch('admin_panel.throttles.consume_auth_attempt', side_effect=ProgrammingError('no such table: AuthRateBucket')):
+            self.assertEqual(self.client.post('/admin/login/', {'username': 'owner', 'password': 'wrong'}).status_code, 503)
+
+    def test_initializer_creates_missing_group_table_and_is_repeatable(self):
+        from django.core.management import call_command
+        with connection.schema_editor() as editor:
+            editor.delete_model(StudyGroup)
+        for _ in range(2):
+            call_command('install_subscriptions', stdout=io.StringIO())
+        self.assertEqual(StudyGroup.objects.count(), 0)
