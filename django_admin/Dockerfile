@@ -23,4 +23,4 @@ COPY . /app/
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 config.wsgi:application"]
+CMD ["sh", "-c", "python manage.py install_shop --missing-only && python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 config.wsgi:application"]

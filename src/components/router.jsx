@@ -11,6 +11,7 @@ import {ProfilePage} from "../pages/ProfilePage/ui/ProfilePage.jsx";
 import {AchievementsPage} from "../pages/AchievementsPage/ui/AchievementsPage.jsx";
 import {LessonsPage} from "../pages/LessonsPage/ui/LessonsPage.jsx";
 import {TasksList} from "../pages/TasksPge/ui/TasksList.jsx";
+import {ShopPage} from "../pages/ShopPage/ShopPage.jsx";
 import {LeaderboardPage} from "../pages/LeaderboardPage/ui/LeaderboardPage.jsx";
 import {AboutMeList} from "../pages/AboutMePage/ui/AboutMeList.jsx";
 import {Nothing} from "./Nothing.jsx";
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
                         path: 'tasks',
                         element: <TasksList />
                     },
+                    { path: 'shop', element: <ShopPage /> },
                     {
                         path: 'profile',
                         element: <ProfilePage />

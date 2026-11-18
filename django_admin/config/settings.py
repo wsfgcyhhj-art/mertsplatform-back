@@ -242,6 +242,22 @@ UNFOLD = {
                 ],
             },
             {
+                "title": "Магазин мерча",
+                "separator": True,
+                "items": [
+                    {
+                        "title": "Магазин мерча (Товары)",
+                        "icon": "storefront",
+                        "link": reverse_lazy("admin:admin_panel_shopproduct_changelist"),
+                    },
+                    {
+                        "title": "Заказы мерча",
+                        "icon": "shopping_bag",
+                        "link": reverse_lazy("admin:admin_panel_shoporder_changelist"),
+                    },
+                ],
+            },
+            {
                 "title": "Студенты и Геймификация",
                 "separator": True,
                 "collapsible": False,
@@ -309,6 +325,10 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
+    'ENUM_NAME_OVERRIDES': {
+        'StatusEnum': 'admin_panel.models.SubmissionStatusChoices',
+        'ShopOrderStatusEnum': 'admin_panel.models.ShopOrderStatus',
+    },
     'TITLE': 'MertsPlatform LMS API',
     'DESCRIPTION': 'Production REST API for MertsPlatform: Authentication, Curriculum, Homework Submissions, Media Assets & Dynamic Gamification Engine.',
     'VERSION': '1.0.0',

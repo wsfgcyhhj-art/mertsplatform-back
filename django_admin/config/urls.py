@@ -1,3 +1,4 @@
+from admin_panel.views.shop_views import MyShopOrdersView, ShopBalanceView, ShopOrdersView, ShopProductsView
 from admin_panel.views.auth_views import CsrfTokenView
 from admin_panel.views.subscription_views import SubscriptionGrantView, PasswordResetView
 from django.contrib import admin
@@ -100,6 +101,11 @@ urlpatterns = [
     # Gamification: Achievements & Leaderboard
     path('api/v1/achievements', AchievementsCatalogView.as_view(), name='achievements-catalog'),
     path('api/v1/leaderboard', LeaderboardView.as_view(), name='leaderboard'),
+
+    path('api/v1/shop/balance', ShopBalanceView.as_view(), name='shop-balance'),
+    path('api/v1/shop/products', ShopProductsView.as_view(), name='shop-products'),
+    path('api/v1/shop/orders', ShopOrdersView.as_view(), name='shop-orders'),
+    path('api/v1/shop/orders/my', MyShopOrdersView.as_view(), name='shop-orders-my'),
 
     # Mentor & Admin Management
     path('api/v1/admin/users', AdminUsersListView.as_view(), name='admin-users'),

@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react';
 import cls from '../../src/components/header.module.scss';
-import { FaHome, FaNewspaper, FaTasks, FaTrophy, FaAward, FaTerminal } from "react-icons/fa";
+import { FaHome, FaNewspaper, FaTasks, FaTrophy, FaAward, FaShoppingBag, FaTerminal } from "react-icons/fa";
 import { FaBookOpenReader, FaRegMessage } from "react-icons/fa6";
 import { MdAdminPanelSettings } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
@@ -125,6 +125,7 @@ export const Header = () => {
             img: FaAward,
             path: 'achievements'
         },
+        { id: 10, name: 'Магазин', img: FaShoppingBag, path: 'shop' },
         {
             id: 5,
             name: 'События',

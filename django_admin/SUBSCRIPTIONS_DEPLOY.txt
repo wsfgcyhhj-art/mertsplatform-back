@@ -20,6 +20,7 @@ Production deployment and security upgrade
      python manage.py install_subscriptions
      python manage.py install_security
      python manage.py migrate --noinput
+     python manage.py install_shop --missing-only
      python manage.py collectstatic --noinput
    Security schema changes are additive/idempotent: new outbox, update ledger,
    auth rate buckets, unique attempt versions, nullable cached Telegram usernames,

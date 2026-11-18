@@ -26,6 +26,9 @@ from .models import (
     Task,
     Submission,
     ScoreAdjustment,
+    ShopOrder,
+    ShopOrderStatus,
+    ShopProduct,
     Achievement,
     UserAchievement,
     MonthlyScoreArchive,
@@ -979,3 +982,78 @@ class TelegramOutboxAdmin(ModelAdmin):
     def retry_failed(self, request, queryset):
         from django.utils import timezone
         queryset.filter(status='failed').update(status='pending', attempts=0, available_at=timezone.now(), last_error='')
+
+
+class ShopProductForm(forms.ModelForm):
+    image = forms.ImageField(label='Загрузить изображение товара', required=False)
+
+    class Meta:
+        model = ShopProduct
+        fields = '__all__'
+
+    def clean_image(self):
+        from .services.media_service import FORMATS, MAX_PIXELS, read_upload
+        image = self.cleaned_data.get('image')
+        if image:
+            try:
+                if image.image.format not in FORMATS or image.image.width * image.image.height > MAX_PIXELS:
+                    raise ValueError('Недопустимый формат или размер изображения.')
+                read_upload(image, 'GENERAL')
+            except ValueError as error:
+                raise forms.ValidationError(str(error)) from error
+            finally:
+                image.seek(0)
+        return image
+
+
+@admin.register(ShopProduct)
+class ShopProductAdmin(ModelAdmin):
+    form = ShopProductForm
+    fields = ('title', 'description', 'price_som', 'price_coins', 'stock', 'is_active', 'order', 'image_url', 'image')
+    list_display = ('title', 'price_som', 'price_coins', 'stock', 'is_active', 'order')
+    list_editable = ('price_coins', 'stock', 'is_active')
+    search_fields = ('title', 'description')
+    list_filter = ('is_active',)
+
+    def save_model(self, request, obj, form, change):
+        from .services.media_service import read_upload, save_optimized_media_asset
+        image = form.cleaned_data.get('image')
+        fields = set(form.changed_data) - {'image'}
+        if image:
+            asset = save_optimized_media_asset(read_upload(image, 'GENERAL'), image.content_type)
+            obj.image_url = asset['url']
+            fields.add('image_url')
+        if change:
+            obj.save(update_fields=fields)
+        else:
+            super().save_model(request, obj, form, change)
+
+
+@admin.register(ShopOrder)
+class ShopOrderAdmin(ModelAdmin):
+    list_display = ('created_at', 'user', 'product', 'price_coins', 'status', 'processed_by')
+    list_filter = ('status', 'created_at')
+    search_fields = ('id', 'user__login', 'product__title')
+    list_select_related = ('user', 'product')
+    readonly_fields = ('id', 'created_at', 'user', 'product', 'price_coins', 'status', 'comment', 'processed_by', 'processed_at')
+    actions = ('complete_orders', 'cancel_orders')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description='✅ Отметить выданным')
+    def complete_orders(self, request, queryset):
+        self._process_batch(request, queryset, ShopOrderStatus.COMPLETED)
+
+    @admin.action(description='❌ Отменить заказ и вернуть баллы')
+    def cancel_orders(self, request, queryset):
+        self._process_batch(request, queryset, ShopOrderStatus.CANCELLED)
+
+    def _process_batch(self, request, queryset, status):
+        from .services.shop_service import process_order
+        order_ids = list(queryset.values_list('pk', flat=True))
+        changed = sum(process_order(order_id, status, request.user) for order_id in order_ids)
+        self.message_user(request, f'Обработано: {changed}. Пропущено: {len(order_ids) - changed}.')

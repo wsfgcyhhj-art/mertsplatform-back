@@ -446,6 +446,98 @@ paths:
       responses:
         '200':
           description: No response body
+  /api/v1/shop/balance:
+    get:
+      operationId: v1_shop_balance_retrieve
+      summary: Баланс магазина
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopBalance'
+          description: ''
+  /api/v1/shop/orders:
+    post:
+      operationId: v1_shop_orders_create
+      summary: Покупка товара за баллы
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShopPurchaseRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ShopPurchaseRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ShopPurchaseRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopPurchaseResponse'
+          description: ''
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopPurchaseResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopError'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopError'
+          description: ''
+  /api/v1/shop/orders/my:
+    get:
+      operationId: v1_shop_orders_my_list
+      summary: История покупок студента
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShopOrder'
+          description: ''
+  /api/v1/shop/products:
+    get:
+      operationId: v1_shop_products_retrieve
+      summary: Активные товары и баланс магазина
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopCatalog'
+          description: ''
   /api/v1/submissions:
     get:
       operationId: submissions_list
@@ -687,7 +779,7 @@ paths:
     post:
       operationId: v1_telegram_webhook_create
       description: Принимает обновления от Telegram Bot API и обрабатывает команды
-        /start, /help, /status.
+        /start, /status, /tasks (/hw), /help и /reset.
       summary: Telegram Bot Webhook Receiver
       tags:
       - v1
@@ -702,7 +794,7 @@ paths:
   /api/v1/users/me:
     get:
       operationId: users_me_retrieve
-      summary: Получить текущий профиль пользователя и статистику
+      summary: Получить профиль, статистику и баланс магазина
       tags:
       - v1
       security:
@@ -712,7 +804,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserProfile'
+                $ref: '#/components/schemas/CurrentUserResponse'
           description: ''
     patch:
       operationId: users_me_update
@@ -955,6 +1047,45 @@ components:
       required:
       - currentPassword
       - newPassword
+    CurrentUserResponse:
+      type: object
+      properties:
+        totalEarnedPoints:
+          type: integer
+        spentPoints:
+          type: integer
+        availableCoins:
+          type: integer
+        user:
+          $ref: '#/components/schemas/UserProfile'
+        isTelegramConnected:
+          type: boolean
+        telegramUsername:
+          type: string
+          nullable: true
+        stats:
+          $ref: '#/components/schemas/CurrentUserStats'
+      required:
+      - availableCoins
+      - isTelegramConnected
+      - spentPoints
+      - stats
+      - telegramUsername
+      - totalEarnedPoints
+      - user
+    CurrentUserStats:
+      type: object
+      properties:
+        totalScore:
+          type: integer
+        tasksAcceptedCount:
+          type: integer
+        streakCount:
+          type: integer
+      required:
+      - streakCount
+      - tasksAcceptedCount
+      - totalScore
     GrantRequest:
       type: object
       properties:
@@ -1235,6 +1366,155 @@ components:
       - amount
       - reason
       - userId
+    ShopBalance:
+      type: object
+      properties:
+        totalEarnedPoints:
+          type: integer
+        spentPoints:
+          type: integer
+        availableCoins:
+          type: integer
+      required:
+      - availableCoins
+      - spentPoints
+      - totalEarnedPoints
+    ShopCatalog:
+      type: object
+      properties:
+        totalEarnedPoints:
+          type: integer
+        spentPoints:
+          type: integer
+        availableCoins:
+          type: integer
+        products:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShopProduct'
+      required:
+      - availableCoins
+      - products
+      - spentPoints
+      - totalEarnedPoints
+    ShopError:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    ShopOrder:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        productId:
+          type: string
+        productTitle:
+          type: string
+        priceCoins:
+          type: integer
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ShopOrderStatusEnum'
+          title: Статус
+        comment:
+          type: string
+          title: Комментарий
+          maxLength: 500
+        createdAt:
+          type: string
+          format: date-time
+        processedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - createdAt
+      - id
+      - priceCoins
+      - processedAt
+      - productId
+      - productTitle
+    ShopOrderStatusEnum:
+      enum:
+      - PENDING
+      - COMPLETED
+      - CANCELLED
+      type: string
+      description: |-
+        * `PENDING` - Ожидает
+        * `COMPLETED` - Выдан
+        * `CANCELLED` - Отменён
+    ShopProduct:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        title:
+          type: string
+          title: Название
+          maxLength: 255
+        description:
+          type: string
+          title: Описание
+        priceSom:
+          type: integer
+        priceCoins:
+          type: integer
+        imageUrl:
+          type: string
+          readOnly: true
+        stock:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          title: Остаток
+      required:
+      - id
+      - imageUrl
+      - priceCoins
+      - priceSom
+      - title
+    ShopPurchaseRequest:
+      type: object
+      properties:
+        productId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        comment:
+          type: string
+          default: ''
+          maxLength: 500
+        requestId:
+          type: string
+          format: uuid
+          description: Повторите тот же UUID при повторной отправке заказа.
+        expectedPriceCoins:
+          type: integer
+          minimum: 0
+      required:
+      - productId
+    ShopPurchaseResponse:
+      type: object
+      properties:
+        totalEarnedPoints:
+          type: integer
+        spentPoints:
+          type: integer
+        availableCoins:
+          type: integer
+        order:
+          $ref: '#/components/schemas/ShopOrder'
+      required:
+      - availableCoins
+      - order
+      - spentPoints
+      - totalEarnedPoints
     ShortTask:
       type: object
       properties:

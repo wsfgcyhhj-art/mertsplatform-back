@@ -2,6 +2,7 @@ from django.db import transaction
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from rest_framework.views import APIView
+from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -17,13 +18,28 @@ from admin_panel.serializers import (
 from admin_panel.services.media_service import save_optimized_media_asset, read_upload
 from admin_panel.services.achievement_service import award_achievement, evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.telegram_service import get_bot_username
+from admin_panel.services.shop_service import shop_balance
+from admin_panel.views.shop_views import ShopBalanceSerializer
+
+
+class CurrentUserStatsSerializer(serializers.Serializer):
+    totalScore = serializers.IntegerField()
+    tasksAcceptedCount = serializers.IntegerField()
+    streakCount = serializers.IntegerField()
+
+
+class CurrentUserResponseSerializer(ShopBalanceSerializer):
+    user = UserProfileSerializer()
+    isTelegramConnected = serializers.BooleanField()
+    telegramUsername = serializers.CharField(allow_null=True)
+    stats = CurrentUserStatsSerializer()
 
 
 class CurrentUserView(APIView):
     serializer_class = UserProfileSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="users_me_retrieve", summary="Получить текущий профиль пользователя и статистику", responses={200: UserProfileSerializer})
+    @extend_schema(operation_id="users_me_retrieve", summary="Получить профиль, статистику и баланс магазина", responses={200: CurrentUserResponseSerializer})
     def get(self, request):
         user = request.user
         data = UserProfileSerializer(user, context={'request': request}).data
@@ -37,6 +53,7 @@ class CurrentUserView(APIView):
             "isTelegramConnected": bool(user.telegram_chat_id),
             "telegramUsername": user.telegram_username,
             "stats": stats,
+            **shop_balance(user),
         })
 
     @extend_schema(operation_id="users_me_update", summary="Обновить данные профиля (имя, контакты, оформление)", responses={200: UserProfileSerializer})

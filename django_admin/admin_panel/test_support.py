@@ -3,7 +3,7 @@ from admin_panel.models import *
 
 UNMANAGED_MODELS = [StudyGroup, User, Lesson, Task, Submission, ScoreAdjustment, Achievement,
                     UserAchievement, MonthlyScoreArchive, MediaAsset, Session, SubscriptionGrant,
-                    TelegramIdentity, PasswordResetTicket, AuthRateBucket, TelegramUpdate, TelegramOutbox]
+                    TelegramIdentity, PasswordResetTicket, AuthRateBucket, TelegramUpdate, TelegramOutbox, ShopProduct, ShopOrder]
 
 
 def create_schema():

@@ -552,3 +552,55 @@ class TelegramOutbox(models.Model):
     class Meta:
         managed = False
         db_table = 'TelegramOutbox'
+
+
+class ShopProduct(models.Model):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    title = models.CharField('Название', max_length=255, unique=True)
+    description = models.TextField('Описание', blank=True)
+    price_som = models.PositiveIntegerField('Цена в сомах')
+    price_coins = models.PositiveIntegerField('Цена в баллах')
+    image_url = models.CharField('URL изображения', max_length=500, blank=True)
+    stock = models.PositiveIntegerField('Остаток', default=0)
+    is_active = models.BooleanField('Активен', default=True)
+    order = models.PositiveIntegerField('Порядок', default=0)
+
+    class Meta:
+        managed = False
+        db_table = 'ShopProduct'
+        verbose_name = 'Товар магазина мерча'
+        verbose_name_plural = 'Магазин мерча (Товары)'
+        ordering = ('order', 'title')
+
+    def __str__(self):
+        return self.title
+
+
+class ShopOrderStatus(models.TextChoices):
+    PENDING = 'PENDING', 'Ожидает'
+    COMPLETED = 'COMPLETED', 'Выдан'
+    CANCELLED = 'CANCELLED', 'Отменён'
+
+
+class ShopOrder(models.Model):
+
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    user = models.ForeignKey(User, models.PROTECT, related_name='shop_orders', verbose_name='Студент')
+    product = models.ForeignKey(ShopProduct, models.PROTECT, verbose_name='Товар')
+    price_coins = models.PositiveIntegerField('Списано баллов')
+    status = models.CharField('Статус', max_length=16, choices=ShopOrderStatus.choices, default=ShopOrderStatus.PENDING)
+    comment = models.CharField('Комментарий', max_length=500, blank=True)
+    created_at = models.DateTimeField('Дата заказа', default=timezone.now)
+    processed_by = models.CharField('Обработал', max_length=150, blank=True)
+    processed_at = models.DateTimeField('Дата обработки', null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = 'ShopOrder'
+        verbose_name = 'Заказ мерча'
+        verbose_name_plural = 'Заказы мерча'
+        ordering = ('-created_at', '-id')
+        constraints = [
+            models.CheckConstraint(condition=models.Q(status__in=ShopOrderStatus.values),
+                                   name='shop_order_valid_status'),
+        ]
