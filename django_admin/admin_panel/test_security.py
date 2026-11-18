@@ -58,7 +58,7 @@ class SecurityRegressionTests(SimpleTestCase):
 from django.test import TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.db import connection, connections, close_old_connections, transaction
 from admin_panel.test_support import create_schema, clear_data, create_user, subscribe
-from admin_panel.models import Task, Submission, ScoreAdjustment, TelegramOutbox, TelegramUpdate, Session, MediaAsset, StudyGroup
+from admin_panel.models import Lesson, Task, Submission, ScoreAdjustment, TelegramOutbox, TelegramUpdate, Session, MediaAsset, StudyGroup
 from admin_panel.authentication import generate_tokens_for_user, rotate_refresh
 from rest_framework.test import APIClient
 from django.utils import timezone
@@ -280,6 +280,34 @@ class SecurityIntegrationTests(TransactionTestCase):
         grant.group.is_active = False
         grant.group.save()
         self.assertEqual(self.client.get('/api/v1/tasks').status_code, 403)
+
+    def test_curriculum_lists_hide_other_groups_and_future_months(self):
+        for endpoint, model, fields in (
+            ('lessons', Lesson, {'video_link': 'https://example.org/lesson'}),
+            ('tasks', Task, {'topic': 'Topic'}),
+        ):
+            with self.subTest(endpoint=endpoint):
+                own = model.objects.create(title='Own', month=1, group_number='js-01', **fields)
+                shared = model.objects.create(title='Shared', month=1, group_number='ALL', **fields)
+                model.objects.create(title='Other group', month=1, group_number='py-01', **fields)
+                model.objects.create(title='Future', month=2, group_number='js-01', **fields)
+
+                response = self.client.get(f'/api/v1/{endpoint}', {'month': 'all', 'groupNumber': 'py-01'})
+                self.assertEqual(response.status_code, 200)
+                self.assertCountEqual([item['id'] for item in response.json()[endpoint]], [own.pk, shared.pk])
+
+    def test_voice_feedback_change_enqueues_once(self):
+        self.user.telegram_chat_id = '123'
+        self.user.save()
+        mentor = create_user(login='voice-reviewer', role='ADMIN')
+        task = Task.objects.create(title='Voice task', topic='Topic')
+        sub = Submission.objects.create(user=self.user, task=task, status='IN_REVIEW')
+        TelegramOutbox.objects.all().delete()
+        self.client.force_authenticate(mentor)
+        payload = {'voiceFeedbackUrl': 'https://example.org/feedback.ogg'}
+        for _ in range(2):
+            self.assertEqual(self.client.patch('/api/v1/submissions/' + sub.pk, payload, format='json').status_code, 200)
+        self.assertEqual(TelegramOutbox.objects.count(), 1)
 
     def test_security_installer_is_repeatable(self):
         from django.core.management import call_command

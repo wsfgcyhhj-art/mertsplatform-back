@@ -4,7 +4,8 @@ import type { Server } from 'node:http';
 import sharp from 'sharp';
 import jwt from 'jsonwebtoken';
 import { app, prisma } from '../src/index.js';
-import { ensureDefaultAchievements, evaluateUserAchievements } from '../src/services/achievements.js';
+import { evaluateUserAchievements } from '../src/services/achievementService.js';
+import { ensureDefaultAchievements } from '../src/services/achievements.js';
 
 let server: Server;
 let baseUrl: string;

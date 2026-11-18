@@ -30,16 +30,26 @@ class SubscriptionIntegrationTests(TransactionTestCase):
     def setUp(self):
         clear_data()
 
+    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret')
     def test_pending_subscription_claim_and_username_reuse(self):
         group = StudyGroup.objects.create(name='js-02', month=2)
         grant_subscription('@Student_test', group, None, 'owner')
+        update = {'update_id': 1, 'message': {
+            'chat': {'id': 12345, 'type': 'private'},
+            'from': {'id': 12345, 'username': 'student_test'},
+            'text': '/start',
+        }}
         with patch.object(tg, 'send_telegram_message', return_value=True) as send:
-            handle_subscription_start('12345', 'student_test')
+            response = APIClient().post(
+                '/api/v1/telegram/webhook', update, format='json',
+                HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN='test-secret',
+            )
+        self.assertEqual(response.status_code, 200)
         grant = SubscriptionGrant.objects.get(telegram_username='student_test')
         self.assertEqual(grant.user.current_month, 2)
         self.assertTrue(grant.user.has_subscription)
         self.assertTrue(grant.user.must_change_password)
-        self.assertIn('Временный пароль', send.call_args.kwargs['text'])
+        self.assertTrue(any('Временный пароль' in call.kwargs.get('text', '') for call in send.call_args_list))
         handle_subscription_start('99999', 'student_test')
         grant.refresh_from_db()
         self.assertEqual(grant.telegram_user_id, '12345')

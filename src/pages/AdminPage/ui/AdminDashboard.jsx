@@ -14,7 +14,7 @@ import { LessonsTab } from './LessonsTab.jsx';
 import { TasksTab } from './TasksTab.jsx';
 import { StudentsTab } from './StudentsTab.jsx';
 import { useFindUser } from '../../../store/userStore.js';
-import { api } from '../../../api/client.js';
+import { api, API_BASE_URL } from '../../../api/client.js';
 import styles from '../styles/admin.module.scss';
 
 export const AdminDashboard = () => {
@@ -134,7 +134,7 @@ export const AdminDashboard = () => {
               type="primary"
               size="large"
               icon={<DatabaseOutlined />}
-              href="http://localhost:8000/admin"
+              href={new URL('/admin/', new URL(API_BASE_URL, window.location.origin)).href}
               target="_blank"
               style={{
                 background: 'linear-gradient(135deg, #f59e0b 0%, #6366f1 100%)',

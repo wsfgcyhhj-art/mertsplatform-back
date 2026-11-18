@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { CookieOptions } from 'express';
 import { Role } from '@prisma/client';
@@ -17,6 +18,7 @@ export function generateAccessToken(payload: TokenPayload): string {
 export function generateRefreshToken(payload: TokenPayload): string {
   return jwt.sign(payload, config.jwt.refreshSecret, {
     expiresIn: config.jwt.refreshExpiresInSeconds,
+    jwtid: randomUUID(),
   });
 }
 
