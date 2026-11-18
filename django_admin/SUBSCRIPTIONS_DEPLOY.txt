@@ -9,8 +9,9 @@ Production deployment and security upgrade
 
 2. Configure DATABASE_URL, DEBUG=False, ALLOWED_HOSTS (exact backend hostnames),
    FRONTEND_URL (HTTPS), CORS_ALLOWED_ORIGINS and CSRF_TRUSTED_ORIGINS (exact HTTPS
-   origins, comma separated). Cookies require HTTPS and same-site deployment;
-   put the API behind the frontend's reverse proxy for cross-site hosting.
+   origins, comma separated). For cross-site refresh cookies add the exact frontend
+   origin to CSRF_TRUSTED_ORIGINS and use HTTPS on the API. If the browser blocks
+   third-party cookies, use the frontend's same-site reverse proxy.
    Set TRUST_HTTPS_PROXY=1 only if the ingress strips untrusted forwarded-proto.
    AUTH_TRUSTED_PROXY_HOPS defaults to 0 (use REMOTE_ADDR). Configure the verified
    number of trusted append-only X-Forwarded-For hops so shared proxy addresses

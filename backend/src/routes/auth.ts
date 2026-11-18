@@ -8,7 +8,7 @@ import {
   verifyRefreshToken,
   getRefreshTokenCookieOptions,
 } from '../utils/tokens.js';
-import { config } from '../config.js';
+import { config, isSessionOriginAllowed } from '../config.js';
 import { awardAchievement, evaluateUserAchievements } from '../services/achievementService.js';
 import { updateStreak } from '../services/streakService.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -16,6 +16,17 @@ import { formatUserMedia, toPublicUrl } from '../utils/url.js';
 import { eventBus } from '../services/eventBus.js';
 
 export const authRouter = Router();
+
+function isTrustedSessionRequest(req: Request): boolean {
+  const origin = req.get('Origin');
+  return origin === `https://${req.get('Host')}` || isSessionOriginAllowed(origin);
+}
+
+function rejectUntrustedSessionOrigin(req: Request, res: Response): boolean {
+  if (isTrustedSessionRequest(req)) return false;
+  res.status(403).json({ message: 'Origin is not trusted for cookie sessions' });
+  return true;
+}
 
 // POST /api/v1/auth/register — Регистрация студентов
 authRouter.post('/register', authLimiter, async (req: Request, res: Response): Promise<void> => {
@@ -114,7 +125,9 @@ authRouter.post('/register', authLimiter, async (req: Request, res: Response): P
       },
     });
 
-    res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
+    if (isTrustedSessionRequest(req)) {
+      res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
+    }
 
     res.status(201).json({
       accessToken,
@@ -212,7 +225,9 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
     streakCount,
   });
 
-  res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
+  if (isTrustedSessionRequest(req)) {
+    res.cookie(config.cookie.name, refreshToken, getRefreshTokenCookieOptions());
+  }
 
   res.json({
     accessToken,
@@ -233,6 +248,7 @@ authRouter.post('/login', authLimiter, async (req: Request, res: Response): Prom
 });
 
 authRouter.post('/refresh', async (req: Request, res: Response): Promise<void> => {
+  if (rejectUntrustedSessionOrigin(req, res)) return;
   const incomingToken = req.cookies?.[config.cookie.name];
 
   if (!incomingToken || typeof incomingToken !== 'string') {
@@ -297,6 +313,7 @@ authRouter.post('/refresh', async (req: Request, res: Response): Promise<void> =
 });
 
 authRouter.post('/logout', async (req: Request, res: Response): Promise<void> => {
+  if (rejectUntrustedSessionOrigin(req, res)) return;
   const token = req.cookies?.[config.cookie.name];
 
   if (token) {

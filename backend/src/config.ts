@@ -36,26 +36,21 @@ const wildcardToRegExp = (pattern: string): RegExp => {
   return new RegExp(`^https?:\\/\\/${escaped}(:\\d+)?$`, 'i');
 };
 
+const localOrigin = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+const configuredOrigins = [process.env.CORS_ORIGINS, process.env.CORS_ORIGIN, process.env.FRONTEND_URL]
+  .flatMap(value => (value || '').split(','))
+  .map(value => value.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
 const parseCorsOrigins = (): (string | RegExp)[] => {
   const defaultOrigins: (string | RegExp)[] = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-    /\.vercel\.app$/i,
+    localOrigin,
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
     /\.netlify\.app$/i,
     /\.onrender\.com$/i,
   ];
 
-  const envOrigins = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN;
-  if (!envOrigins) {
-    return defaultOrigins;
-  }
-
-  const parsed = envOrigins
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean)
+  const parsed = configuredOrigins
     .map((entry): string | RegExp => {
       if (entry === '*') {
         return /^https?:\/\/.+$/i;
@@ -73,6 +68,13 @@ const parseCorsOrigins = (): (string | RegExp)[] => {
 };
 
 const allowedOrigins = parseCorsOrigins();
+
+export function isSessionOriginAllowed(origin?: string): boolean {
+  if (!origin) return true;
+  return localOrigin.test(origin) || configuredOrigins.some(
+    entry => !entry.includes('*') && entry.toLowerCase() === origin.toLowerCase()
+  );
+}
 
 export function isOriginAllowed(origin?: string): boolean {
   if (!origin) return true;

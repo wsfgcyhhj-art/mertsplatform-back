@@ -39,13 +39,18 @@ if TESTING:
 if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
     ALLOWED_HOSTS.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-CSRF_TRUSTED_ORIGINS = [v for v in os.getenv('CSRF_TRUSTED_ORIGINS', FRONTEND_URL).split(',') if v]
-CORS_ALLOWED_ORIGINS = [v for v in os.getenv('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if v]
+CSRF_TRUSTED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CSRF_TRUSTED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]
+CORS_ALLOWED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]
+LOCAL_FRONTEND_ORIGIN_RE = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    LOCAL_FRONTEND_ORIGIN_RE,
+    r"^https://[a-zA-Z0-9-]+\.vercel\.app$",
+]
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'
 SECURE_SSL_REDIRECT = not (TESTING or DEBUG)
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True

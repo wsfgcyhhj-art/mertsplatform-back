@@ -211,6 +211,32 @@ class SecurityIntegrationTests(TransactionTestCase):
         client = APIClient(enforce_csrf_checks=True)
         self.assertEqual(client.post('/api/v1/auth/login', {'login': 'student', 'password': 'Strong-Pass-2026!'}).status_code, 403)
 
+    def test_cors_preflight_and_cookie_refresh_from_local_origin(self):
+        client = APIClient(enforce_csrf_checks=True)
+        for origin in ('http://localhost:5173', 'http://127.0.0.1:8080', 'https://merts-preview.vercel.app'):
+            response = client.options('/api/v1/auth/login', secure=True, HTTP_ORIGIN=origin,
+                                      HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+                                      HTTP_ACCESS_CONTROL_REQUEST_HEADERS='authorization, x-csrftoken')
+            self.assertEqual(response['Access-Control-Allow-Origin'], origin)
+            self.assertEqual(response['Access-Control-Allow-Credentials'], 'true')
+
+        origin = 'http://localhost:5174'
+        csrf = client.get('/api/v1/auth/csrf', secure=True, HTTP_ORIGIN=origin).json()['csrfToken']
+        login = client.post('/api/v1/auth/login', {'login': 'student', 'password': 'Strong-Pass-2026!'},
+                            secure=True, HTTP_ORIGIN=origin, HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.cookies['refreshToken']['secure'])
+        self.assertEqual(login.cookies['refreshToken']['samesite'], 'None')
+        blocked = client.post('/api/v1/auth/refresh', {}, secure=True,
+                              HTTP_ORIGIN='https://untrusted-preview.vercel.app', HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(blocked.status_code, 403)
+        refresh = client.post('/api/v1/auth/refresh', {}, secure=True, HTTP_ORIGIN=origin, HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(refresh.status_code, 200)
+        profile = client.get('/api/v1/users/me', secure=True, HTTP_ORIGIN='https://merts-preview.vercel.app',
+                             HTTP_AUTHORIZATION='Bearer ' + refresh.json()['accessToken'])
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile['Access-Control-Allow-Origin'], 'https://merts-preview.vercel.app')
+
     @override_settings(AUTH_RATE_LIMIT=1)
     def test_admin_login_is_rate_limited(self):
         from django.test import RequestFactory

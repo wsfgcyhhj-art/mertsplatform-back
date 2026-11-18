@@ -1,8 +1,8 @@
 from django.conf import settings
 from django.db import transaction
-from django.middleware.csrf import get_token
-from django.views.decorators.csrf import csrf_protect
-from django.utils.decorators import method_decorator
+from django.middleware.csrf import CsrfViewMiddleware, get_token
+from django.utils.decorators import decorator_from_middleware, method_decorator
+import re
 from admin_panel.throttles import AuthThrottle
 from admin_panel.authentication import rotate_refresh, revoke_session
 from admin_panel.serializers import EmptyRequestSerializer
@@ -20,14 +20,23 @@ from admin_panel.services.achievement_service import evaluate_user_achievements,
 from admin_panel.services.group_service import parse_month_from_group_name
 
 
+class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
+    def _origin_verified(self, request):
+        origin = request.headers.get('Origin', '')
+        return bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin)) or super()._origin_verified(request)
+
+
+auth_csrf_protect = decorator_from_middleware(ApiAuthCsrfMiddleware)
+
+
 def set_auth_cookies(response, refresh_token: str):
     response.set_cookie(
         key='refreshToken',
         value=refresh_token,
         max_age=30 * 24 * 3600,
         httponly=True,
-        samesite='Lax',
-        secure=True,
+        samesite=settings.CSRF_COOKIE_SAMESITE,
+        secure=settings.CSRF_COOKIE_SECURE,
     )
 
 
@@ -68,7 +77,7 @@ class RegisterView(APIView):
         return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
 
 
-@method_decorator(csrf_protect, name='dispatch')
+@method_decorator(auth_csrf_protect, name='dispatch')
 class LoginView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
@@ -116,7 +125,7 @@ class LoginView(APIView):
         return response
 
 
-@method_decorator(csrf_protect, name='dispatch')
+@method_decorator(auth_csrf_protect, name='dispatch')
 class RefreshTokenView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
@@ -151,7 +160,7 @@ class RefreshTokenView(APIView):
         return response
 
 
-@method_decorator(csrf_protect, name='dispatch')
+@method_decorator(auth_csrf_protect, name='dispatch')
 class LogoutView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
@@ -173,7 +182,7 @@ class LogoutView(APIView):
         revoke_session(incoming_token, access)
 
         response = Response({"message": "Successfully logged out"})
-        response.delete_cookie('refreshToken')
+        response.delete_cookie('refreshToken', samesite=settings.CSRF_COOKIE_SAMESITE)
         return response
 
 

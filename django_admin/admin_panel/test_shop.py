@@ -154,7 +154,7 @@ class ShopTests(TransactionTestCase):
             editor.delete_model(ShopProduct)
         call_command('install_shop', stdout=StringIO())
         zeiss = ShopProduct.objects.get(title='Оригинальная салфетка Zeiss')
-        self.assertEqual((zeiss.price_coins, zeiss.stock), (60, 0))
+        self.assertEqual((zeiss.price_coins, zeiss.stock), (60, 10))
         zeiss.stock = 3
         zeiss.price_coins = 99
         zeiss.is_active = False
@@ -166,3 +166,8 @@ class ShopTests(TransactionTestCase):
         zeiss.refresh_from_db()
         self.assertEqual((zeiss.price_coins, zeiss.stock, zeiss.is_active), (60, 3, False))
         self.assertEqual(ShopProduct.objects.count(), 12)
+        ShopProduct.objects.exclude(pk=zeiss.pk).update(stock=0)
+        call_command('install_shop', missing_only=True, restock_empty=True, stdout=StringIO())
+        self.assertEqual(ShopProduct.objects.filter(stock=10).count(), 11)
+        zeiss.refresh_from_db()
+        self.assertEqual(zeiss.stock, 3)

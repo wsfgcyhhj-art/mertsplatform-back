@@ -4,6 +4,8 @@ from django.db import connection, transaction
 from admin_panel.models import ShopOrder, ShopProduct
 
 
+INITIAL_STOCK = 10
+
 CATALOG = (
     ('Оригинальная салфетка Zeiss', 150, 60, 'Мягкая и бережная очистка для очков, линз и экранов без царапин. Чистота и защита ваших устройств каждый день.'),
     ('Мышка проводная INPHIC B1', 700, 250, 'Точная и надёжная для работы и игр. Компактный дизайн и удобное управление каждый день. Доступна в стильном чёрном цвете.'),
@@ -25,6 +27,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--missing-only', action='store_true', help='Preserve all existing catalog edits.')
+        parser.add_argument('--restock-empty', action='store_true', help='Restock empty seeded products.')
 
     def handle(self, *args, **options):
         with connection.schema_editor() as editor, transaction.atomic():
@@ -36,10 +39,17 @@ class Command(BaseCommand):
                 if model._meta.db_table not in tables:
                     editor.create_model(model)
 
-            seed = ShopProduct.objects.get_or_create if options['missing_only'] else ShopProduct.objects.update_or_create
             for order, (title, price_som, price_coins, description) in enumerate(CATALOG, 1):
-                seed(title=title, defaults={
+                defaults = {
                     'price_som': price_som, 'price_coins': price_coins,
                     'description': description, 'order': order,
-                })
+                }
+                create_defaults = {**defaults, 'stock': INITIAL_STOCK}
+                if options['missing_only']:
+                    ShopProduct.objects.get_or_create(title=title, defaults=create_defaults)
+                else:
+                    ShopProduct.objects.update_or_create(title=title, defaults=defaults, create_defaults=create_defaults)
+            if options['restock_empty']:
+                count = ShopProduct.objects.filter(title__in=[item[0] for item in CATALOG], stock=0).update(stock=INITIAL_STOCK)
+                self.stdout.write(f'Empty catalog products restocked: {count}.')
         self.stdout.write(self.style.SUCCESS(f'Shop catalog installed ({len(CATALOG)} products).'))
