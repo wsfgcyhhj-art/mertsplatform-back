@@ -265,7 +265,7 @@ class SecurityIntegrationTests(TransactionTestCase):
         grant_subscription('new_student', group, None, 'owner')
         handle_subscription_start('444', 'new_student')
         handle_subscription_start('555', 'new_student')
-        self.assertIn('активна', handle_subscription_start('444', None))
+        self.assertIn('Telegram успешно подключён', handle_subscription_start('444', None))
         self.assertEqual(SubscriptionGrant.objects.get(telegram_username='new_student').telegram_user_id, '444')
         self.assertTrue(TelegramIdentity.objects.filter(pk='444').exists())
 
@@ -297,6 +297,9 @@ class SecurityIntegrationTests(TransactionTestCase):
                 self.assertCountEqual([item['id'] for item in response.json()[endpoint]], [own.pk, shared.pk])
 
     def test_voice_feedback_change_enqueues_once(self):
+        import json
+        from admin_panel.services.outbox_service import cipher
+
         self.user.telegram_chat_id = '123'
         self.user.save()
         mentor = create_user(login='voice-reviewer', role='ADMIN')
@@ -308,6 +311,31 @@ class SecurityIntegrationTests(TransactionTestCase):
         for _ in range(2):
             self.assertEqual(self.client.patch('/api/v1/submissions/' + sub.pk, payload, format='json').status_code, 200)
         self.assertEqual(TelegramOutbox.objects.count(), 1)
+        message = TelegramOutbox.objects.get().payload['encrypted']
+        self.assertIn('https://example.org/feedback.ogg', json.loads(cipher().decrypt(message))['text'])
+
+    @override_settings(TELEGRAM_OUTBOX_EAGER=True)
+    def test_telegram_voice_file_is_sent_once_after_commit(self):
+        from admin_panel.services import telegram_service
+
+        self.user.telegram_chat_id = '123'
+        self.user.save()
+        task = Task.objects.create(title='Voice task', topic='Topic')
+        sub = Submission.objects.create(user=self.user, task=task)
+        sub.status = 'IN_REVIEW'
+        sub.voice_feedback_url = 'telegram_file-id'
+        with patch.object(telegram_service, 'get_bot_token', return_value='test-token'), \
+                patch.object(telegram_service.httpx, 'Client') as client:
+            send = client.return_value.__enter__.return_value.post
+            send.return_value.status_code = 200
+            send.return_value.json.return_value = {'ok': True}
+            with transaction.atomic():
+                sub.save()
+                send.assert_not_called()
+            sub.save()
+        self.assertEqual([call.args[0].rsplit('/', 1)[-1] for call in send.call_args_list],
+                         ['sendMessage', 'sendVoice'])
+        self.assertEqual(send.call_args.kwargs['json'], {'chat_id': '123', 'voice': 'telegram_file-id'})
 
     def test_security_installer_is_repeatable(self):
         from django.core.management import call_command

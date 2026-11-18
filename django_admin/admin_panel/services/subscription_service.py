@@ -26,11 +26,11 @@ def recovery_link(user):
 
 
 def activate_grant(grant, identity):
-    from .telegram_service import escape_html, get_frontend_url
+    from .telegram_service import TELEGRAM_CONNECTED, escape_html, get_frontend_url
     from .outbox_service import enqueue
     if grant.telegram_user_id and grant.telegram_user_id != identity.telegram_user_id:
         return "Доступ закрыт: подписка уже привязана к другому Telegram аккаунту."
-    if not grant.is_active or (grant.expires_at and grant.expires_at <= timezone.now()):
+    if not grant.is_active or not grant.group.is_active or (grant.expires_at and grant.expires_at <= timezone.now()):
         return "Доступ закрыт. Обратитесь к владельцу."
     user = grant.user
     if not user:
@@ -60,9 +60,9 @@ def activate_grant(grant, identity):
         details += f"Временный пароль: <code>{escape_html(password)}</code>\\nСмените его при первом входе.\\n"
     else:
         details += f"Пароль сохранён. Одноразовое восстановление (20 минут): {recovery_link(user)}\\n"
-    text = f"✅ Выдана полноценная подписка!\\n{details}{get_frontend_url()}/login"
+    text = f"✅ Вам выдан доступ к платформе!\\n{details}{get_frontend_url()}/login"
     enqueue(identity.telegram_user_id, text.replace("\\n", "\n"))
-    return "Подписка активирована. Данные доступа отправлены отдельным сообщением."
+    return TELEGRAM_CONNECTED
 
 
 @transaction.atomic
@@ -90,28 +90,45 @@ def grant_subscription(username, group, expires_at, granted_by, active=True):
 
 @transaction.atomic
 def handle_subscription_start(chat_id, username):
-    grant = SubscriptionGrant.objects.select_for_update().filter(telegram_user_id=str(chat_id)).first()
+    from .telegram_service import TELEGRAM_CONNECTED
+
+    chat_id = str(chat_id)
+    grant = SubscriptionGrant.objects.select_for_update().filter(telegram_user_id=chat_id).first()
     if grant and grant.user_id:
         if not grant.is_active or not grant.group.is_active or (grant.expires_at and grant.expires_at <= timezone.now()):
             return "Доступ закрыт. Обратитесь к владельцу."
-        # A bound account remains valid even after removing or changing its username.
-        return "Подписка активна. Для восстановления доступа отправьте /reset."
+        # The numeric Telegram identity is authoritative after activation.
+        user = User.objects.select_for_update().get(pk=grant.user_id)
+        user.telegram_chat_id = chat_id
+        user.telegram_username = username.lower() if username else None
+        user.save(update_fields=['telegram_chat_id', 'telegram_username', 'updated_at'])
+        return TELEGRAM_CONNECTED
+
+    if username:
+        try:
+            username = normalize_username(username)
+        except ValidationError:
+            return "Некорректный Telegram username."
+        if not grant:
+            grant = SubscriptionGrant.objects.select_for_update().filter(
+                telegram_username=username, telegram_user_id__isnull=True
+            ).first()
+    if not grant:
+        # A code-linked account can refresh its username without gaining course access.
+        user = User.objects.select_for_update().filter(telegram_chat_id=chat_id).first()
+        if user and not SubscriptionGrant.objects.filter(user=user).exists():
+            user.telegram_username = username
+            user.save(update_fields=['telegram_username', 'updated_at'])
+            return TELEGRAM_CONNECTED
     if not username:
         return "Доступ закрыт. Установите Telegram username и обратитесь к владельцу."
-    try:
-        username = normalize_username(username)
-    except ValidationError:
-        return "Некорректный Telegram username."
     # Telegram username can move to another person; numeric identity is authoritative after claim.
-    TelegramIdentity.objects.filter(username=username).exclude(telegram_user_id=str(chat_id)).update(username=None)
-    identity, _ = TelegramIdentity.objects.update_or_create(telegram_user_id=str(chat_id), defaults={"username": username})
-    grant = SubscriptionGrant.objects.select_for_update().filter(telegram_user_id=str(chat_id)).first()
+    TelegramIdentity.objects.filter(username=username).exclude(telegram_user_id=chat_id).update(username=None)
+    identity, _ = TelegramIdentity.objects.update_or_create(telegram_user_id=chat_id, defaults={"username": username})
     if not grant:
-        grant = SubscriptionGrant.objects.select_for_update().filter(telegram_username=username, telegram_user_id__isnull=True).first()
-    if not grant:
-        return "Доступ закрыт. Подписку выдаёт только владелец."
+        return "Доступ закрыт. Обратитесь к владельцу платформы."
     if grant.user_id:
-        if not grant.is_active or (grant.expires_at and grant.expires_at <= timezone.now()):
+        if not grant.is_active or not grant.group.is_active or (grant.expires_at and grant.expires_at <= timezone.now()):
             return "Доступ закрыт. Обратитесь к владельцу."
-        return "Подписка активна. Для восстановления доступа отправьте /reset."
+        return TELEGRAM_CONNECTED
     return activate_grant(grant, identity)

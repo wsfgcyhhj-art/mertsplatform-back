@@ -230,6 +230,21 @@ class LessonAdminForm(forms.ModelForm):
         return cleaned_data
 
 
+def telegram_delivery_report(results):
+    counts = {key: sum(result.get(key, 0) for result in results)
+              for key in ('sent', 'unconnected', 'errors', 'queued')}
+    return (
+        f'Доставлено в Telegram: {counts["sent"]}. Бот не подключён: {counts["unconnected"]}. '
+        f'Ошибок: {counts["errors"]}. Ожидают повтора: {counts["queued"]}.'
+    )
+
+
+def telegram_delivery_level(results):
+    return messages.WARNING if any(
+        result.get(key) for result in results for key in ('errors', 'unconnected', 'queued')
+    ) else messages.SUCCESS
+
+
 class GroupSavingAdmin(ModelAdmin):
     def save_model(self, request, obj, form, change):
         from django.core.exceptions import PermissionDenied
@@ -243,7 +258,7 @@ class GroupSavingAdmin(ModelAdmin):
             def report():
                 counts = getattr(obj, '_telegram_delivery', None)
                 if counts:
-                    self.message_user(request, f'Отправлено: {counts["sent"]}, Ошибок: {counts["errors"]}, В очереди: {counts.get("queued", 0)}')
+                    self.message_user(request, telegram_delivery_report([counts]), level=telegram_delivery_level([counts]))
             transaction.on_commit(report)
 
 
@@ -281,12 +296,7 @@ class LessonAdmin(GroupSavingAdmin):
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_lesson_telegram(self, request, queryset):
         results = [notify_lesson_published(lesson) for lesson in queryset]
-        sent = sum(r["sent"] for r in results)
-        errors = sum(r["errors"] for r in results)
-        self.message_user(
-            request,
-            f"Отправлено: {sent}, Ошибок: {errors}"
-        )
+        self.message_user(request, telegram_delivery_report(results), level=telegram_delivery_level(results))
 
     def save_model(self, request, obj, form, change):
         if obj.video_link and not obj.youtube_id:
@@ -346,12 +356,7 @@ class TaskAdmin(GroupSavingAdmin):
     @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
     def broadcast_task_telegram(self, request, queryset):
         results = [notify_task_published(task) for task in queryset]
-        sent = sum(r["sent"] for r in results)
-        errors = sum(r["errors"] for r in results)
-        self.message_user(
-            request,
-            f"Отправлено: {sent}, Ошибок: {errors}"
-        )
+        self.message_user(request, telegram_delivery_report(results), level=telegram_delivery_level(results))
 
 
 class ScoreAdjustmentInline(TabularInline):

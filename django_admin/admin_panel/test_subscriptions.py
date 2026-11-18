@@ -10,6 +10,13 @@ class DeliveryAndClosedRegistrationTests(SimpleTestCase):
         response = RegisterView.as_view()(APIRequestFactory().post("/", {}))
         self.assertEqual(response.status_code, 403)
 
+    def test_bot_profile_link_uses_username_of_configured_token(self):
+        with patch.object(tg, 'get_bot_token', return_value='username-test'), \
+                patch.object(tg.httpx, 'get') as get:
+            get.return_value.json.return_value = {'result': {'username': 'actual_telegram_bot'}}
+            self.assertEqual(tg.get_bot_username(), 'actual_telegram_bot')
+            self.assertEqual(tg.get_bot_username(), 'actual_telegram_bot')
+            get.assert_called_once()
 
 
 from django.test import TransactionTestCase, override_settings
@@ -50,6 +57,7 @@ class SubscriptionIntegrationTests(TransactionTestCase):
         self.assertTrue(grant.user.has_subscription)
         self.assertTrue(grant.user.must_change_password)
         self.assertTrue(any('Временный пароль' in call.kwargs.get('text', '') for call in send.call_args_list))
+        self.assertEqual(send.call_args.kwargs['text'], tg.TELEGRAM_CONNECTED)
         handle_subscription_start('99999', 'student_test')
         grant.refresh_from_db()
         self.assertEqual(grant.telegram_user_id, '12345')
@@ -91,17 +99,66 @@ class SubscriptionIntegrationTests(TransactionTestCase):
     def test_task_creation_targets_group_and_month_after_commit(self):
         from admin_panel.models import Task
         from django.db import transaction
-        users = [('a', 'js-01', 1, '10'), ('b', 'py-01', 1, '20'), ('c', 'js-02', 2, '30')]
+        users = [('a', 'js-01', 1, '10'), ('b', 'py-01', 1, '20'),
+                 ('c', 'js-02', 2, '30'), ('d', 'js-01', 1, None)]
         for login, group, month, chat in users:
             User.objects.create(login=login, password_hash='x', group_number=group, current_month=month, telegram_chat_id=chat)
+        User.objects.filter(login='a').update(group_number=' JS - 01 ')
         with patch.object(tg, 'send_telegram_message', return_value=True) as send:
             with transaction.atomic():
-                Task.objects.create(title='Target', topic='x', month=1, group_number='js-01')
+                task = Task.objects.create(title='Target', topic='x', month=1, group_number=' js-01 ')
                 self.assertFalse(send.called)
             self.assertEqual([c.args[0] for c in send.call_args_list], ['10'])
+            self.assertEqual(task._telegram_delivery, {'sent': 1, 'errors': 0, 'queued': 0, 'unconnected': 1})
             send.reset_mock()
-            Task.objects.create(title='All', topic='x', month=1, group_number=None)
+            Task.objects.create(title='All', topic='x', month=1, group_number=' all ')
             self.assertEqual({c.args[0] for c in send.call_args_list}, {'10', '20'})
+
+    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret', FRONTEND_URL='https://course.example')
+    def test_profile_link_and_student_commands(self):
+        from admin_panel.models import Task, Submission
+        from admin_panel.test_support import create_user
+
+        student = create_user(login='student', name='Студент <A>', group_number='js-01',
+                              has_subscription=True, streak_count=4)
+        SubscriptionGrant.objects.filter(user=student).update(telegram_user_id='12345')
+        task = Task.objects.create(title='Моё задание', topic='JS', group_number=' JS - 01 ')
+        Task.objects.create(title='Чужое задание', topic='JS', group_number='py-01')
+        Task.objects.create(title='Будущее задание', topic='JS', month=2)
+        Submission.objects.create(user=student, task=task, status='ACCEPTED', score=7)
+
+        profile = APIClient()
+        profile.force_authenticate(student)
+        code = profile.post('/api/v1/users/me/telegram/connect').json()['code']
+        webhook = APIClient()
+
+        def send_command(update_id, text):
+            update = {'update_id': update_id, 'message': {
+                'chat': {'id': 12345, 'type': 'private'},
+                'from': {'id': 12345, 'username': 'Student_Test'},
+                'text': text,
+            }}
+            with patch.object(tg, 'send_telegram_message', return_value=True) as send:
+                response = webhook.post('/api/v1/telegram/webhook', update, format='json',
+                                        HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN='test-secret')
+            self.assertEqual(response.status_code, 200)
+            return send.call_args.kwargs['text']
+
+        self.assertEqual(send_command(1, f'/start {code}'), tg.TELEGRAM_CONNECTED)
+        student.refresh_from_db()
+        self.assertEqual((student.telegram_chat_id, student.telegram_username, student.telegram_auth_code),
+                         ('12345', 'student_test', None))
+        self.assertEqual(send_command(2, '/start'), tg.TELEGRAM_CONNECTED)
+        self.assertIn('устаревший код', send_command(3, f'/start {code}'))
+        status = send_command(4, '/status')
+        for label in ('Студент &lt;A&gt;', 'js-01', 'Месяц обучения: 1', 'Баллы рейтинга: 7', 'Стрик: 4', 'Принято'):
+            self.assertIn(label, status)
+        for update_id, command in ((5, '/tasks'), (6, '/hw')):
+            tasks = send_command(update_id, command)
+            self.assertIn(f'/tasks?month=1#task-{task.pk}', tasks)
+            self.assertNotIn('Чужое задание', tasks)
+            self.assertNotIn('Будущее задание', tasks)
+        self.assertIn('https://course.example', send_command(7, '/help'))
 
 
     @override_settings(PLATFORM_OWNER_ADMIN_ID='1')

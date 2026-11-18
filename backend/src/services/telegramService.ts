@@ -852,10 +852,10 @@ export async function launchBotWithRetry(
   while (attempt < maxAttempts) {
     attempt++;
     try {
-      try {
-        await botInstance.telegram.deleteWebhook({ drop_pending_updates: false });
-      } catch {
-        // Игнорируем сетевые ошибки на удалении вебхука
+      const webhook = await botInstance.telegram.getWebhookInfo();
+      if (webhook.url) {
+        console.log('[Telegram] Webhook is active. Legacy polling is disabled.');
+        return false;
       }
 
       await botInstance.launch();

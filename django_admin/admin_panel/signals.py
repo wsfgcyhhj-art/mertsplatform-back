@@ -102,15 +102,16 @@ def on_submission_post_save(sender, instance: Submission, created, **kwargs):
         SubmissionStatusChoices.REVISION,
         SubmissionStatusChoices.IN_REVIEW,
     )
-    old_status = getattr(instance, '_old_status', None)
-    old_score = getattr(instance, '_old_score', None)
-    old_comment = getattr(instance, '_old_comment', None)
-
-    changed = (
-        instance.status != old_status
-        or instance.score != old_score
-        or instance.reviewer_comment != old_comment
-        or instance.voice_feedback_url != getattr(instance, '_old_voice', None)
+    update_fields = kwargs.get('update_fields')
+    changed = any(
+        (update_fields is None or field in update_fields)
+        and getattr(instance, field) != getattr(instance, previous, None)
+        for field, previous in (
+            ('status', '_old_status'),
+            ('score', '_old_score'),
+            ('reviewer_comment', '_old_comment'),
+            ('voice_feedback_url', '_old_voice'),
+        )
     )
 
     if is_reviewed and changed:

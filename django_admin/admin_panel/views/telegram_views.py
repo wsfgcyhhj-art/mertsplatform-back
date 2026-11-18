@@ -1,5 +1,4 @@
 from admin_panel.serializers import EmptyRequestSerializer
-import json
 import secrets
 from django.conf import settings
 from rest_framework.views import APIView
@@ -20,7 +19,7 @@ class TelegramWebhookView(APIView):
 
     @extend_schema(
         summary="Telegram Bot Webhook Receiver",
-        description="Принимает обновления от Telegram Bot API и обрабатывает команды /start, /help, /status.",
+        description="Принимает обновления от Telegram Bot API и обрабатывает команды /start, /status, /tasks (/hw), /help и /reset.",
         responses={200: dict}
     )
     def post(self, request):

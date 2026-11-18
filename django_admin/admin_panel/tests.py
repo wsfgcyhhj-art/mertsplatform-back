@@ -544,18 +544,18 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         mock_request.user = admin_user
 
         lesson_admin = LessonAdmin(Lesson, site)
-        lesson_admin.message_user = lambda req, msg: mock_messages.append(msg)
+        lesson_admin.message_user = lambda req, msg, **kwargs: mock_messages.append(msg)
         with patch('admin_panel.services.telegram_service.async_broadcast_message', return_value={'sent': 1, 'errors': 0}):
             lesson_admin.broadcast_lesson_telegram(mock_request, Lesson.objects.filter(id=lesson.id))
         self.assertEqual(len(mock_messages), 1)
-        self.assertEqual('Отправлено: 1, Ошибок: 0', mock_messages[0])
+        self.assertIn('Доставлено в Telegram: 1. Бот не подключён:', mock_messages[0])
 
         task_admin = TaskAdmin(Task, site)
-        task_admin.message_user = lambda req, msg: mock_messages.append(msg)
+        task_admin.message_user = lambda req, msg, **kwargs: mock_messages.append(msg)
         with patch('admin_panel.services.telegram_service.async_broadcast_message', return_value={'sent': 1, 'errors': 0}):
             task_admin.broadcast_task_telegram(mock_request, Task.objects.filter(id=task.id))
         self.assertEqual(len(mock_messages), 2)
-        self.assertEqual('Отправлено: 1, Ошибок: 0', mock_messages[1])
+        self.assertIn('Доставлено в Telegram: 1. Бот не подключён:', mock_messages[1])
 
     def test_11_smart_groups_and_telegram_diagnostics(self):
         from unittest.mock import patch, MagicMock

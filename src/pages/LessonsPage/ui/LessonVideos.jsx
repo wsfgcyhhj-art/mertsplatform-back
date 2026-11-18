@@ -10,7 +10,10 @@ export const LessonVideos = () => {
     const maxUserMonth = Math.max(1, Number(userInfo?.currentMonth) || 1);
 
     const [lessons, setLessons] = useState([]);
-    const [selectedMonth, setSelectedMonth] = useState(maxUserMonth);
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const month = Number(new URLSearchParams(window.location.search).get('month'));
+        return Number.isSafeInteger(month) && month > 0 ? Math.min(month, maxUserMonth) : maxUserMonth;
+    });
     const [currentMonthLimit, setCurrentMonthLimit] = useState(maxUserMonth);
     const [groupNumber, setGroupNumber] = useState(userInfo?.groupNumber || '');
     const [index, setIndex] = useState(0);
@@ -35,7 +38,8 @@ export const LessonVideos = () => {
                     if (res.data?.groupNumber) {
                         setGroupNumber(res.data.groupNumber);
                     }
-                    setIndex(0);
+                    const lesson = new URLSearchParams(window.location.search).get('lesson');
+                    setIndex(Math.max(0, fetchedLessons.findIndex(({ id }) => id === lesson)));
                 }
             } catch (err) {
                 if (isMounted) {

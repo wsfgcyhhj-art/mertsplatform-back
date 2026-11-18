@@ -18,7 +18,7 @@ test('launchBotWithRetry: retries on 409 Conflict and succeeds after conflict re
   // Мокаем Telegraf инстанс
   const mockBot = {
     telegram: {
-      deleteWebhook: async () => true,
+      getWebhookInfo: async () => ({ url: '' }),
     },
     launch: async () => {
       callCount++;
@@ -42,7 +42,7 @@ test('launchBotWithRetry: returns false gracefully when all retry attempts fail'
 
   const failingBot = {
     telegram: {
-      deleteWebhook: async () => true,
+      getWebhookInfo: async () => ({ url: '' }),
     },
     launch: async () => {
       attempts++;
@@ -53,4 +53,13 @@ test('launchBotWithRetry: returns false gracefully when all retry attempts fail'
   const result = await launchBotWithRetry(failingBot, 2, 10);
   assert.equal(result, false);
   assert.equal(attempts, 2);
+});
+
+test('launchBotWithRetry: leaves an active webhook in charge', async () => {
+  const bot = {
+    telegram: { getWebhookInfo: async () => ({ url: 'https://example.org/webhook' }) },
+    launch: async () => assert.fail('Polling must stay disabled while a webhook is active'),
+  } as any;
+
+  assert.equal(await launchBotWithRetry(bot), false);
 });

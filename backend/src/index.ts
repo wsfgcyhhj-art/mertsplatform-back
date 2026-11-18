@@ -91,8 +91,10 @@ if (process.env.NODE_ENV !== 'test') {
     // В случае отсутствия БД при локальном старте не падаем
   });
 
-  // Инициализация Telegram-бота (с graceful fallback)
-  initTelegramBot();
+  // Django принимает входящие команды. Поллинг Node нужен только отдельным установкам.
+  if (process.env.LEGACY_TELEGRAM_POLLING === 'true') {
+    initTelegramBot();
+  }
 
   // Инициализация крона еженедельного дайджеста (каждый понедельник в 10:00)
   initWeeklyDigestCron();

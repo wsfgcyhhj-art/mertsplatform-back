@@ -29,9 +29,11 @@ export const TaskS = () => {
     const fetchTasks = async () => {
         try {
             setLoading(true);
-            const res = await api.get('/tasks');
+            const requestedMonth = new URLSearchParams(window.location.search).get('month');
+            const params = /^[1-9]\d*$/.test(requestedMonth || '') ? { month: requestedMonth } : {};
+            const res = await api.get('/tasks', { params });
             setTasks(res.data?.tasks || []);
-            setMonth(res.data?.month || 1);
+            setMonth(res.data?.month || Number(params.month) || userInfo?.currentMonth || 1);
         } catch (err) {
             console.error('Failed to load tasks', err);
             message.error('Не удалось загрузить задания');
@@ -43,6 +45,13 @@ export const TaskS = () => {
     useEffect(() => {
         fetchTasks();
     }, []);
+
+    useEffect(() => {
+        const task = tasks.find(({ id }) => window.location.hash === `#task-${encodeURIComponent(id)}`);
+        if (!loading && task) {
+            document.getElementById(`task-${task.id}`)?.scrollIntoView({ block: 'start' });
+        }
+    }, [loading, tasks]);
 
     const openSubmitModal = (task) => {
         setSelectedTask(task);
@@ -172,6 +181,7 @@ export const TaskS = () => {
                         return (
                             <div
                                 key={t.id}
+                                id={`task-${t.id}`}
                                 className={`${cls.task_item} ${isAccepted ? cls.done : ''}`}
                                 data-aos="fade-up"
                                 style={{ minHeight: 'auto', height: 'auto', paddingBottom: '30px' }}

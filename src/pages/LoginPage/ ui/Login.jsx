@@ -1,5 +1,5 @@
 import cls from '../../../../src/pages/LoginPage/loginStyles/login.module.scss';
-import { useNavigate, Link } from "react-router-dom";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import { useState } from "react";
 import { toast, ToastContainer } from "react-toastify";
 import { useFindUser } from "../../../store/userStore.js";
@@ -10,6 +10,7 @@ import { AuthBackground } from "../../../components/AuthBackground/AuthBackgroun
 
 export const Login = () => {
     const navigate = useNavigate();
+    const returnTo = useLocation().state?.returnTo;
     const { addUser } = useFindUser();
     const [login, setLogin] = useState('');
     const [passwords, setPasswords] = useState('');
@@ -59,7 +60,9 @@ export const Login = () => {
                 if (res.data.user.must_change_password) { setChangeRequired(true); setLoading(false); return; }
                 toast.success('Успешный вход!');
                 setTimeout(() => {
-                    if (res.data.user.role === 'ADMIN') {
+                    if (['/lessons', '/tasks'].includes(returnTo?.pathname)) {
+                        navigate(returnTo, { replace: true });
+                    } else if (res.data.user.role === 'ADMIN') {
                         navigate('/admin');
                     } else {
                         navigate('/lessons');

@@ -1,6 +1,7 @@
 from django.db import transaction
 from admin_panel.models import User
 from django.core.validators import URLValidator
+from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 from django.core.exceptions import ValidationError
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.permissions import HasCourseAccess
@@ -24,10 +25,12 @@ from admin_panel.serializers import (
     SubmissionSerializer,
     SubmissionReviewSerializer,
 )
-from admin_panel.services.telegram_service import (
-    notify_submission_created,
-    notify_submission_reviewed,
-)
+from admin_panel.services.telegram_service import notify_submission_created
+
+
+def task_is_visible(task, user):
+    group = normalize_group_number(user.group_number)
+    return task.month <= user.current_month and normalize_group_number(task.group_number) in ('', 'all', group)
 
 
 class LessonsListView(APIView):
@@ -61,8 +64,10 @@ class LessonsListView(APIView):
             else:
                 qs = qs.filter(month__lte=max_allowed)
 
-            user_grp = user.group_number or 'ALL'
-            qs = qs.filter(Q(group_number=user_grp) | Q(group_number='ALL'))
+            user_grp = normalize_group_number(user.group_number) or 'all'
+            qs = with_normalized_group(qs).filter(
+                normalized_group__in={'all', user_grp}
+            )
         else:
             # Mentor
             raw_month = request.query_params.get('month')
@@ -95,7 +100,10 @@ class TasksListView(APIView):
         user = request.user
         qs = Task.objects.all().order_by('month', 'order', 'created_at')
         if user.role != RoleChoices.ADMIN:
-            qs = qs.filter(month__lte=user.current_month).filter(Q(group_number=user.group_number) | Q(group_number='ALL') | Q(group_number='') | Q(group_number__isnull=True))
+            group = normalize_group_number(user.group_number)
+            qs = with_normalized_group(qs.filter(month__lte=user.current_month)).filter(
+                Q(group_number__isnull=True) | Q(normalized_group__in={'', 'all', group})
+            )
 
         raw_month = request.query_params.get('month')
         if raw_month and raw_month.lower() != 'all':
@@ -141,7 +149,7 @@ class TaskDetailView(APIView):
                 {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if request.user.role != RoleChoices.ADMIN and (task.month > request.user.current_month or task.group_number not in (None, '', 'ALL', request.user.group_number)):
+        if request.user.role != RoleChoices.ADMIN and not task_is_visible(task, request.user):
             return Response({'message': 'Forbidden'}, status=403)
         serializer = TaskSerializer(task, context={'request': request})
         return Response(serializer.data)
@@ -241,7 +249,7 @@ class SubmissionsView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if user.role != RoleChoices.ADMIN and (task.month > user.current_month or task.group_number not in (None, '', 'ALL', user.group_number)):
+        if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
             return Response({'message': 'Forbidden'}, status=403)
 
         try:

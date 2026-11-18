@@ -1,9 +1,15 @@
 import os
 import re
 import html
+import hashlib
 import logging
 
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List
+from urllib.parse import quote
+from django.core.cache import cache
+from django.db import IntegrityError, transaction
+from django.db.models import Q
+from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 import httpx
 from django.conf import settings
 from admin_panel.models import (
@@ -18,6 +24,16 @@ from admin_panel.models import (
 
 logger = logging.getLogger('telegram_service')
 
+TELEGRAM_CONNECTED = (
+    "🎉 <b>Telegram успешно подключён к MertsPlatform!</b> Теперь сюда будут мгновенно "
+    "приходить уведомления о новых уроках, домашних заданиях, ответах ментора, баллах и ачивках."
+)
+REVIEW_STATUS = {
+    SubmissionStatusChoices.ACCEPTED: "✅ Принято",
+    SubmissionStatusChoices.REVISION: "🔄 На доработку",
+    SubmissionStatusChoices.IN_REVIEW: "👀 На проверке",
+    SubmissionStatusChoices.SENT: "👀 На проверке",
+}
 
 
 def get_bot_token() -> str:
@@ -26,7 +42,26 @@ def get_bot_token() -> str:
 
 
 def get_bot_username() -> str:
-    return os.getenv('TELEGRAM_BOT_USERNAME', 'MertsPlatform_bot').strip().lstrip('@')
+    fallback = os.getenv('TELEGRAM_BOT_USERNAME', 'MertsPlatform_bot').strip().lstrip('@')
+    token = get_bot_token()
+    if not token:
+        return fallback
+
+    key = 'telegram-username:' + hashlib.sha256(token.encode()).hexdigest()
+    saved = cache.get(key)
+    if saved is not None:
+        return saved
+    try:
+        response = httpx.get(f'https://api.telegram.org/bot{token}/getMe', timeout=2.0)
+        response.raise_for_status()
+        username = response.json().get('result', {}).get('username')
+        if username and re.fullmatch(r'[A-Za-z0-9_]{5,32}', username):
+            cache.set(key, username, 3600)
+            return username
+    except (httpx.HTTPError, ValueError):
+        logger.warning('Telegram getMe failed. Using configured bot username.')
+    cache.set(key, fallback, 30)
+    return fallback
 
 
 def get_frontend_url() -> str:
@@ -37,19 +72,22 @@ def escape_html(text: Any) -> str:
     return html.escape(str(text)[:1500])
 
 
-def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None) -> bool:
+def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None, *, voice: str | None = None) -> bool:
     token = get_bot_token()
     if not token or not chat_id:
         logger.warning('Telegram skipped chat_id=%s reason=%s', chat_id, 'missing_token' if not token else 'missing_chat_id')
         return False
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    method = "sendVoice" if voice else "sendMessage"
+    url = f"https://api.telegram.org/bot{token}/{method}"
     payload = {
         'chat_id': str(chat_id).strip(),
         'text': text,
         'parse_mode': 'HTML',
         'disable_web_page_preview': False,
     }
+    if voice:
+        payload = {'chat_id': payload['chat_id'], 'voice': voice}
     if reply_markup:
         payload['reply_markup'] = reply_markup
 
@@ -88,7 +126,6 @@ def send_async_notification(user_id: str, text: str, reply_markup: Optional[dict
 
 
 def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
-    from django.db import transaction
     from admin_panel.models import TelegramOutbox
     from .outbox_service import enqueue, event_context
     import uuid
@@ -96,7 +133,6 @@ def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
     batch = event_context.get() or str(uuid.uuid4())
     keys = []
     for chat_id in dict.fromkeys(str(cid).strip() for cid in chat_ids if cid and str(cid).strip()):
-        import hashlib
         key = batch + ':' + hashlib.sha256((chat_id + text).encode()).hexdigest()
         keys.append(key)
         enqueue(chat_id, text, dedupe_key=key)
@@ -110,67 +146,45 @@ def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
     return counts
 
 
-# --- Educational Workflow Event Notifiers ---
+def task_link(task: Task) -> str:
+    return f"{get_frontend_url()}/tasks?month={task.month}#task-{quote(str(task.pk), safe='')}"
+
+
+def _notify_month_students(group: str | None, month: int, text: str) -> dict:
+    students = User.objects.filter(role=RoleChoices.STUDENT, current_month=month)
+    group = normalize_group_number(group)
+    if group and group != 'all':
+        students = with_normalized_group(students).filter(normalized_group=group)
+    chat_ids = list(students.values_list('telegram_chat_id', flat=True))
+    counts = async_broadcast_message(chat_ids, text)
+    counts['unconnected'] = sum(not (chat_id or '').strip() for chat_id in chat_ids)
+    return counts
+
 
 def notify_lesson_published(lesson: Lesson) -> dict:
-    """
-    1) New Video Lesson: sent to all students where current_month == lesson.month and group matches
-    """
-    frontend_url = get_frontend_url()
-    lesson_link = f"{frontend_url}/lessons?month={lesson.month}"
-
-    group_str = f"Группа {lesson.group_number} • " if lesson.group_number and lesson.group_number.upper() != 'ALL' else ""
-
+    group = (lesson.group_number or '').strip()
+    group_label = f"Группа {escape_html(group)} • " if normalize_group_number(group) not in ('', 'all') else ""
+    lesson_link = f"{get_frontend_url()}/lessons?month={lesson.month}&lesson={quote(str(lesson.pk), safe='')}"
     msg = (
-        f"🎬 <b>Вышел новый видеоурок!</b>\n\n"
-        f"📅 {group_str}Месяц {lesson.month} • Урок #{lesson.order}\n"
+        "🎬 <b>Вышел новый видеоурок!</b>\n\n"
+        f"📅 {group_label}Месяц {lesson.month} • Урок #{lesson.order}\n"
         f"<b>{escape_html(lesson.title)}</b>\n\n"
-        f"👉 <a href=\"{lesson_link}\">Перейти к просмотру на платформе</a>"
+        f'👉 <a href="{escape_html(lesson_link)}">Смотреть урок на платформе</a>'
     )
-
-    qs = User.objects.filter(
-        role=RoleChoices.STUDENT,
-        current_month=lesson.month,
-        telegram_chat_id__isnull=False,
-    )
-    if lesson.group_number and lesson.group_number.upper() != 'ALL':
-        qs = qs.filter(group_number__iexact=lesson.group_number.strip())
-
-    chat_ids = [u.telegram_chat_id for u in qs if u.telegram_chat_id]
-    logger.info("Telegram recipients lesson_id=%s month=%s group=%s count=%s", lesson.pk, lesson.month, lesson.group_number, len(chat_ids))
-    return async_broadcast_message(chat_ids, msg)
+    return _notify_month_students(group, lesson.month, msg)
 
 
 def notify_task_published(task: Task) -> dict:
-    """
-    2) New Task: sent to all students where current_month == task.month and group matches
-    """
-    frontend_url = get_frontend_url()
-    task_link = f"{frontend_url}/tasks?month={task.month}"
-
     bonus_badge = " 🔥 <b>Бонусное задание</b>" if task.is_bonus else ""
-    max_score_text = f"{task.max_score} баллов" if task.has_score and task.max_score else "Зачетная работа"
-    group_str = f" • Группа {task.group_number}" if task.group_number and task.group_number.upper() != 'ALL' else ""
-
+    max_score = f"{task.max_score} баллов" if task.has_score and task.max_score is not None else "Зачётная работа"
     msg = (
         f"📚 <b>Новое домашнее задание!</b>{bonus_badge}\n\n"
         f"<b>{escape_html(task.title)}</b>\n"
-        f"Тема: <i>{escape_html(task.topic)}</i> (Месяц {task.month}{group_str})\n"
-        f"Максимальный балл: <b>{max_score_text}</b>\n\n"
-        f"👉 <a href=\"{task_link}\">Открыть задание на платформе</a>"
+        f"Тема: <i>{escape_html(task.topic)}</i> (Месяц {task.month})\n"
+        f"Максимальный балл: <b>{max_score}</b>\n\n"
+        f'👉 <a href="{escape_html(task_link(task))}">Открыть задание</a>'
     )
-
-    qs = User.objects.filter(
-        role=RoleChoices.STUDENT,
-        current_month=task.month,
-        telegram_chat_id__isnull=False,
-    )
-    if task.group_number and task.group_number.upper() != 'ALL':
-        qs = qs.filter(group_number__iexact=task.group_number.strip())
-
-    chat_ids = [u.telegram_chat_id for u in qs if u.telegram_chat_id]
-    logger.info("Telegram recipients task_id=%s month=%s group=%s count=%s", task.pk, task.month, task.group_number, len(chat_ids))
-    return async_broadcast_message(chat_ids, msg)
+    return _notify_month_students(task.group_number, task.month, msg)
 
 
 def notify_submission_created(submission: Submission):
@@ -207,36 +221,35 @@ def notify_submission_reviewed(submission: Submission):
     if not student.telegram_chat_id:
         return
 
-    status_labels = {
-        SubmissionStatusChoices.ACCEPTED: "✅ <b>Принято</b>",
-        SubmissionStatusChoices.REVISION: "🔄 <b>На доработку</b>",
-        SubmissionStatusChoices.IN_REVIEW: "👀 <b>На проверке</b>",
-        SubmissionStatusChoices.SENT: "Отправлено",
-    }
-    status_text = status_labels.get(submission.status, submission.status)
-
-    frontend_url = get_frontend_url()
-    task_link = f"{frontend_url}/tasks?month={submission.task.month}"
+    status_text = REVIEW_STATUS[submission.status]
 
     score_text = ""
     if submission.score is not None:
-        max_str = f" / {submission.task.max_score}" if submission.task.max_score else ""
+        max_str = f" / {submission.task.max_score}" if submission.task.max_score is not None else ""
         score_text = f"Баллы: <b>{submission.score}{max_str}</b>\n"
 
     comment_text = ""
     if submission.reviewer_comment:
         comment_text = f"💬 <b>Комментарий ментора:</b>\n<i>{escape_html(submission.reviewer_comment)}</i>\n\n"
 
+    voice = (submission.voice_feedback_url or '').strip()
+    voice_link = ""
+    if voice.lower().startswith(('https://', 'http://')):
+        voice_link = f'🎙 <a href="{escape_html(voice)}">Послушать голосовой разбор</a>\n'
+
     msg = (
         f"📝 <b>Ментор проверил ваше ДЗ!</b>\n\n"
         f"Задание: <b>{escape_html(submission.task.title)}</b> (попытка #{submission.version})\n"
         f"Статус: {status_text}\n"
         f"{score_text}"
-        f"{comment_text}"
-        f"👉 <a href=\"{task_link}\">Посмотреть детали на платформе</a>"
+        f"{comment_text}{voice_link}"
+        f'👉 <a href="{escape_html(task_link(submission.task))}">Посмотреть детали на платформе</a>'
     )
 
     send_async_notification(student.id, msg)
+    if voice != getattr(submission, '_old_voice', None) and re.fullmatch(r'[A-Za-z0-9_-]+', voice):
+        from .outbox_service import enqueue
+        enqueue(student.telegram_chat_id, '', voice=voice)
 
 
 def notify_achievement_unlocked(user_id: str, achievement):
@@ -345,43 +358,73 @@ def notify_month_advanced(user: User, new_month: int):
 
 def handle_start_command(chat_id: str, code: str, username: Optional[str] = None) -> str:
     from admin_panel.services.subscription_service import handle_subscription_start
-    if not code.strip():
+    if not code:
         return handle_subscription_start(chat_id, username)
-    clean_code = code.strip()
-    if not clean_code:
-        return (
-            "👋 Привет! Для привязки вашего аккаунта перейдите в профиль на платформе "
-            "и нажмите кнопку «Подключить Telegram»."
-        )
-
-    from django.db import transaction
-    with transaction.atomic():
-        return _bind_start_code(chat_id, clean_code, username)
+    try:
+        with transaction.atomic():
+            return _bind_start_code(chat_id, code, username)
+    except IntegrityError:
+        if User.objects.filter(telegram_chat_id=chat_id).exists():
+            return "Этот Telegram уже привязан к другому аккаунту."
+        raise
 
 
-def _bind_start_code(chat_id, clean_code, username):
-    user = User.objects.select_for_update().filter(telegram_auth_code=clean_code).first()
+def _bind_start_code(chat_id, code, username):
+    from admin_panel.models import SubscriptionGrant
+    user = User.objects.select_for_update().filter(telegram_auth_code=code).first()
     if not user:
         return "❌ Неверный или устаревший код привязки. Сгенерируйте новую ссылку в профиле."
+    if SubscriptionGrant.objects.filter(user=user).exclude(telegram_user_id=chat_id).exists() or (
+        SubscriptionGrant.objects.filter(telegram_user_id=chat_id, user__isnull=False).exclude(user=user).exists()
+    ):
+        return "Доступ закреплён за другим Telegram-аккаунтом. Обратитесь к владельцу."
+    if User.objects.filter(telegram_chat_id=chat_id).exclude(pk=user.pk).exists():
+        return "Этот Telegram уже привязан к другому аккаунту."
 
-    from admin_panel.models import SubscriptionGrant
-    bound_grant = SubscriptionGrant.objects.filter(user=user).first()
-    if bound_grant and bound_grant.telegram_user_id != str(chat_id).strip():
-        return "Подписка закреплена за другим Telegram аккаунтом. Обратитесь к владельцу."
-    user.telegram_chat_id = str(chat_id).strip()
+    user.telegram_chat_id = chat_id
     user.telegram_username = username.lower() if username else None
     user.telegram_auth_code = None
-    user.save()
+    user.save(update_fields=['telegram_chat_id', 'telegram_username', 'telegram_auth_code', 'updated_at'])
+    return TELEGRAM_CONNECTED
 
+
+def _student_status(user: User) -> str:
+    recent = user.submissions.select_related('task').order_by('-created_at', '-pk')[:5]
+    rows = [
+        f"• {escape_html(item.task.title)} — {REVIEW_STATUS.get(item.status, 'На проверке')}"
+        for item in recent
+    ]
     return (
-        f"✅ <b>Telegram успешно привязан!</b>\n\n"
-        f"👤 Аккаунт: <b>{escape_html(user.name or user.login)}</b> (@{escape_html(user.login)})\n"
-        f"Теперь вы будете мгновенно получать персональные уведомления о выходе уроков, проверке ДЗ и новых ачивках!"
+        f"👤 <b>{escape_html(user.name or user.login)}</b>\n"
+        f"Учебная группа: {escape_html(user.group_number or 'Не назначена')}\n"
+        f"Месяц обучения: {user.current_month}\n"
+        f"Баллы рейтинга: {user.calculate_total_score()}\n"
+        f"Стрик: {user.streak_count} дн.\n\n"
+        "<b>Последние сдачи</b>\n" + ("\n".join(rows) or "Сдач пока нет.")
+    )
+
+
+def _student_tasks(user: User) -> str:
+    from admin_panel.permissions import HasCourseAccess
+
+    if not HasCourseAccess.user_has_access(user):
+        return HasCourseAccess.message
+    group = normalize_group_number(user.group_number)
+    tasks = with_normalized_group(Task.objects.filter(month=user.current_month))
+    tasks = tasks.filter(Q(group_number__isnull=True) | Q(normalized_group__in={'', 'all', group}))
+    rows = [
+        f'• <a href="{escape_html(task_link(task))}">{escape_html(task.title)}</a>'
+        for task in tasks.order_by('order', 'created_at', 'pk')[:10]
+    ]
+    url = escape_html(f"{get_frontend_url()}/tasks?month={user.current_month}")
+    return (
+        f"<b>Домашние задания · месяц {user.current_month}</b>\n"
+        + ("\n".join(rows) or "Заданий пока нет.")
+        + f'\n\n<a href="{url}">Все задания на платформе</a>'
     )
 
 
 def process_telegram_update(update: Dict[str, Any]) -> None:
-    from django.db import transaction
     from admin_panel.models import TelegramUpdate
     from .outbox_service import event_context
     update_id = update.get('update_id')
@@ -405,54 +448,44 @@ def _process_telegram_update(update):
         return
 
     chat = message.get('chat', {})
-    if chat.get('type') != 'private' or str(chat.get('id')) != str(message.get('from', {}).get('id')):
+    sender = message.get('from', {})
+    chat_number = chat.get('id')
+    if chat.get('type') != 'private' or not isinstance(chat_number, int) or chat_number <= 0 or chat_number != sender.get('id'):
         return
-    chat_id = str(chat.get('id', ''))
-    from_user = message.get('from', {})
-    username = from_user.get('username')
-
-    text = message.get('text', '').strip()
+    chat_id = str(chat_number)
+    text = (message.get('text') or '').strip()
     if not text:
         return
+    parts = text.split(maxsplit=1)
+    command = parts[0]
+    argument = parts[1] if len(parts) > 1 else ''
+    command, _, mention = command.lower().partition('@')
+    if mention and mention != get_bot_username().lower():
+        return
 
-    if text.startswith('/start'):
-        parts = text.split(maxsplit=1)
-        code = parts[1] if len(parts) > 1 else ''
-        reply = handle_start_command(chat_id, code, username)
-        enqueue(chat_id, reply)
-
-    elif text == '/reset':
-        from .subscription_service import recovery_link
+    if command == '/start':
+        enqueue(chat_id, handle_start_command(chat_id, argument.strip(), sender.get('username')))
+    elif command == '/help':
+        enqueue(chat_id, (
+            "🤖 <b>MertsPlatform</b>\n"
+            "/start — Подключить Telegram\n"
+            "/status — Группа, рейтинг и последние сдачи\n"
+            "/tasks — Актуальные задания (также /hw)\n"
+            "/reset — Восстановить доступ\n"
+            "/help — Справка\n\n"
+            f'<a href="{escape_html(get_frontend_url())}">Открыть платформу</a>'
+        ))
+    elif command in ('/status', '/tasks', '/hw', '/reset'):
         user = User.objects.filter(telegram_chat_id=chat_id).first()
-        if user:
-            enqueue(chat_id, 'Одноразовое восстановление (20 минут): ' + recovery_link(user))
+        if not user:
+            enqueue(chat_id, "Telegram не подключён. Отправьте /start или откройте ссылку из профиля.")
+        elif command == '/status':
+            enqueue(chat_id, _student_status(user))
+        elif command == '/reset':
+            from .subscription_service import recovery_link
+            enqueue(chat_id, 'Одноразовое восстановление (20 минут): ' + escape_html(recovery_link(user)))
         else:
-            enqueue(chat_id, 'Доступ закрыт.')
-
-    elif text.startswith('/help'):
-        help_text = (
-            "🤖 <b>MertsPlatform Bot</b>\n\n"
-            "Доступные команды:\n"
-            "/start [code] — Привязать Telegram к вашему аккаунту\n"
-            "/status — Проверить статус привязки аккаунта\n"
-            "/help — Справка по боту"
-        )
-        enqueue(chat_id, help_text)
-
-    elif text.startswith('/status'):
-        user = User.objects.filter(telegram_chat_id=chat_id).first()
-        if user:
-            status_text = (
-                f"✅ <b>Аккаунт подключен:</b>\n"
-                f"Логин: @{escape_html(user.login)}\n"
-                f"Имя: {escape_html(user.name or 'Не указано')}\n"
-                f"Роль: {escape_html(user.role)}\n"
-                f"Месяц обучения: {user.current_month}\n"
-                f"Стрик: {user.streak_count} дн."
-            )
-        else:
-            status_text = "❌ Ваш Telegram еще не привязан к аккаунту MertsPlatform."
-        enqueue(chat_id, status_text)
+            enqueue(chat_id, _student_tasks(user))
 
 
 def run_telegram_polling():

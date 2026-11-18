@@ -18,11 +18,14 @@ def cipher():
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest()))
 
 
-def enqueue(chat_id, text, reply_markup=None, dedupe_key=None):
+def enqueue(chat_id, text, reply_markup=None, dedupe_key=None, *, voice=None):
     identity = event_context.get()
-    fingerprint = hashlib.sha256((str(chat_id) + text).encode()).hexdigest()
+    fingerprint = hashlib.sha256((str(chat_id) + (voice or text)).encode()).hexdigest()
     key = dedupe_key or (f'{identity}:{fingerprint}' if identity else str(uuid.uuid4()))
-    payload = cipher().encrypt(json.dumps({'text': text, 'reply_markup': reply_markup}).encode()).decode()
+    message = {'text': text, 'reply_markup': reply_markup}
+    if voice:
+        message['voice'] = voice
+    payload = cipher().encrypt(json.dumps(message).encode()).decode()
     item, created = TelegramOutbox.objects.get_or_create(dedupe_key=key, defaults={'chat_id': str(chat_id), 'payload': {'encrypted': payload}})
     if created and settings.TELEGRAM_OUTBOX_EAGER:
         transaction.on_commit(lambda: deliver(item.pk), robust=True)

@@ -3,8 +3,18 @@ import uuid
 import logging
 from typing import List, Tuple, Optional
 from django.db import transaction
+from django.db.models import Value
+from django.db.models.functions import Lower, Replace
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_group_number(group_number):
+    return (group_number or '').replace(' ', '').lower()
+
+
+def with_normalized_group(queryset):
+    return queryset.alias(normalized_group=Lower(Replace('group_number', Value(' '), Value(''))))
 
 
 def parse_month_from_group_name(group_name: Optional[str]) -> int:

@@ -25,7 +25,10 @@ class HasCourseAccess(BasePermission):
     message = "Доступ закрыт. Требуется действующая подписка и смена временного пароля."
 
     def has_permission(self, request, view):
-        user = request.user
+        return self.user_has_access(request.user)
+
+    @staticmethod
+    def user_has_access(user):
         if not user or not user.is_authenticated:
             return False
         if user.role == RoleChoices.ADMIN:
