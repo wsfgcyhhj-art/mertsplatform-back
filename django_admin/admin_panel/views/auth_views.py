@@ -1,5 +1,6 @@
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.http import JsonResponse
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.utils.decorators import decorator_from_middleware, method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -13,6 +14,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser
+from rest_framework.permissions import AllowAny
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
 from admin_panel.models import User, Session, RoleChoices, StudyGroup
@@ -21,16 +23,32 @@ from admin_panel.authentication import generate_tokens_for_user
 from admin_panel.services.achievement_service import evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.group_service import parse_month_from_group_name
 
+SIMPLE_FORM_CONTENT_TYPES = ('application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain')
+
 
 class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
     def process_view(self, request, callback, callback_args, callback_kwargs):
         if not request.COOKIES.get('refreshToken'):
             return None
+        origin = request.headers.get('Origin')
+        if origin:
+            if not self._origin_verified(request):
+                return JsonResponse(
+                    {'statusCode': 403, 'error': 'Forbidden', 'message': 'Untrusted origin'},
+                    status=403,
+                )
+            content_type = (request.content_type or '').split(';', 1)[0].strip().lower()
+            if content_type not in SIMPLE_FORM_CONTENT_TYPES:
+                return None
         return super().process_view(request, callback, callback_args, callback_kwargs)
 
     def _origin_verified(self, request):
-        origin = request.headers.get('Origin', '')
-        return bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin)) or super()._origin_verified(request)
+        origin = request.headers.get('Origin', '').rstrip('/')
+        return (
+            bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin))
+            or origin in settings.CORS_ALLOWED_ORIGINS
+            or super()._origin_verified(request)
+        )
 
 
 auth_csrf_protect = decorator_from_middleware(ApiAuthCsrfMiddleware)
@@ -72,18 +90,88 @@ def update_user_streak(user: User) -> int:
     return user.streak_count
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
+    parser_classes = (JSONParser,)
+    throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
 
     @extend_schema(
         summary="Регистрация нового студента",
         request=RegisterSerializer,
-        responses={201: dict, 400: dict}
+        responses={201: dict, 400: dict, 409: dict}
     )
+    @transaction.atomic
     def post(self, request):
-        return Response({"message": "Регистрация закрыта. Доступ выдаёт владелец через Telegram."}, status=403)
+        serializer = RegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        login = data['login'].strip()
+        if len(login) < 3:
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "Login must be at least 3 characters long"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if User.objects.filter(login=login).exists():
+            return Response(
+                {"statusCode": 409, "error": "Conflict", "message": "User with this login already exists"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        group_num = data['groupNumber'].strip()
+        if not group_num:
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "groupNumber is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        month_val = data.get('currentMonth')
+        if not month_val or month_val == 1:
+            month_val = parse_month_from_group_name(group_num)
+
+        user = User(
+            login=login,
+            role=RoleChoices.STUDENT,
+            has_subscription=False,
+            name=(data.get('name') or '').strip() or None,
+            telegram=(data.get('telegram') or '').strip() or None,
+            group_number=group_num,
+            current_month=month_val,
+            streak_count=1,
+            last_active_date=timezone.now(),
+        )
+        user.set_password(data['password'])
+        try:
+            with transaction.atomic():
+                user.save()
+        except IntegrityError:
+            return Response(
+                {"statusCode": 409, "error": "Conflict", "message": "User with this login already exists"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        evaluate_user_achievements(user.id, trigger_filter=TriggerTypeChoices.ON_REGISTER)
+        access_token, refresh_token, _session = generate_tokens_for_user(user)
+        user_data = UserProfileSerializer(user, context={'request': request}).data
+
+        response = Response(
+            {
+                "accessToken": access_token,
+                "refreshToken": refresh_token,
+                "user": user_data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+        set_auth_cookies(request, response, refresh_token)
+        return response
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -92,7 +180,7 @@ class LoginView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
 
     @extend_schema(
         summary="Аутентификация пользователя (логин + пароль)",
@@ -140,7 +228,7 @@ class RefreshTokenView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
 
     @extend_schema(
         operation_id="auth_refresh",
@@ -175,7 +263,7 @@ class LogoutView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
 
     @extend_schema(
         operation_id="auth_logout",
@@ -198,7 +286,7 @@ class LogoutView(APIView):
 
 class CsrfTokenView(APIView):
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
     @extend_schema(responses={200: dict})
     def get(self, request):
         return Response({'csrfToken': get_token(request)})

@@ -1,15 +1,9 @@
 from unittest.mock import patch
 from django.test import SimpleTestCase
-from rest_framework.test import APIRequestFactory
-from admin_panel.views.auth_views import RegisterView
 from admin_panel.services import telegram_service as tg
 
 
 class DeliveryAndClosedRegistrationTests(SimpleTestCase):
-    def test_public_registration_is_closed(self):
-        response = RegisterView.as_view()(APIRequestFactory().post("/", {}))
-        self.assertEqual(response.status_code, 403)
-
     def test_bot_profile_link_uses_username_of_configured_token(self):
         with patch.object(tg, 'get_bot_token', return_value='username-test'), \
                 patch.object(tg.httpx, 'get') as get:
@@ -36,6 +30,19 @@ class SubscriptionIntegrationTests(TransactionTestCase):
 
     def setUp(self):
         clear_data()
+
+    def test_public_registration_creates_unsubscribed_student(self):
+        StudyGroup.objects.create(name='js-01', month=1)
+        client = APIClient()
+        payload = {'login': 'new_student', 'password': 'Password123!', 'groupNumber': 'js-01'}
+        response = client.post('/api/v1/auth/register', payload, format='json')
+        self.assertEqual(response.status_code, 201)
+        user = User.objects.get(login='new_student')
+        self.assertFalse(user.has_subscription)
+        auth_client = APIClient()
+        auth_client.credentials(HTTP_AUTHORIZATION='Bearer ' + response.json()['accessToken'])
+        self.assertEqual(auth_client.get('/api/v1/lessons').status_code, 403)
+        self.assertEqual(auth_client.get('/api/v1/tasks').status_code, 403)
 
     @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret')
     def test_pending_subscription_claim_and_username_reuse(self):

@@ -55,16 +55,39 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(resp_shallow.json()['mode'], 'shallow')
 
     def test_03_auth_flow_and_on_register_achievement(self):
-        # Closed registration; existing provisioned accounts still authenticate.
-        reg_resp = self.client.post('/api/v1/auth/register', data={}, content_type='application/json')
-        self.assertEqual(reg_resp.status_code, 403)
-        user = User(login='test_student', has_subscription=True, group_number='GRP-101')
-        user.set_password('Password123!')
-        user.save()
-        subscribe(user)
-        from admin_panel.services.achievement_service import evaluate_user_achievements
-        evaluate_user_achievements(user.id, trigger_filter='ON_REGISTER')
+        # Empty payload returns 400; valid registration creates student without subscription (has_subscription=False).
+        bad_resp = self.client.post('/api/v1/auth/register', data={}, content_type='application/json')
+        self.assertEqual(bad_resp.status_code, 400)
+
+        reg_payload = {
+            "login": "test_student",
+            "password": "Password123!",
+            "groupNumber": "GRP-101",
+            "name": "Иван Студентов",
+        }
+        reg_resp = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps(reg_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(reg_resp.status_code, 201)
+        reg_data = reg_resp.json()
+        self.assertIn('accessToken', reg_data)
+        self.assertFalse(reg_data['user']['has_subscription'])
+        user = User.objects.get(pk=reg_data['user']['id'])
+        self.assertFalse(user.has_subscription)
         self.assertEqual(UserAchievement.objects.filter(user=user, achievement__code='WELCOME').count(), 1)
+
+        dup_resp = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps(reg_payload),
+            content_type='application/json',
+        )
+        self.assertEqual(dup_resp.status_code, 409)
+
+        subscribe(user)
+        user.has_subscription = True
+        user.save()
 
         # 2. Login with valid credentials
         login_payload = {
@@ -582,6 +605,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(parse_month_from_group_name(None), 1)
 
         # 2. Test auto-assignment of month during registration
+        StudyGroup.objects.get_or_create(name="js-02", defaults={"month": 2})
         reg_payload = {
             "login": "student_group_test",
             "password": "Password123!",
@@ -589,9 +613,8 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             "name": "Студент Группы 2",
         }
         resp = self.client.post('/api/v1/auth/register', data=json.dumps(reg_payload), content_type='application/json')
-        self.assertEqual(resp.status_code, 403)
-        StudyGroup.objects.get_or_create(name="js-02", defaults={"month": 2})
-        user_group = create_user(has_subscription=True, login="student_group_test", password_hash="hash", group_number="js-02")
+        self.assertEqual(resp.status_code, 201)
+        user_group = User.objects.get(login="student_group_test")
         self.assertEqual(user_group.current_month, 2)
         self.assertEqual(user_group.group_number, "js-02")
         self.assertIsNotNone(user_group.study_group)

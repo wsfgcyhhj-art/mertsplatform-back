@@ -41,8 +41,24 @@ RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-CSRF_TRUSTED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CSRF_TRUSTED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]
-CORS_ALLOWED_ORIGINS = [v.strip().rstrip('/') for v in os.getenv('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if v.strip()]
+
+
+def _parse_origins(raw: str, extras: list[str]) -> list[str]:
+    items = [v.strip().rstrip('/') for v in raw.split(',') if v.strip()]
+    if FRONTEND_URL.startswith(('http://', 'https://')):
+        items.append(FRONTEND_URL)
+    items.extend(extras)
+    return list(dict.fromkeys(items))
+
+
+CSRF_TRUSTED_ORIGINS = _parse_origins(
+    os.getenv('CSRF_TRUSTED_ORIGINS', ''),
+    ['https://166.0.28.165.sslip.io', 'https://mertsplatform.vercel.app'],
+)
+CORS_ALLOWED_ORIGINS = _parse_origins(
+    os.getenv('CORS_ALLOWED_ORIGINS', ''),
+    ['https://mertsplatform.vercel.app'],
+)
 LOCAL_FRONTEND_ORIGIN_RE = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 CORS_ALLOWED_ORIGIN_REGEXES = [
     LOCAL_FRONTEND_ORIGIN_RE,
@@ -58,7 +74,7 @@ SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 # Enable only behind a proxy that strips client-supplied forwarding headers.
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if os.getenv('TRUST_HTTPS_PROXY') == '1' else None
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if os.getenv('TRUST_HTTPS_PROXY', '1') == '1' else None
 SECURE_REFERRER_POLICY = 'same-origin'
 
 INSTALLED_APPS = [
@@ -369,6 +385,14 @@ SIMPLE_JWT = {
 
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',

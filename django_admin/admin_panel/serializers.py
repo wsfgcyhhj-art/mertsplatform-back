@@ -89,7 +89,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.Serializer):
     login = serializers.CharField(min_length=3, max_length=255)
-    password = serializers.CharField(min_length=8, max_length=255)
+    password = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False)
     groupNumber = serializers.CharField(max_length=64)
     name = serializers.CharField(required=False, allow_blank=True, max_length=255)
     telegram = serializers.CharField(required=False, allow_blank=True, max_length=255)

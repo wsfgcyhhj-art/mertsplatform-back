@@ -1,3 +1,5 @@
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from admin_panel.serializers import validate_new_password
 from admin_panel.throttles import AuthThrottle
 from admin_panel.serializers import EmptyRequestSerializer
@@ -8,7 +10,7 @@ from django.core.exceptions import ValidationError
 from rest_framework import serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from drf_spectacular.utils import extend_schema
 from admin_panel.models import StudyGroup, PasswordResetTicket
 from admin_panel.permissions import IsOwner
@@ -42,11 +44,12 @@ class ResetSerializer(serializers.Serializer):
     new_password = serializers.CharField(min_length=12, max_length=1024, write_only=True, trim_whitespace=False, validators=[validate_new_password])
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class PasswordResetView(APIView):
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
-    permission_classes = ()
+    permission_classes = (AllowAny,)
 
     @extend_schema(request=ResetSerializer, responses={200: dict, 400: dict})
     @transaction.atomic

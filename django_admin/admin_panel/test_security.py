@@ -258,6 +258,89 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(profile.status_code, 200)
         self.assertEqual(profile['Access-Control-Allow-Origin'], 'https://merts-preview.vercel.app')
 
+    @override_settings(ALLOWED_HOSTS=['166.0.28.165.sslip.io', 'localhost', '127.0.0.1', 'testserver'])
+    def test_vercel_cross_origin_auth_without_csrf(self):
+        from django.test import Client
+        client = Client(enforce_csrf_checks=True)
+        headers = {
+            'HTTP_HOST': '166.0.28.165.sslip.io',
+            'HTTP_X_FORWARDED_PROTO': 'https',
+            'HTTP_ORIGIN': 'https://mertsplatform.vercel.app',
+        }
+
+        bad_reg = client.post('/api/v1/auth/register', data='{}', content_type='application/json', **headers)
+        self.assertEqual(bad_reg.status_code, 400)
+
+        reg_payload = '{"login":"vercel_student","password":"Strong-Pass-2026!","groupNumber":"js-01"}'
+        reg = client.post('/api/v1/auth/register', data=reg_payload, content_type='application/json', **headers)
+        self.assertEqual(reg.status_code, 201)
+        self.assertEqual(reg['Access-Control-Allow-Origin'], 'https://mertsplatform.vercel.app')
+        self.assertFalse(reg.json()['user']['has_subscription'])
+
+        dup = client.post('/api/v1/auth/register', data=reg_payload, content_type='application/json', **headers)
+        self.assertEqual(dup.status_code, 409)
+
+        # Unsubscribed student can register/login, but curriculum remains 403 Forbidden.
+        lessons = client.get(
+            '/api/v1/lessons',
+            HTTP_AUTHORIZATION='Bearer ' + reg.json()['accessToken'],
+            **headers,
+        )
+        self.assertEqual(lessons.status_code, 403)
+
+        bad_login = client.post('/api/v1/auth/login', data='{"login":"student","password":"wrong"}', content_type='application/json', **headers)
+        self.assertEqual(bad_login.status_code, 401)
+        empty_login = client.post('/api/v1/auth/login', data='{}', content_type='application/json', **headers)
+        self.assertEqual(empty_login.status_code, 400)
+
+        login = client.post('/api/v1/auth/login', data='{"login":"student","password":"Strong-Pass-2026!"}', content_type='application/json', **headers)
+        self.assertEqual(login.status_code, 200)
+        self.assertIn('refreshToken', login.cookies)
+
+        # Axios zd.post('/auth/refresh') sends no body / empty Content-Type and no X-CSRFToken.
+        refresh = client.post('/api/v1/auth/refresh', data=b'', content_type='', **headers)
+        self.assertEqual(refresh.status_code, 200)
+        self.assertIn('accessToken', refresh.json())
+
+        evil_headers = dict(headers, HTTP_ORIGIN='https://evil.example')
+        evil_refresh = client.post('/api/v1/auth/refresh', data=b'', content_type='', **evil_headers)
+        self.assertEqual(evil_refresh.status_code, 403)
+
+    @override_settings(ALLOWED_HOSTS=['166.0.28.165.sslip.io', 'localhost', '127.0.0.1', 'testserver'])
+    def test_swagger_auth_with_active_admin_session_cookie(self):
+        from django.contrib.auth import get_user_model
+        from django.test import Client
+
+        admin_user = get_user_model().objects.create_superuser(username='swagger_admin', email='s@example.com', password='Admin-Pass-2026!')
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(admin_user)
+        self.assertIn('sessionid', client.cookies)
+
+        headers = {
+            'HTTP_HOST': '166.0.28.165.sslip.io',
+            'HTTP_X_FORWARDED_PROTO': 'https',
+            'HTTP_ORIGIN': 'https://166.0.28.165.sslip.io',
+            'HTTP_REFERER': 'https://166.0.28.165.sslip.io/api/docs/',
+        }
+
+        bad_login = client.post('/api/v1/auth/login', data='{"login":"student","password":"wrong"}', content_type='application/json', **headers)
+        self.assertEqual(bad_login.status_code, 401)
+        ok_login = client.post('/api/v1/auth/login', data='{"login":"student","password":"Strong-Pass-2026!"}', content_type='application/json', **headers)
+        self.assertEqual(ok_login.status_code, 200)
+
+        bad_reg = client.post('/api/v1/auth/register', data='{}', content_type='application/json', **headers)
+        self.assertEqual(bad_reg.status_code, 400)
+        ok_reg = client.post(
+            '/api/v1/auth/register',
+            data='{"login":"swagger_student","password":"Strong-Pass-2026!","groupNumber":"js-01"}',
+            content_type='application/json',
+            **headers,
+        )
+        self.assertEqual(ok_reg.status_code, 201)
+
+        ok_refresh = client.post('/api/v1/auth/refresh', data='{}', content_type='application/json', **headers)
+        self.assertEqual(ok_refresh.status_code, 200)
+
     @override_settings(AUTH_RATE_LIMIT=1)
     def test_admin_login_is_rate_limited(self):
         from django.test import RequestFactory

@@ -158,6 +158,8 @@ paths:
       operationId: v1_auth_csrf_retrieve
       tags:
       - v1
+      security:
+      - {}
       responses:
         '200':
           content:
@@ -178,6 +180,8 @@ paths:
             schema:
               $ref: '#/components/schemas/LoginRequest'
         required: true
+      security:
+      - {}
       responses:
         '200':
           content:
@@ -199,6 +203,8 @@ paths:
       summary: Выход из системы и удаление сессии
       tags:
       - v1
+      security:
+      - {}
       responses:
         '200':
           content:
@@ -213,6 +219,8 @@ paths:
       summary: Обновление пары токенов по refresh-токену
       tags:
       - v1
+      security:
+      - {}
       responses:
         '200':
           content:
@@ -239,13 +247,9 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RegisterRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/RegisterRequest'
-          multipart/form-data:
-            schema:
-              $ref: '#/components/schemas/RegisterRequest'
         required: true
+      security:
+      - {}
       responses:
         '201':
           content:
@@ -255,6 +259,13 @@ paths:
                 additionalProperties: {}
           description: ''
         '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '409':
           content:
             application/json:
               schema:
@@ -278,6 +289,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ResetRequest'
         required: true
+      security:
+      - {}
       responses:
         '200':
           content:
@@ -1256,7 +1269,7 @@ components:
         password:
           type: string
           minLength: 8
-          maxLength: 255
+          maxLength: 1024
         groupNumber:
           type: string
           minLength: 1
