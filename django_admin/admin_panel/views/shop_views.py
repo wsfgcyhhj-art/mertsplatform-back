@@ -6,7 +6,6 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 
 from admin_panel.models import ShopOrder, ShopProduct
-from admin_panel.permissions import HasCourseAccess
 from admin_panel.services.shop_service import ShopConflict, place_order, shop_balance
 
 
@@ -63,7 +62,7 @@ class ShopErrorSerializer(serializers.Serializer):
 
 
 class ShopBalanceView(APIView):
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(responses=ShopBalanceSerializer, summary='Баланс магазина')
     def get(self, request):
@@ -71,7 +70,7 @@ class ShopBalanceView(APIView):
 
 
 class ShopProductsView(APIView):
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(responses=ShopCatalogSerializer, summary='Активные товары и баланс магазина')
     def get(self, request):
@@ -81,7 +80,7 @@ class ShopProductsView(APIView):
 
 
 class ShopOrdersView(APIView):
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(
         request=ShopPurchaseSerializer,
@@ -105,7 +104,7 @@ class ShopOrdersView(APIView):
 
 
 class MyShopOrdersView(APIView):
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(responses=ShopOrderSerializer(many=True), summary='История покупок студента')
     def get(self, request):

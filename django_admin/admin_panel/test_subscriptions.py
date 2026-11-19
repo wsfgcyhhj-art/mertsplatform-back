@@ -13,11 +13,11 @@ class DeliveryAndClosedRegistrationTests(SimpleTestCase):
             get.assert_called_once()
 
 
+from django.contrib import admin
+from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase, override_settings
-from django.db import connection
-from admin_panel.test_support import UNMANAGED_MODELS, create_schema, clear_data, subscribe
+from admin_panel.test_support import create_schema, clear_data
 from admin_panel.models import User, StudyGroup, SubscriptionGrant
-from admin_panel.services.subscription_service import grant_subscription, handle_subscription_start
 from rest_framework.test import APIClient
 
 
@@ -31,77 +31,31 @@ class SubscriptionIntegrationTests(TransactionTestCase):
     def setUp(self):
         clear_data()
 
-    def test_public_registration_creates_unsubscribed_student(self):
+    def test_registered_student_has_full_access_without_subscription(self):
         StudyGroup.objects.create(name='js-01', month=1)
         client = APIClient()
         payload = {'login': 'new_student', 'password': 'Password123!', 'groupNumber': 'js-01'}
-        response = client.post('/api/v1/auth/register', payload, format='json')
-        self.assertEqual(response.status_code, 201)
+        reg = client.post('/api/v1/auth/register', payload, format='json')
+        self.assertEqual(reg.status_code, 201)
         user = User.objects.get(login='new_student')
-        self.assertFalse(user.has_subscription)
+        self.assertTrue(user.has_subscription)
+
+        login = client.post('/api/v1/auth/login', {'login': 'new_student', 'password': 'Password123!'}, format='json')
+        self.assertEqual(login.status_code, 200)
+
         auth_client = APIClient()
-        auth_client.credentials(HTTP_AUTHORIZATION='Bearer ' + response.json()['accessToken'])
-        self.assertEqual(auth_client.get('/api/v1/lessons').status_code, 403)
-        self.assertEqual(auth_client.get('/api/v1/tasks').status_code, 403)
+        auth_client.credentials(HTTP_AUTHORIZATION='Bearer ' + login.json()['accessToken'])
+        for path in ('lessons', 'tasks', 'achievements', 'leaderboard', 'submissions', 'users/me/achievements', 'shop/balance', 'shop/products'):
+            self.assertEqual(auth_client.get('/api/v1/' + path).status_code, 200, path)
 
-    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret')
-    def test_pending_subscription_claim_and_username_reuse(self):
-        group = StudyGroup.objects.create(name='js-02', month=2)
-        grant_subscription('@Student_test', group, None, 'owner')
-        update = {'update_id': 1, 'message': {
-            'chat': {'id': 12345, 'type': 'private'},
-            'from': {'id': 12345, 'username': 'student_test'},
-            'text': '/start',
-        }}
-        with patch.object(tg, 'send_telegram_message', return_value=True) as send:
-            response = APIClient().post(
-                '/api/v1/telegram/webhook', update, format='json',
-                HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN='test-secret',
-            )
-        self.assertEqual(response.status_code, 200)
-        grant = SubscriptionGrant.objects.get(telegram_username='student_test')
-        self.assertEqual(grant.user.current_month, 2)
-        self.assertTrue(grant.user.has_subscription)
-        self.assertTrue(grant.user.must_change_password)
-        self.assertTrue(any('Временный пароль' in call.kwargs.get('text', '') for call in send.call_args_list))
-        self.assertEqual(send.call_args.kwargs['text'], tg.TELEGRAM_CONNECTED)
-        handle_subscription_start('99999', 'student_test')
-        grant.refresh_from_db()
-        self.assertEqual(grant.telegram_user_id, '12345')
-
-    def test_started_bot_before_grant(self):
-        handle_subscription_start('12345', 'student_test')
-        group = StudyGroup.objects.create(name='js-02', month=2)
-        with patch.object(tg, 'send_telegram_message', return_value=True):
-            grant = grant_subscription('student_test', group, None, 'owner')
-        self.assertIsNone(grant.user_id)
-        with patch.object(tg, 'send_telegram_message', return_value=True):
-            handle_subscription_start('12345', 'student_test')
-        grant.refresh_from_db()
-        self.assertIsNotNone(grant.user_id)
-
-    def test_course_requires_subscription_and_password_change(self):
-        user = User.objects.create(login='closed', password_hash='x')
-        client = APIClient()
-        client.force_authenticate(user)
-        for path in ('lessons', 'tasks', 'submissions', 'achievements', 'leaderboard'):
-            self.assertEqual(client.get('/api/v1/' + path).status_code, 403)
-        subscribe(user)
-        user.has_subscription = True
-        user.save()
-        self.assertEqual(client.get('/api/v1/tasks').status_code, 200)
-        user.must_change_password = True
-        user.save()
-        self.assertEqual(client.get('/api/v1/tasks').status_code, 403)
+        self.assertNotIn(SubscriptionGrant, admin.site._registry)
+        owner = get_user_model().objects.create_superuser(username='admin_check', email='a@example.com', password='Admin-Pass-2026!')
+        self.client.force_login(owner)
+        self.assertEqual(self.client.get('/admin/').status_code, 200)
+        self.assertEqual(self.client.get('/admin/admin_panel/subscriptiongrant/add/').status_code, 404)
 
     def test_webhook_rejects_forged_updates(self):
         self.assertEqual(APIClient().post('/api/v1/telegram/webhook', {}, format='json').status_code, 403)
-
-    def test_nonowner_cannot_grant(self):
-        client = APIClient()
-        client.force_authenticate(User.objects.create(login='admin_other', role='ADMIN', password_hash='x'))
-        self.assertEqual(client.post('/api/v1/admin/subscriptions/grant', {}, format='json').status_code, 403)
-
 
     def test_task_creation_targets_group_and_month_after_commit(self):
         from admin_panel.models import Task
@@ -128,7 +82,6 @@ class SubscriptionIntegrationTests(TransactionTestCase):
 
         student = create_user(login='student', name='Студент <A>', group_number='js-01',
                               has_subscription=True, streak_count=4)
-        SubscriptionGrant.objects.filter(user=student).update(telegram_user_id='12345')
         task = Task.objects.create(title='Моё задание', topic='JS', group_number=' JS - 01 ')
         Task.objects.create(title='Чужое задание', topic='JS', group_number='py-01')
         Task.objects.create(title='Будущее задание', topic='JS', month=2)
@@ -167,21 +120,6 @@ class SubscriptionIntegrationTests(TransactionTestCase):
             self.assertNotIn('Будущее задание', tasks)
         self.assertIn('https://course.example', send_command(7, '/help'))
 
-
-    @override_settings(PLATFORM_OWNER_ADMIN_ID='1')
-    def test_owner_session_grants_in_admin_only(self):
-        from django.contrib.auth import get_user_model
-        owner = get_user_model().objects.create_superuser(pk=1, username='owner', password='test-owner-password')
-        group = StudyGroup.objects.create(name='js-01')
-        client = APIClient()
-        client.force_login(owner)
-        response = client.post('/api/v1/admin/subscriptions/grant', {'telegram_username': '@new_student', 'group_id': group.pk}, format='json')
-        self.assertEqual(response.status_code, 401)
-        response = client.post('/admin/admin_panel/subscriptiongrant/add/', {
-            'telegram_username': '@new_student', 'group': group.pk, 'is_active': 'on', '_save': 'Save',
-        })
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(SubscriptionGrant.objects.filter(telegram_username='new_student', user__isnull=True).exists())
 
     def test_reset_token_is_single_use(self):
         from admin_panel.services.subscription_service import recovery_link

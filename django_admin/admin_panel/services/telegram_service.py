@@ -357,9 +357,17 @@ def notify_month_advanced(user: User, new_month: int):
 # --- Bot Command Handlers & Polling ---
 
 def handle_start_command(chat_id: str, code: str, username: Optional[str] = None) -> str:
-    from admin_panel.services.subscription_service import handle_subscription_start
+    chat_id = str(chat_id)
     if not code:
-        return handle_subscription_start(chat_id, username)
+        user = User.objects.filter(telegram_chat_id=chat_id).first()
+        if user:
+            user.telegram_username = username.lower() if username else user.telegram_username
+            user.save(update_fields=['telegram_username', 'updated_at'])
+            return TELEGRAM_CONNECTED
+        return (
+            "👋 Привет! Для привязки Telegram перейдите в профиль на платформе "
+            f"({get_frontend_url()}/profile) и нажмите «Подключить Telegram»."
+        )
     try:
         with transaction.atomic():
             return _bind_start_code(chat_id, code, username)
@@ -370,14 +378,9 @@ def handle_start_command(chat_id: str, code: str, username: Optional[str] = None
 
 
 def _bind_start_code(chat_id, code, username):
-    from admin_panel.models import SubscriptionGrant
     user = User.objects.select_for_update().filter(telegram_auth_code=code).first()
     if not user:
         return "❌ Неверный или устаревший код привязки. Сгенерируйте новую ссылку в профиле."
-    if SubscriptionGrant.objects.filter(user=user).exclude(telegram_user_id=chat_id).exists() or (
-        SubscriptionGrant.objects.filter(telegram_user_id=chat_id, user__isnull=False).exclude(user=user).exists()
-    ):
-        return "Доступ закреплён за другим Telegram-аккаунтом. Обратитесь к владельцу."
     if User.objects.filter(telegram_chat_id=chat_id).exclude(pk=user.pk).exists():
         return "Этот Telegram уже привязан к другому аккаунту."
 
@@ -405,10 +408,6 @@ def _student_status(user: User) -> str:
 
 
 def _student_tasks(user: User) -> str:
-    from admin_panel.permissions import HasCourseAccess
-
-    if not HasCourseAccess.user_has_access(user):
-        return HasCourseAccess.message
     group = normalize_group_number(user.group_number)
     tasks = with_normalized_group(Task.objects.filter(month=user.current_month))
     tasks = tasks.filter(Q(group_number__isnull=True) | Q(normalized_group__in={'', 'all', group}))

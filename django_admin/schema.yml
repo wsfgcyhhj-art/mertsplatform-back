@@ -71,40 +71,6 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
-  /api/v1/admin/subscriptions/grant:
-    post:
-      operationId: v1_admin_subscriptions_grant_create
-      tags:
-      - v1
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/GrantRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/GrantRequest'
-          multipart/form-data:
-            schema:
-              $ref: '#/components/schemas/GrantRequest'
-        required: true
-      security:
-      - jwtAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: {}
-          description: ''
-        '403':
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: {}
-          description: ''
   /api/v1/admin/users:
     get:
       operationId: admin_users_list
@@ -1092,23 +1058,6 @@ components:
       - streakCount
       - tasksAcceptedCount
       - totalScore
-    GrantRequest:
-      type: object
-      properties:
-        telegram_username:
-          type: string
-          minLength: 1
-          maxLength: 33
-        group_id:
-          type: string
-          minLength: 1
-        expires_at:
-          type: string
-          format: date-time
-          nullable: true
-      required:
-      - group_id
-      - telegram_username
     Lesson:
       type: object
       properties:

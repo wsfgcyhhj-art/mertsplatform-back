@@ -1,8 +1,6 @@
 from django.db import transaction
 from django.utils.html import format_html_join, escape
 from admin_panel.permissions import is_admin_owner
-from admin_panel.models import SubscriptionGrant
-from admin_panel.services.subscription_service import grant_subscription, normalize_username
 import base64
 import os
 import re
@@ -875,58 +873,6 @@ class MediaAssetAdmin(ModelAdmin):
     def api_endpoint(self, obj):
         path = f"/api/v1/media/{obj.id}"
         return format_html('<code style="font-size:12px;color:#fbbf24;">{}</code>', path)
-
-
-class SubscriptionGrantForm(forms.ModelForm):
-    class Meta:
-        model = SubscriptionGrant
-        fields = ('telegram_username', 'group', 'expires_at', 'is_active')
-        labels = {
-            'telegram_username': 'Telegram @username',
-            'group': 'Учебная группа',
-            'expires_at': 'Доступ до',
-            'is_active': 'Доступ активен',
-        }
-
-    def clean_telegram_username(self):
-        return normalize_username(self.cleaned_data['telegram_username'])
-
-
-@admin.register(SubscriptionGrant)
-class SubscriptionGrantAdmin(ModelAdmin):
-    form = SubscriptionGrantForm
-    list_filter_submit = True
-    list_display = ('telegram_username', 'group', 'expires_at', 'is_active', 'user')
-    list_filter = (('group', RelatedDropdownFilter), 'is_active')
-    search_fields = ('telegram_username', 'user__login')
-    fieldsets = (('Доступ к платформе', {
-        'fields': ('telegram_username', 'group', 'expires_at', 'is_active'),
-        'description': 'Выдать доступ студенту по Telegram @username.',
-    }),)
-
-    def has_module_permission(self, request):
-        return is_admin_owner(request.user)
-
-    def has_view_permission(self, request, obj=None):
-        return is_admin_owner(request.user)
-
-    def has_add_permission(self, request):
-        return is_admin_owner(request.user)
-
-    def has_change_permission(self, request, obj=None):
-        return is_admin_owner(request.user)
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-    def save_model(self, request, obj, form, change):
-        grant = grant_subscription(obj.telegram_username, obj.group, obj.expires_at, request.user.pk, active=obj.is_active)
-        obj.pk = grant.pk
-        obj.user = grant.user
-        obj.telegram_user_id = grant.telegram_user_id
-        obj.granted_by = grant.granted_by
-        obj.is_active = grant.is_active
-        obj._state.adding = False
 
 
 # Django's built-in auth admin must not allow other superusers to take over the owner.

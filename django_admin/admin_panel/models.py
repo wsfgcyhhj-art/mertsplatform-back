@@ -61,7 +61,7 @@ class User(AtomicModel):
     login = models.CharField('Логин', max_length=255, unique=True)
     password_hash = models.CharField('Хэш пароля', max_length=255)
     role = models.CharField('Роль', max_length=32, choices=RoleChoices.choices, default=RoleChoices.STUDENT)
-    has_subscription = models.BooleanField(default=False, db_default=False)
+    has_subscription = models.BooleanField(default=True, db_default=True)
     subscription_expires_at = models.DateTimeField(null=True, blank=True)
     must_change_password = models.BooleanField(default=False, db_default=False)
     password_uses_sha256 = models.BooleanField(default=False, db_default=False)

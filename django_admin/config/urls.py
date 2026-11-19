@@ -1,6 +1,6 @@
 from admin_panel.views.shop_views import MyShopOrdersView, ShopBalanceView, ShopOrdersView, ShopProductsView
 from admin_panel.views.auth_views import CsrfTokenView
-from admin_panel.views.subscription_views import SubscriptionGrantView, PasswordResetView
+from admin_panel.views.subscription_views import PasswordResetView
 from django.contrib import admin
 from django.http import HttpResponseRedirect
 from django.templatetags.static import static
@@ -51,7 +51,6 @@ def favicon_redirect(request):
 
 urlpatterns = [
     path('api/v1/auth/csrf', CsrfTokenView.as_view()),
-    path('api/v1/admin/subscriptions/grant', SubscriptionGrantView.as_view()),
     path('api/v1/auth/reset-password', PasswordResetView.as_view()),
     # Static & Admin
     path('favicon.ico', favicon_redirect, name='favicon'),

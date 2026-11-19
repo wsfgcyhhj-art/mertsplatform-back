@@ -140,7 +140,7 @@ class RegisterView(APIView):
         user = User(
             login=login,
             role=RoleChoices.STUDENT,
-            has_subscription=False,
+            has_subscription=True,
             name=(data.get('name') or '').strip() or None,
             telegram=(data.get('telegram') or '').strip() or None,
             group_number=group_num,

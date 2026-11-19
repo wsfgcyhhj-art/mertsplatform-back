@@ -1,5 +1,4 @@
 from admin_panel.serializers import EmptyRequestSerializer
-from admin_panel.permissions import HasCourseAccess
 from django.db.models import Sum, Count, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -21,7 +20,7 @@ from admin_panel.services.achievement_service import ensure_default_achievements
 
 class AchievementsCatalogView(APIView):
     serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="achievements_catalog", summary="Каталог всех достижений платформы с отметкой о получении", responses={200: AchievementSerializer(many=True)})
     def get(self, request):
@@ -44,7 +43,7 @@ class AchievementsCatalogView(APIView):
 
 class LeaderboardView(APIView):
     serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(
         operation_id="leaderboard_list",

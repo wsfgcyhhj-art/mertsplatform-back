@@ -160,11 +160,6 @@ class SecurityIntegrationTests(TransactionTestCase):
         other.refresh_from_db()
         self.assertNotEqual(other.name, 'changed')
 
-    def test_subscription_revoked_even_if_user_flag_remains(self):
-        from admin_panel.models import SubscriptionGrant
-        SubscriptionGrant.objects.filter(user=self.user).update(is_active=False)
-        self.assertEqual(self.client.get('/api/v1/tasks').status_code, 403)
-
     def test_latest_accepted_score_only(self):
         task = Task.objects.create(title='Task', topic='Python', month=1)
         Submission.objects.create(user=self.user, task=task, version=1, status='ACCEPTED', score=5)
@@ -275,18 +270,19 @@ class SecurityIntegrationTests(TransactionTestCase):
         reg = client.post('/api/v1/auth/register', data=reg_payload, content_type='application/json', **headers)
         self.assertEqual(reg.status_code, 201)
         self.assertEqual(reg['Access-Control-Allow-Origin'], 'https://mertsplatform.vercel.app')
-        self.assertFalse(reg.json()['user']['has_subscription'])
+        self.assertTrue(reg.json()['user']['has_subscription'])
 
         dup = client.post('/api/v1/auth/register', data=reg_payload, content_type='application/json', **headers)
         self.assertEqual(dup.status_code, 409)
 
-        # Unsubscribed student can register/login, but curriculum remains 403 Forbidden.
-        lessons = client.get(
-            '/api/v1/lessons',
-            HTTP_AUTHORIZATION='Bearer ' + reg.json()['accessToken'],
-            **headers,
-        )
-        self.assertEqual(lessons.status_code, 403)
+        # Any registered student has immediate 200 OK access to lessons, tasks, and achievements.
+        for api_path in ('/api/v1/lessons', '/api/v1/tasks', '/api/v1/achievements'):
+            res = client.get(
+                api_path,
+                HTTP_AUTHORIZATION='Bearer ' + reg.json()['accessToken'],
+                **headers,
+            )
+            self.assertEqual(res.status_code, 200, api_path)
 
         bad_login = client.post('/api/v1/auth/login', data='{"login":"student","password":"wrong"}', content_type='application/json', **headers)
         self.assertEqual(bad_login.status_code, 401)
@@ -387,29 +383,6 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(TelegramOutbox.objects.count(), 6)
         self.assertTrue(all('encrypted' in p for p in TelegramOutbox.objects.values_list('payload', flat=True)))
         self.assertNotIn(lesson.title, str(list(TelegramOutbox.objects.values_list('payload', flat=True))))
-
-    def test_bound_telegram_survives_username_removal_and_reuse(self):
-        from admin_panel.services.subscription_service import handle_subscription_start, grant_subscription
-        from admin_panel.models import SubscriptionGrant, TelegramIdentity
-        group = StudyGroup.objects.get(name='js-01')
-        grant_subscription('new_student', group, None, 'owner')
-        handle_subscription_start('444', 'new_student')
-        handle_subscription_start('555', 'new_student')
-        self.assertIn('Telegram успешно подключён', handle_subscription_start('444', None))
-        self.assertEqual(SubscriptionGrant.objects.get(telegram_username='new_student').telegram_user_id, '444')
-        self.assertTrue(TelegramIdentity.objects.filter(pk='444').exists())
-
-    def test_expired_subscription_and_archived_group_denied(self):
-        from admin_panel.models import SubscriptionGrant
-        grant = SubscriptionGrant.objects.get(user=self.user)
-        grant.expires_at = timezone.now() - timedelta(seconds=1)
-        grant.save()
-        self.assertEqual(self.client.get('/api/v1/tasks').status_code, 403)
-        grant.expires_at = None
-        grant.save()
-        grant.group.is_active = False
-        grant.group.save()
-        self.assertEqual(self.client.get('/api/v1/tasks').status_code, 403)
 
     def test_curriculum_lists_hide_other_groups_and_future_months(self):
         for endpoint, model, fields in (

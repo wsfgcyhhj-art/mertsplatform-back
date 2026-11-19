@@ -75,6 +75,7 @@ class AdminUsersListView(APIView):
         user = User(
             login=login,
             role=role if role in RoleChoices.values else RoleChoices.STUDENT,
+            has_subscription=True,
             name=request.data.get('name') or None,
             telegram=request.data.get('telegram') or None,
             group_number=request.data.get('groupNumber') or 'ALL',

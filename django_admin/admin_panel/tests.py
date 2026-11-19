@@ -73,9 +73,9 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(reg_resp.status_code, 201)
         reg_data = reg_resp.json()
         self.assertIn('accessToken', reg_data)
-        self.assertFalse(reg_data['user']['has_subscription'])
+        self.assertTrue(reg_data['user']['has_subscription'])
         user = User.objects.get(pk=reg_data['user']['id'])
-        self.assertFalse(user.has_subscription)
+        self.assertTrue(user.has_subscription)
         self.assertEqual(UserAchievement.objects.filter(user=user, achievement__code='WELCOME').count(), 1)
 
         dup_resp = self.client.post(
@@ -84,10 +84,6 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             content_type='application/json',
         )
         self.assertEqual(dup_resp.status_code, 409)
-
-        subscribe(user)
-        user.has_subscription = True
-        user.save()
 
         # 2. Login with valid credentials
         login_payload = {
@@ -103,6 +99,10 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         login_data = login_resp.json()
         token = login_data['accessToken']
         self.assertTrue(bool(token))
+
+        auth_hdr = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        for path in ('/api/v1/lessons', '/api/v1/tasks', '/api/v1/achievements'):
+            self.assertEqual(self.client.get(path, **auth_hdr).status_code, 200, path)
 
         # 3. Refresh token
         refresh_token = login_data['refreshToken']

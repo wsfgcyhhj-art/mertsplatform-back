@@ -8,7 +8,6 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from drf_spectacular.utils import extend_schema
-from admin_panel.permissions import HasCourseAccess
 from admin_panel.models import User, UserAchievement
 from admin_panel.serializers import (
     UserProfileSerializer,
@@ -183,7 +182,7 @@ class BannerUploadView(APIView):
 
 class EasterEggView(APIView):
     serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_easter_egg", summary="Активация пасхалки и получение ачивки", responses={200: dict})
     def post(self, request):
@@ -196,7 +195,7 @@ class EasterEggView(APIView):
 
 class UserAchievementsListView(APIView):
     serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="users_me_achievements", summary="Список достижений текущего пользователя", responses={200: UserAchievementSerializer(many=True)})
     def get(self, request):

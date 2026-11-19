@@ -4,7 +4,6 @@ from django.core.validators import URLValidator
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 from django.core.exceptions import ValidationError
 from admin_panel.serializers import EmptyRequestSerializer
-from admin_panel.permissions import HasCourseAccess
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -35,7 +34,7 @@ def task_is_visible(task, user):
 
 class LessonsListView(APIView):
     serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(
         operation_id="lessons_list",
@@ -86,7 +85,7 @@ class LessonsListView(APIView):
 
 class TasksListView(APIView):
     serializer_class = TaskSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(
         operation_id="tasks_list",
@@ -138,7 +137,7 @@ class TasksListView(APIView):
 
 class TaskDetailView(APIView):
     serializer_class = TaskSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="task_detail", summary="Детальная информация о задании", responses={200: TaskSerializer})
     def get(self, request, id: str):
@@ -193,7 +192,7 @@ class TaskDetailView(APIView):
 
 class SubmissionsView(APIView):
     serializer_class = SubmissionSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(
         operation_id="submissions_list",
@@ -278,7 +277,7 @@ class SubmissionsView(APIView):
 
 class SubmissionDetailView(APIView):
     serializer_class = SubmissionSerializer
-    permission_classes = (IsAuthenticated, HasCourseAccess)
+    permission_classes = (IsAuthenticated,)
 
     @extend_schema(operation_id="submission_detail", summary="Детальная информация о сдаче ДЗ", responses={200: SubmissionSerializer})
     def get(self, request, id: str):

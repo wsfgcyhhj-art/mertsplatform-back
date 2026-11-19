@@ -4,7 +4,7 @@ from admin_panel.models import User, StudyGroup, SubscriptionGrant, TelegramIden
 
 
 class Command(BaseCommand):
-    help = "Apply additive subscription schema to unmanaged tables; existing users remain unsubscribed."
+    help = "Ensure study group and compatibility user columns exist with open platform access."
 
     def handle(self, *args, **options):
         # Unmanaged models are not created by migrate.
@@ -33,6 +33,10 @@ class Command(BaseCommand):
             for model in (SubscriptionGrant, TelegramIdentity, PasswordResetTicket):
                 if model._meta.db_table not in tables:
                     editor.create_model(model)
+        if connection.vendor == 'postgresql':
+            with connection.cursor() as cursor:
+                cursor.execute('ALTER TABLE "User" ALTER COLUMN "has_subscription" SET DEFAULT true')
+        User.objects.filter(has_subscription=False).update(has_subscription=True)
         names = set(User.objects.exclude(group_number__isnull=True).exclude(group_number='').values_list('group_number', flat=True))
         from admin_panel.services.group_service import parse_month_from_group_name
         for name in names:
@@ -40,4 +44,4 @@ class Command(BaseCommand):
                 continue
             group, _ = StudyGroup.objects.get_or_create(name=name, defaults={'month': parse_month_from_group_name(name), 'is_active': name == 'js-01'})
             User.objects.filter(group_number=name, study_group__isnull=True).update(study_group=group)
-        self.stdout.write(self.style.SUCCESS('Subscription schema installed. Existing access remains closed.'))
+        self.stdout.write(self.style.SUCCESS('Open access schema ensured; all users have active access.'))

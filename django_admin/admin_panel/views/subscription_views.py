@@ -1,42 +1,16 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from admin_panel.serializers import validate_new_password
+from admin_panel.serializers import validate_new_password, EmptyRequestSerializer
 from admin_panel.throttles import AuthThrottle
-from admin_panel.serializers import EmptyRequestSerializer
 import hashlib
 from django.db import transaction
 from django.utils import timezone
-from django.core.exceptions import ValidationError
 from rest_framework import serializers
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema
-from admin_panel.models import StudyGroup, PasswordResetTicket
-from admin_panel.permissions import IsOwner
-from admin_panel.services.subscription_service import grant_subscription
-
-
-class GrantSerializer(serializers.Serializer):
-    telegram_username = serializers.CharField(max_length=33)
-    group_id = serializers.PrimaryKeyRelatedField(queryset=StudyGroup.objects.filter(is_active=True))
-    expires_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
-
-
-class SubscriptionGrantView(APIView):
-    serializer_class = EmptyRequestSerializer
-    permission_classes = (IsAuthenticated, IsOwner)
-
-    @extend_schema(request=GrantSerializer, responses={200: dict, 403: dict})
-    def post(self, request):
-        serializer = GrantSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        try:
-            grant = grant_subscription(data['telegram_username'], data['group_id'], data['expires_at'], request.user.pk)
-        except ValidationError as exc:
-            return Response({'message': exc.messages}, status=400)
-        return Response({'id': grant.pk, 'activated': bool(grant.user_id)})
+from admin_panel.models import PasswordResetTicket
 
 
 class ResetSerializer(serializers.Serializer):

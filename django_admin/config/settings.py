@@ -293,11 +293,6 @@ UNFOLD = {
                 "collapsible": False,
                 "items": [
                     {
-                        "title": "Доступ к платформе",
-                        "icon": "key",
-                        "link": reverse_lazy("admin:admin_panel_subscriptiongrant_changelist"),
-                    },
-                    {
                         "title": "Пользователи",
                         "icon": "group",
                         "link": reverse_lazy("admin:admin_panel_user_changelist"),
