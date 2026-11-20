@@ -1,7 +1,7 @@
 # Ubuntu VPS: 166.0.28.165
 
-Стек: PostgreSQL 17, Django Admin/REST API, Node Express с Telegram polling,
-отдельный Django outbox worker. Фронтенд размещается отдельно. После переноса
+Стек: PostgreSQL 17, Django Admin/REST API, Django Telegram polling (`telegram_bot`)
+и Django outbox worker (`telegram_worker`). Фронтенд размещается отдельно. После переноса
 данных подключение к Neon не используется. Требуются Docker Engine с Compose v2+,
 Nginx и Bash/flock (стандартный пакет util-linux в Ubuntu).
 
@@ -42,7 +42,7 @@ Django сохраняет явно заданный `sslmode` из URL. Без �
 
    Приложения пока не запускайте: unmanaged-таблицы должны приехать из Neon.
    Если локальные приложения уже запущены:
-   `docker compose stop django_web telegram_worker node_api`.
+   `docker compose stop django_web telegram_worker telegram_bot`.
 
 2. Включите режим обслуживания на старом сервере: остановите все Django/Node
    API, ботов, фоновые задачи и другие процессы, записывающие в Neon. Оставьте
@@ -96,7 +96,7 @@ Django сохраняет явно заданный `sslmode` из URL. Без �
 
 ## Запуск и Telegram
 
-Перед включением Node polling остановите прежние polling-процессы и удалите
+Перед включением `telegram_bot` polling остановите прежние polling-процессы и удалите
 старый webhook методом Telegram `deleteWebhook` с `drop_pending_updates=false`.
 Можно вызвать метод из уже собранного образа, используя токен из `.env`:
 
@@ -104,14 +104,14 @@ Django сохраняет явно заданный `sslmode` из URL. Без �
 docker compose run --rm --no-deps --entrypoint python django_web -c 'import os; import httpx; r = httpx.post("https://api.telegram.org/bot" + os.environ["TELEGRAM_BOT_TOKEN"] + "/deleteWebhook", json={"drop_pending_updates": False}); assert r.status_code == 200 and r.json().get("ok"), "deleteWebhook failed"; print("Webhook removed; pending updates retained")'
 docker compose up -d --build
 docker compose ps
-docker compose logs --tail=100 django_web telegram_worker node_api
+docker compose logs --tail=100 django_web telegram_worker telegram_bot
 ```
 
 Django ждёт готовности БД, затем выполняет `install_subscriptions`,
 `install_security`, `install_shop --missing-only`, `migrate`, `collectstatic`
 и запускает Gunicorn с двумя workers. Цены и описания существующих товаров
-не перезаписываются. Node и worker ждут также healthcheck Django, чтобы
-схема была готова. Не масштабируйте Node polling на несколько экземпляров.
+не перезаписываются. `telegram_bot` и `telegram_worker` ждут healthcheck Django, чтобы
+схема была готова. Не масштабируйте `telegram_bot` на несколько экземпляров.
 `deliver_telegram` доставляет outbox постоянно; цикл проверки — 5 секунд,
 неудачные отправки повторяются с задержкой. При обычном запросе Django
 также пробует доставить уведомление сразу после commit.

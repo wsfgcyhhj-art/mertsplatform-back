@@ -1,5 +1,7 @@
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers
+from admin_panel.api_utils import qparam, resolve_ordering, paginate_list_or_qs
 from admin_panel.serializers import validate_new_password
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.permissions import is_owner
@@ -26,7 +28,20 @@ class AdminUsersListView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="admin_users_list", summary="Список всех пользователей для панели ментора", responses={200: UserProfileSerializer(many=True)})
+    @extend_schema(
+        operation_id="admin_users_list",
+        summary="Список всех пользователей для панели ментора",
+        responses={200: UserProfileSerializer(many=True)},
+        parameters=[
+            OpenApiParameter(name="role", type=str, description="Фильтр по роли (STUDENT, ADMIN)"),
+            OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе"),
+            OpenApiParameter(name="currentMonth", type=int, description="Фильтр по текущему месяцу"),
+            OpenApiParameter(name="search", type=str, description="Поиск по логину, имени или Telegram"),
+            OpenApiParameter(name="ordering", type=str, description="Сортировка (createdAt, login, name, currentMonth, streakCount)"),
+            OpenApiParameter(name="page", type=int, description="Номер страницы"),
+            OpenApiParameter(name="limit", type=int, description="Размер страницы"),
+        ],
+    )
     def get(self, request):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -34,17 +49,44 @@ class AdminUsersListView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        qs = User.objects.all().order_by('-created_at')
-        role = request.query_params.get('role')
+        qs = User.objects.all()
+        role = qparam(request, 'role')
         if role:
             qs = qs.filter(role=role.upper())
 
-        search = request.query_params.get('search')
-        if search:
-            qs = qs.filter(login__icontains=search) | qs.filter(name__icontains=search)
+        group = (qparam(request, 'groupNumber', 'group_number') or '').strip()
+        if group:
+            qs = qs.filter(group_number__iexact=group)
 
-        serializer = UserProfileSerializer(qs, many=True, context={'request': request})
-        return Response({"users": serializer.data})
+        raw_month = qparam(request, 'currentMonth', 'current_month')
+        if raw_month:
+            try:
+                qs = qs.filter(current_month=int(raw_month))
+            except ValueError:
+                pass
+
+        search = (qparam(request, 'search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(login__icontains=search) | Q(name__icontains=search) | Q(telegram_username__icontains=search)
+            )
+
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'createdAt': 'created_at', 'login': 'login', 'name': 'name', 'currentMonth': 'current_month', 'streakCount': 'streak_count'},
+            ['-created_at'],
+        )
+        qs = qs.order_by(*ordering)
+
+        page_meta, items = paginate_list_or_qs(request, qs)
+        if isinstance(page_meta, dict) and 'error' in page_meta:
+            return Response({'message': page_meta['error']}, status=400)
+
+        serializer = UserProfileSerializer(items, many=True, context={'request': request})
+        payload = {"users": serializer.data}
+        if page_meta is not None:
+            payload.update(page_meta)
+        return Response(payload)
 
     @extend_schema(summary="Создать пользователя администратором")
     def post(self, request):

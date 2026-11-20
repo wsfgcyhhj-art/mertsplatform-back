@@ -16,7 +16,7 @@ with open(os.environ['CALL_LOG'], 'a') as log:
     log.write(json.dumps(args) + '\n')
 scenario = os.environ['SCENARIO']
 if 'ps' in args:
-    print('db\nnode_api' if scenario == 'running' else 'db')
+    print('db\ntelegram_bot' if scenario == 'running' else 'db')
 elif 'exec' in args or 'run' in args:
     command = ' '.join(args)
     if 'server_version_num' in command:

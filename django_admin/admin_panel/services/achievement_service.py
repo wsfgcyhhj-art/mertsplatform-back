@@ -152,8 +152,19 @@ def ensure_default_achievements():
     """
     Ensures standard gamification achievements exist in database.
     """
+    from admin_panel.services.settings_service import get_setting
+    streak_days = int(get_setting('streak_threshold_days', 7) or 7)
+    streak_points = int(get_setting('streak_reward_points', 35) or 35)
+    easter_points = int(get_setting('easter_egg_reward_points', 25) or 25)
+
     for data in DEFAULT_ACHIEVEMENTS_DATA:
         code = data['code']
+        threshold = streak_days if code == 'STREAK_MASTER' else data['threshold']
+        points = data['points']
+        if code == 'STREAK_MASTER':
+            points = streak_points
+        elif code == 'EASTER_EGG':
+            points = easter_points
         Achievement.objects.get_or_create(
             code=code,
             defaults={
@@ -162,8 +173,8 @@ def ensure_default_achievements():
                 'icon_url': data['icon_url'],
                 'category': data['category'],
                 'trigger_type': data['trigger_type'],
-                'threshold': data['threshold'],
-                'points': data['points'],
+                'threshold': threshold,
+                'points': points,
                 'criteria': data['criteria'],
                 'is_active': True,
             }
@@ -230,10 +241,18 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
 
     awarded: List[Dict[str, Any]] = []
 
+    from admin_panel.services.settings_service import get_setting
+    easter_override = get_setting('easter_egg_reward_points', 25)
+    streak_days_override = get_setting('streak_threshold_days', 7)
+    streak_points_override = get_setting('streak_reward_points', 35)
+
     # 1. Instant Event Triggers
     if trigger_filter in (TriggerTypeChoices.ON_REGISTER, TriggerTypeChoices.EASTER_EGG):
         for ach in candidates:
             if ach.trigger_type == trigger_filter:
+                if ach.code == 'EASTER_EGG' and int(easter_override) != 25:
+                    ach.points = int(easter_override)
+                    ach.save(update_fields=['points'])
                 res = award_achievement(user_id, ach.code)
                 if res:
                     awarded.append(res)
@@ -292,6 +311,8 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
 
     for ach in candidates:
         threshold = ach.threshold if ach.threshold is not None else 1
+        if ach.code == 'STREAK_MASTER' and int(streak_days_override) != 7:
+            threshold = int(streak_days_override)
         should_award = False
 
         if ach.trigger_type == TriggerTypeChoices.TOTAL_SCORE:
@@ -310,6 +331,9 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
             should_award = current_streak >= threshold
 
         if should_award:
+            if ach.code == 'STREAK_MASTER' and int(streak_points_override) != 35 and ach.points != int(streak_points_override):
+                ach.points = int(streak_points_override)
+                ach.save(update_fields=['points'])
             res = award_achievement(user_id, ach.code)
             if res:
                 awarded.append(res)

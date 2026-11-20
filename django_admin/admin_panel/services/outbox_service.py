@@ -34,7 +34,7 @@ def enqueue(chat_id, text, reply_markup=None, dedupe_key=None, *, voice=None):
 
 
 def deliver(pk):
-    from .telegram_service import send_telegram_message
+    from .telegram_service import get_last_telegram_error, send_telegram_message
     with transaction.atomic():
         item = TelegramOutbox.objects.select_for_update().get(pk=pk)
         now = timezone.now()
@@ -48,9 +48,10 @@ def deliver(pk):
     try:
         payload = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
         ok = send_telegram_message(item.chat_id, **payload)
-        error = '' if ok else 'Telegram rejected message or network unavailable'
+        error = '' if ok else (get_last_telegram_error() or 'Telegram rejected message or network unavailable')
     except Exception as exc:
-        ok, error = False, type(exc).__name__
+        ok, error = False, f'{type(exc).__name__}: {str(exc)[:180]}'
+    error = (error or '')[:255]
     with transaction.atomic():
         item = TelegramOutbox.objects.select_for_update().get(pk=pk)
         item.status = 'sent' if ok else ('failed' if item.attempts >= 10 else 'pending')
@@ -65,3 +66,14 @@ def deliver(pk):
 def drain(limit=100):
     ids = list(TelegramOutbox.objects.filter(status__in=['pending', 'sending'], available_at__lte=timezone.now()).order_by('created_at').values_list('pk', flat=True)[:limit])
     return sum(deliver(pk) for pk in ids)
+
+
+def retry_outbox_queryset(queryset, drain_now: bool = True) -> dict:
+    updated = queryset.exclude(status='sent').update(
+        status='pending',
+        attempts=0,
+        available_at=timezone.now(),
+        last_error='',
+    )
+    delivered = drain(limit=max(100, updated)) if (drain_now and updated) else 0
+    return {'queued': updated, 'sent': delivered}

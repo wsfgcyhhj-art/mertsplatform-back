@@ -1,4 +1,5 @@
-from django.db import transaction
+from django.db import models, transaction
+from django.shortcuts import render
 from django.utils.html import format_html_join, escape
 from admin_panel.permissions import is_admin_owner
 import base64
@@ -10,7 +11,7 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils import timezone
 from unfold.admin import ModelAdmin, TabularInline
-from unfold.contrib.filters.admin import DropdownFilter, RelatedDropdownFilter
+from unfold.contrib.filters.admin import DropdownFilter
 from .achievement_icons import (
     PRESET_ACHIEVEMENT_ICONS,
     find_preset_icon,
@@ -31,16 +32,24 @@ from .models import (
     UserAchievement,
     MonthlyScoreArchive,
     MediaAsset,
+    PlatformSetting,
+    RoleChoices,
+    SubmissionStatusChoices,
 )
 from admin_panel.services.telegram_service import (
+    async_broadcast_message,
     notify_lesson_published,
     notify_task_published,
     send_test_telegram_message,
 )
+from admin_panel.services.achievement_service import evaluate_user_achievements
+from admin_panel.services.settings_service import (
+    ensure_default_settings,
+    invalidate_settings_cache,
+)
 from admin_panel.services.group_service import (
     parse_month_from_group_name,
     get_study_group_choices,
-    ensure_study_groups_synced,
 )
 
 
@@ -88,6 +97,28 @@ class SubmissionAdmin(ModelAdmin):
     search_fields = ('user__login', 'user__name', 'task__title', 'solution_link')
     list_editable = ('status', 'score')
     ordering = ('-created_at',)
+    actions = ['mark_accepted', 'mark_revision']
+
+    @admin.action(description='✅ Принять выбранные ДЗ (ACCEPTED)')
+    def mark_accepted(self, request, queryset):
+        updated = 0
+        for sub in queryset:
+            sub.status = SubmissionStatusChoices.ACCEPTED
+            sub.reviewer_id = getattr(sub.reviewer, 'pk', None)
+            sub.reviewed_at = timezone.now()
+            sub.save()
+            updated += 1
+        self.message_user(request, f'Принято работ: {updated}.', level=messages.SUCCESS)
+
+    @admin.action(description='🔄 Отправить на доработку (REVISION)')
+    def mark_revision(self, request, queryset):
+        updated = 0
+        for sub in queryset:
+            sub.status = SubmissionStatusChoices.REVISION
+            sub.reviewed_at = timezone.now()
+            sub.save()
+            updated += 1
+        self.message_user(request, f'Отправлено на доработку: {updated}.', level=messages.WARNING)
 
     @admin.display(description='Текущий статус', ordering='status')
     def status_badge(self, obj):
@@ -134,7 +165,7 @@ class StudyGroupAdmin(ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return is_admin_owner(request.user)
 
-    actions = ['archive_groups', 'activate_groups']
+    actions = ['archive_groups', 'activate_groups', 'send_group_telegram_message']
     list_filter_submit = True
     group_lookup = 'name'
     list_filter = ('is_active', 'month', StudyGroupDropdownFilter)
@@ -150,9 +181,42 @@ class StudyGroupAdmin(ModelAdmin):
     def activate_groups(self, request, queryset):
         queryset.update(is_active=True)
 
+    @admin.action(description='📢 Отправить сообщение в Telegram студентам группы')
+    def send_group_telegram_message(self, request, queryset):
+        group_names = list(queryset.values_list('name', flat=True))
+        recipients = list(
+            User.objects.filter(
+                role=RoleChoices.STUDENT,
+                group_number__in=group_names,
+                telegram_chat_id__isnull=False,
+            )
+            .exclude(telegram_chat_id='')
+            .values_list('telegram_chat_id', flat=True)
+        )
+        if request.POST.get('apply') == '1':
+            text = (request.POST.get('message_text') or '').strip()
+            if not text:
+                self.message_user(request, 'Введите текст сообщения.', level=messages.ERROR)
+                return None
+            counts = async_broadcast_message(recipients, text)
+            self.message_user(
+                request,
+                f'Рассылка по группам ({", ".join(group_names)}): {telegram_delivery_report([counts])}',
+                level=messages.SUCCESS,
+            )
+            return None
+        return render(request, 'admin/admin_panel/telegram_broadcast.html', {
+            'title': 'Рассылка в Telegram по учебным группам',
+            'queryset': queryset,
+            'selected_count': queryset.count(),
+            'recipients_count': len(recipients),
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'send_group_telegram_message',
+        })
+
     list_fullwidth = True
     list_display = ('name', 'month', 'is_active', 'students_count_badge', 'lessons_count_badge', 'tasks_count_badge')
-    list_editable = ('month',)
+    list_editable = ('month', 'is_active')
     search_fields = ('name',)
     ordering = ('month', 'name')
     inlines = [StudyGroupStudentInline]
@@ -271,7 +335,7 @@ class LessonAdmin(GroupSavingAdmin):
     list_fullwidth = True
     list_display = ('title', 'group_badge', 'month', 'order', 'youtube_id_click')
     list_filter = (StudyGroupDropdownFilter, 'month')
-    list_editable = ('order',)
+    list_editable = ('month', 'order')
     search_fields = ('title', 'group_number', 'youtube_id')
     ordering = ('month', 'group_number', 'order')
     readonly_fields = ('youtube_id', 'created_at', 'updated_at')
@@ -341,8 +405,8 @@ class TaskAdmin(GroupSavingAdmin):
     group_lookup = 'group_number'
     form = TaskAdminForm
     list_fullwidth = True
-    list_display = ('title', 'topic', 'group_badge', 'month', 'max_score', 'is_bonus')
-    list_filter = (StudyGroupDropdownFilter, 'month', 'is_bonus')
+    list_display = ('title', 'topic', 'group_badge', 'month', 'order', 'max_score', 'is_bonus')
+    list_filter = (StudyGroupDropdownFilter, 'month', 'is_bonus', 'has_score')
     list_editable = ('is_bonus',)
     search_fields = ('title', 'topic', 'description', 'group_number')
     ordering = ('month', 'order')
@@ -451,12 +515,23 @@ class UserAdmin(GroupSavingAdmin):
     )
     list_filter = ('role', 'mentor', 'current_month', StudyGroupDropdownFilter)
     search_fields = ('login', 'name', 'telegram', 'telegram_username', 'telegram_chat_id', 'group_number')
-    list_editable = ('name',)
+    list_editable = ('name', 'group_number', 'current_month')
     raw_id_fields = ('mentor',)
     ordering = ('-created_at',)
     readonly_fields = ('id', 'created_at', 'updated_at')
     inlines = [ScoreAdjustmentInline, UserAchievementInline]
-    actions = ['test_telegram_connection']
+    actions = [
+        'test_telegram_connection',
+        'recalculate_student_scores',
+        'reevaluate_achievements',
+        'send_custom_telegram_message',
+    ]
+
+    def save_model(self, request, obj, form, change):
+        if change and 'group_number' in getattr(form, 'changed_data', ()):
+            grp = (obj.group_number or '').strip()
+            obj.study_group = StudyGroup.objects.filter(name=grp).first() if grp else None
+        super().save_model(request, obj, form, change)
 
     @admin.display(description='Telegram')
     def telegram_status_badge(self, obj):
@@ -475,6 +550,68 @@ class UserAdmin(GroupSavingAdmin):
                 self.message_user(request, f"Успешно для @{user.login}: {report}", level=messages.SUCCESS)
             else:
                 self.message_user(request, f"Внимание для @{user.login}: {report}", level=messages.WARNING)
+
+    @admin.action(description="🧮 Пересчитать баллы и обновить архив текущего месяца")
+    def recalculate_student_scores(self, request, queryset):
+        from django.db.models import Sum
+        from admin_panel.services.score_service import latest_accepted
+
+        updated = 0
+        for student in queryset:
+            month = max(1, int(student.current_month or 1))
+            accepted = latest_accepted(Submission.objects.filter(user_id=student.pk, task__month=month))
+            sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
+            adj_score = ScoreAdjustment.objects.filter(user_id=student.pk, month=month).aggregate(s=Sum('amount'))['s'] or 0
+            month_score = sub_score + adj_score
+            tasks_cnt = accepted.count()
+            MonthlyScoreArchive.objects.update_or_create(
+                user=student,
+                month=month,
+                defaults={
+                    'final_score': month_score,
+                    'tasks_accepted_count': tasks_cnt,
+                    'final_rank': 0,
+                },
+            )
+            updated += 1
+        self.message_user(
+            request,
+            f"Пересчитаны и синхронизированы баллы для {updated} пользователей.",
+            level=messages.SUCCESS,
+        )
+
+    @admin.action(description="🏆 Перепроверить условия всех ачивок")
+    def reevaluate_achievements(self, request, queryset):
+        total_awarded = 0
+        for student in queryset:
+            awarded = evaluate_user_achievements(student.pk, trigger_filter='ALL')
+            total_awarded += len(awarded)
+        self.message_user(
+            request,
+            f"Проверено пользователей: {queryset.count()}. Выдано новых ачивок: {total_awarded}.",
+            level=messages.SUCCESS,
+        )
+
+    @admin.action(description="📢 Отправить произвольное сообщение в Telegram")
+    def send_custom_telegram_message(self, request, queryset):
+        recipients = [u.telegram_chat_id for u in queryset if u.telegram_chat_id]
+        if request.POST.get('apply') == '1':
+            text = (request.POST.get('message_text') or '').strip()
+            if not text:
+                self.message_user(request, 'Введите текст сообщения.', level=messages.ERROR)
+                return None
+            counts = async_broadcast_message(recipients, text)
+            counts['unconnected'] = queryset.count() - len(recipients)
+            self.message_user(request, telegram_delivery_report([counts]), level=telegram_delivery_level([counts]))
+            return None
+        return render(request, 'admin/admin_panel/telegram_broadcast.html', {
+            'title': 'Персональная рассылка выбранным пользователям',
+            'queryset': queryset,
+            'selected_count': queryset.count(),
+            'recipients_count': len(recipients),
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'send_custom_telegram_message',
+        })
 
     fieldsets = (
         ('Основная информация', {
@@ -504,7 +641,7 @@ class ScoreAdjustmentAdmin(ModelAdmin):
     group_lookup = 'user__group_number'
     list_fullwidth = True
     list_display = ('user', 'amount', 'reason', 'month', 'admin', 'created_at')
-    list_editable = ('reason',)
+    list_editable = ('amount', 'reason', 'month')
     list_filter = ('month', StudyGroupDropdownFilter)
     search_fields = ('user__login', 'user__name', 'reason', 'user__group_number')
     ordering = ('-created_at',)
@@ -758,6 +895,19 @@ class AchievementAdmin(ModelAdmin):
     list_filter = ('category', 'trigger_type', 'is_active')
     search_fields = ('title', 'code', 'description', 'criteria')
     ordering = ('created_at',)
+    actions = ['reevaluate_all_students']
+
+    @admin.action(description='🏆 Перепроверить все ачивки для всех студентов')
+    def reevaluate_all_students(self, request, queryset):
+        total = 0
+        students = User.objects.filter(role=RoleChoices.STUDENT)
+        for student in students:
+            total += len(evaluate_user_achievements(student.pk, trigger_filter='ALL'))
+        self.message_user(
+            request,
+            f'Проверено студентов: {students.count()}. Выдано новых ачивок: {total}.',
+            level=messages.SUCCESS,
+        )
 
     fieldsets = (
         ('Основная информация', {
@@ -824,16 +974,19 @@ class AchievementAdmin(ModelAdmin):
 @admin.register(UserAchievement)
 class UserAchievementAdmin(ModelAdmin):
     list_fullwidth = True
+    list_select_related = ('user', 'achievement')
     list_display = ('user', 'achievement', 'awarded_at')
-    list_filter = ('achievement',)
-    search_fields = ('user__login', 'user__name', 'achievement__title')
+    list_filter = ('achievement', 'awarded_at')
+    search_fields = ('user__login', 'user__name', 'achievement__title', 'achievement__code')
     ordering = ('-awarded_at',)
 
 
 @admin.register(MonthlyScoreArchive)
 class MonthlyScoreArchiveAdmin(ModelAdmin):
     list_fullwidth = True
+    list_select_related = ('user',)
     list_display = ('month', 'final_rank', 'user', 'final_score', 'tasks_accepted_count', 'archived_at')
+    list_editable = ('final_score', 'final_rank')
     list_filter = ('month',)
     search_fields = ('user__login', 'user__name')
     ordering = ('-month', 'final_rank')
@@ -902,15 +1055,60 @@ for auth_model in (get_user_model(), Group):
         admin.site.register(auth_model, OwnerOnlyAuthAdmin)
 
 
+@admin.register(PlatformSetting)
+class PlatformSettingAdmin(ModelAdmin):
+    list_filter_submit = True
+    list_fullwidth = True
+    list_display = ('key', 'category', 'value_type', 'value', 'is_public', 'description', 'updated_at')
+    list_editable = ('value', 'is_public')
+    list_filter = ('category', 'value_type', 'is_public')
+    search_fields = ('key', 'value', 'description')
+    ordering = ('category', 'key')
+    readonly_fields = ('updated_at',)
+    formfield_overrides = {
+        models.TextField: {'widget': forms.Textarea(attrs={'rows': 2, 'style': 'min-width: 240px;'})},
+    }
+    actions = ['seed_default_settings', 'clear_settings_cache']
+
+    def get_queryset(self, request):
+        ensure_default_settings()
+        return super().get_queryset(request)
+
+    def has_view_permission(self, request, obj=None):
+        return bool(request.user and request.user.is_staff)
+
+    def has_add_permission(self, request):
+        return is_admin_owner(request.user)
+
+    def has_change_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    def has_delete_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
+    @admin.action(description='🔄 Восстановить недостающие настройки по умолчанию')
+    def seed_default_settings(self, request, queryset):
+        ensure_default_settings()
+        invalidate_settings_cache()
+        self.message_user(request, 'Дефолтные настройки платформы синхронизированы.', level=messages.SUCCESS)
+
+    @admin.action(description='⚡ Сбросить кеш настроек и /api/v1/system/config')
+    def clear_settings_cache(self, request, queryset):
+        invalidate_settings_cache()
+        self.message_user(request, 'Кеш настроек и публичного конфига очищен.', level=messages.SUCCESS)
+
+
 from admin_panel.models import TelegramOutbox
 
 @admin.register(TelegramOutbox)
 class TelegramOutboxAdmin(ModelAdmin):
+    list_fullwidth = True
     list_display = ('id', 'chat_id', 'status', 'attempts', 'available_at', 'last_error')
     list_filter = ('status',)
+    search_fields = ('id', 'chat_id', 'dedupe_key', 'last_error')
     exclude = ('payload',)
     readonly_fields = ('id', 'dedupe_key', 'chat_id', 'status', 'attempts', 'available_at', 'last_error', 'created_at')
-    actions = ['retry_failed']
+    actions = ['retry_failed', 'retry_selected']
 
     def has_add_permission(self, request):
         return False
@@ -924,10 +1122,17 @@ class TelegramOutboxAdmin(ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return is_admin_owner(request.user)
 
-    @admin.action(description='Повторить неудачные отправки')
+    @admin.action(description='🔁 Повторить неудачные отправки')
     def retry_failed(self, request, queryset):
-        from django.utils import timezone
-        queryset.filter(status='failed').update(status='pending', attempts=0, available_at=timezone.now(), last_error='')
+        from admin_panel.services.outbox_service import retry_outbox_queryset
+        res = retry_outbox_queryset(queryset.filter(status='failed'), drain_now=True)
+        self.message_user(request, f"В очереди на повтор: {res['queued']}. Доставлено сразу: {res['sent']}.", level=messages.SUCCESS)
+
+    @admin.action(description='📨 Повторить выбранные (кроме доставленных)')
+    def retry_selected(self, request, queryset):
+        from admin_panel.services.outbox_service import retry_outbox_queryset
+        res = retry_outbox_queryset(queryset, drain_now=True)
+        self.message_user(request, f"В очереди на повтор: {res['queued']}. Доставлено сразу: {res['sent']}.", level=messages.SUCCESS)
 
 
 class ShopProductForm(forms.ModelForm):
@@ -954,6 +1159,7 @@ class ShopProductForm(forms.ModelForm):
 
 @admin.register(ShopProduct)
 class ShopProductAdmin(ModelAdmin):
+    list_fullwidth = True
     form = ShopProductForm
     fields = ('title', 'description', 'price_som', 'price_coins', 'stock', 'is_active', 'order', 'image_url', 'image')
     list_display = ('title', 'price_som', 'price_coins', 'stock', 'is_active', 'order')
@@ -977,6 +1183,7 @@ class ShopProductAdmin(ModelAdmin):
 
 @admin.register(ShopOrder)
 class ShopOrderAdmin(ModelAdmin):
+    list_fullwidth = True
     list_display = ('created_at', 'user', 'product', 'price_coins', 'status', 'processed_by')
     list_filter = ('status', 'created_at')
     search_fields = ('id', 'user__login', 'product__title')

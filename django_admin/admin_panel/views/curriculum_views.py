@@ -1,6 +1,7 @@
 from django.db import transaction
 from admin_panel.models import User
 from django.core.validators import URLValidator
+from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 from django.core.exceptions import ValidationError
 from admin_panel.serializers import EmptyRequestSerializer
@@ -43,16 +44,20 @@ class LessonsListView(APIView):
         parameters=[
             OpenApiParameter(name="month", type=str, description="Номер месяца или 'all'"),
             OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе (для менторов)"),
+            OpenApiParameter(name="search", type=str, description="Поиск по названию или YouTube ID"),
+            OpenApiParameter(name="ordering", type=str, description="Сортировка (month, order, title, createdAt)"),
+            OpenApiParameter(name="page", type=int, description="Номер страницы"),
+            OpenApiParameter(name="limit", type=int, description="Размер страницы"),
         ]
     )
     def get(self, request):
         user = request.user
-        qs = Lesson.objects.all().order_by('month', 'order', 'created_at')
+        qs = Lesson.objects.all()
 
         if user.role != RoleChoices.ADMIN:
             # Student: only their group or ALL, and month <= current_month
             max_allowed = max(1, user.current_month or 1)
-            raw_month = request.query_params.get('month')
+            raw_month = qparam(request, 'month')
             if raw_month and raw_month.lower() != 'all':
                 try:
                     m = int(raw_month)
@@ -69,18 +74,36 @@ class LessonsListView(APIView):
             )
         else:
             # Mentor
-            raw_month = request.query_params.get('month')
+            raw_month = qparam(request, 'month')
             if raw_month and raw_month.lower() != 'all':
                 try:
                     qs = qs.filter(month=int(raw_month))
                 except ValueError:
                     pass
-            group = request.query_params.get('groupNumber')
+            group = qparam(request, 'groupNumber', 'group_number')
             if group:
-                qs = qs.filter(group_number=group)
+                qs = qs.filter(group_number__iexact=group.strip())
 
-        serializer = LessonSerializer(qs, many=True)
-        return Response({"lessons": serializer.data})
+        search = (qparam(request, 'search') or '').strip()
+        if search:
+            qs = qs.filter(Q(title__icontains=search) | Q(youtube_id__icontains=search))
+
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'month': 'month', 'order': 'order', 'title': 'title', 'createdAt': 'created_at'},
+            ['month', 'order', 'created_at'],
+        )
+        qs = qs.order_by(*ordering)
+
+        page_meta, items = paginate_list_or_qs(request, qs)
+        if isinstance(page_meta, dict) and 'error' in page_meta:
+            return Response({'message': page_meta['error']}, status=400)
+
+        serializer = LessonSerializer(items, many=True)
+        payload = {"lessons": serializer.data}
+        if page_meta is not None:
+            payload.update(page_meta)
+        return Response(payload)
 
 
 class TasksListView(APIView):
@@ -93,18 +116,30 @@ class TasksListView(APIView):
         responses={200: TaskSerializer(many=True)},
         parameters=[
             OpenApiParameter(name="month", type=str, description="Номер месяца или 'all'"),
+            OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе (для менторов)"),
+            OpenApiParameter(name="topic", type=str, description="Фильтр по теме"),
+            OpenApiParameter(name="isBonus", type=bool, description="Только бонусные или обычные задания"),
+            OpenApiParameter(name="hasScore", type=bool, description="Только оцениваемые баллами задания"),
+            OpenApiParameter(name="search", type=str, description="Поиск по названию, теме или описанию"),
+            OpenApiParameter(name="ordering", type=str, description="Сортировка (month, order, title, maxScore, createdAt)"),
+            OpenApiParameter(name="page", type=int, description="Номер страницы"),
+            OpenApiParameter(name="limit", type=int, description="Размер страницы"),
         ]
     )
     def get(self, request):
         user = request.user
-        qs = Task.objects.all().order_by('month', 'order', 'created_at')
+        qs = Task.objects.all()
         if user.role != RoleChoices.ADMIN:
             group = normalize_group_number(user.group_number)
             qs = with_normalized_group(qs.filter(month__lte=user.current_month)).filter(
                 Q(group_number__isnull=True) | Q(normalized_group__in={'', 'all', group})
             )
+        else:
+            group = qparam(request, 'groupNumber', 'group_number')
+            if group:
+                qs = qs.filter(group_number__iexact=group.strip())
 
-        raw_month = request.query_params.get('month')
+        raw_month = qparam(request, 'month')
         if raw_month and raw_month.lower() != 'all':
             try:
                 qs = qs.filter(month=int(raw_month))
@@ -113,8 +148,40 @@ class TasksListView(APIView):
         elif not raw_month and user.role != RoleChoices.ADMIN:
             qs = qs.filter(month=user.current_month)
 
-        serializer = TaskSerializer(qs, many=True, context={'request': request})
-        return Response({"tasks": serializer.data})
+        topic = (qparam(request, 'topic') or '').strip()
+        if topic:
+            qs = qs.filter(topic__icontains=topic)
+
+        is_bonus = parse_bool_param(qparam(request, 'isBonus', 'is_bonus'))
+        if is_bonus is not None:
+            qs = qs.filter(is_bonus=is_bonus)
+
+        has_score = parse_bool_param(qparam(request, 'hasScore', 'has_score'))
+        if has_score is not None:
+            qs = qs.filter(has_score=has_score)
+
+        search = (qparam(request, 'search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(title__icontains=search) | Q(topic__icontains=search) | Q(description__icontains=search)
+            )
+
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'month': 'month', 'order': 'order', 'title': 'title', 'maxScore': 'max_score', 'createdAt': 'created_at'},
+            ['month', 'order', 'created_at'],
+        )
+        qs = qs.order_by(*ordering)
+
+        page_meta, items = paginate_list_or_qs(request, qs)
+        if isinstance(page_meta, dict) and 'error' in page_meta:
+            return Response({'message': page_meta['error']}, status=400)
+
+        serializer = TaskSerializer(items, many=True, context={'request': request})
+        payload = {"tasks": serializer.data}
+        if page_meta is not None:
+            payload.update(page_meta)
+        return Response(payload)
 
     @extend_schema(summary="Создать новое задание (только для ментора/админа)")
     def post(self, request):
@@ -202,29 +269,64 @@ class SubmissionsView(APIView):
             OpenApiParameter(name="status", type=str, description="Фильтр по статусу (SENT, IN_REVIEW, ACCEPTED, REVISION)"),
             OpenApiParameter(name="taskId", type=str, description="Фильтр по заданию"),
             OpenApiParameter(name="userId", type=str, description="Фильтр по студенту (для менторов)"),
+            OpenApiParameter(name="month", type=int, description="Фильтр по месяцу задания"),
+            OpenApiParameter(name="search", type=str, description="Поиск по студенту, заданию или ссылке"),
+            OpenApiParameter(name="ordering", type=str, description="Сортировка (createdAt, score, version, status)"),
+            OpenApiParameter(name="page", type=int, description="Номер страницы"),
+            OpenApiParameter(name="limit", type=int, description="Размер страницы"),
         ]
     )
     def get(self, request):
         user = request.user
-        qs = Submission.objects.all().select_related('user', 'task', 'reviewer').order_by('-created_at')
+        qs = Submission.objects.all().select_related('user', 'task', 'reviewer')
 
         if user.role != RoleChoices.ADMIN:
             qs = qs.filter(user_id=user.id)
         else:
-            user_id = request.query_params.get('userId')
+            user_id = qparam(request, 'userId', 'user_id')
             if user_id:
                 qs = qs.filter(user_id=user_id)
 
-        task_id = request.query_params.get('taskId')
+        task_id = qparam(request, 'taskId', 'task_id')
         if task_id:
             qs = qs.filter(task_id=task_id)
 
-        st = request.query_params.get('status')
+        st = qparam(request, 'status')
         if st:
             qs = qs.filter(status=st.upper())
 
-        serializer = SubmissionSerializer(qs, many=True)
-        return Response({"submissions": serializer.data})
+        raw_month = qparam(request, 'month')
+        if raw_month:
+            try:
+                qs = qs.filter(task__month=int(raw_month))
+            except ValueError:
+                pass
+
+        search = (qparam(request, 'search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(user__login__icontains=search)
+                | Q(user__name__icontains=search)
+                | Q(task__title__icontains=search)
+                | Q(solution_link__icontains=search)
+            )
+
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'createdAt': 'created_at', 'score': 'score', 'version': 'version', 'status': 'status'},
+            ['-created_at'],
+        )
+        qs = qs.order_by(*ordering)
+
+        page_meta, items = paginate_list_or_qs(request, qs)
+        if isinstance(page_meta, dict) and 'error' in page_meta:
+            return Response({'message': page_meta['error']}, status=400)
+
+        serializer = SubmissionSerializer(items, many=True)
+        payload = {"submissions": serializer.data}
+        if page_meta is not None:
+            payload.update(page_meta)
+        return Response(payload)
 
     @extend_schema(summary="Сдать решение задания на проверку ментору")
     @transaction.atomic

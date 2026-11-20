@@ -15,8 +15,8 @@ exec 9>deploy/backups/.migration.lock
 flock -n 9 || { echo 'Another migration is running.' >&2; exit 1; }
 docker compose config --quiet
 running=$(docker compose ps --status running --services)
-if [[ "$running" =~ (^|$'\n')(django_web|telegram_worker|node_api)($|$'\n') ]]; then
-    echo 'Stop django_web, telegram_worker and node_api before restoring.' >&2
+if [[ "$running" =~ (^|$'\n')(django_web|telegram_worker|telegram_bot)($|$'\n') ]]; then
+    echo 'Stop django_web, telegram_worker and telegram_bot before restoring.' >&2
     exit 1
 fi
 docker compose exec -T db sh -ec 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'

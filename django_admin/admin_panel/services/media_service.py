@@ -9,8 +9,17 @@ FORMATS = {'JPEG', 'PNG', 'WEBP', 'GIF'}
 MAX_PIXELS = 16_000_000
 
 
+def get_media_limit(kind: str) -> int:
+    from admin_panel.services.settings_service import get_setting
+    if kind == 'AVATAR':
+        return max(1, int(get_setting('avatar_max_mb', 2) or 2)) * 1024 * 1024
+    if kind == 'BANNER':
+        return max(1, int(get_setting('banner_max_mb', 5) or 5)) * 1024 * 1024
+    return LIMITS[kind]
+
+
 def read_upload(file, kind):
-    limit = LIMITS[kind]
+    limit = get_media_limit(kind)
     if file.size > limit:
         raise ValueError('Файл превышает допустимый размер.')
     data = file.read(limit + 1)
@@ -23,7 +32,7 @@ def read_upload(file, kind):
 def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None):
     if mime_type.lower().strip() not in {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}:
         raise ValueError('Разрешены только JPEG, PNG, WebP и GIF. SVG запрещён.')
-    if len(buffer) > LIMITS[kind]:
+    if len(buffer) > get_media_limit(kind):
         raise ValueError('Файл превышает допустимый размер.')
     try:
         with warnings.catch_warnings():

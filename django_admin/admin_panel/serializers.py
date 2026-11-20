@@ -3,9 +3,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 
 
-def validate_new_password(value):
+def validate_new_password(value, user=None):
     try:
-        validate_password(value)
+        validate_password(value, user=user)
     except DjangoValidationError as exc:
         raise serializers.ValidationError(exc.messages)
     return value
@@ -100,12 +100,23 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.Serializer):
     login = serializers.CharField(min_length=3, max_length=255)
-    password = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False)
+    password = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
     groupNumber = serializers.CharField(max_length=64)
     name = serializers.CharField(required=False, allow_blank=True, max_length=255)
     telegram = serializers.CharField(required=False, allow_blank=True, max_length=255)
     groupId = serializers.CharField(required=False, allow_blank=True, max_length=64)
-    currentMonth = serializers.IntegerField(required=False, default=1)
+    currentMonth = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        candidate = User(
+            login=(attrs.get('login') or '').strip(),
+            name=(attrs.get('name') or '').strip() or None,
+        )
+        try:
+            validate_new_password(attrs['password'], user=candidate)
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'password': exc.detail})
+        return attrs
 
 
 class LoginSerializer(serializers.Serializer):
@@ -115,7 +126,7 @@ class LoginSerializer(serializers.Serializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     currentPassword = serializers.CharField()
-    newPassword = serializers.CharField(min_length=12, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
+    newPassword = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
 
 
 class LessonSerializer(serializers.ModelSerializer):

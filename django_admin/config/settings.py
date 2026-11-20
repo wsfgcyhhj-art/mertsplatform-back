@@ -24,7 +24,7 @@ def _load_env_file(env_path: Path) -> None:
 
 _load_env_file(BASE_DIR / '.env')
 _load_env_file(BASE_DIR.parent / '.env')
-_load_env_file(BASE_DIR.parent / 'backend' / '.env')
+_load_env_file(BASE_DIR.parent / '.env.local')
 
 import sys
 import secrets
@@ -151,10 +151,11 @@ DATABASES = {
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        'OPTIONS': {'user_attributes': ('login', 'name', 'username', 'first_name', 'last_name', 'email')},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-        'OPTIONS': {'min_length': 12},
+        'OPTIONS': {'min_length': 8},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -324,6 +325,23 @@ UNFOLD = {
                     },
                 ],
             },
+            {
+                "title": "Система и Настройки",
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": "Настройки платформы",
+                        "icon": "tune",
+                        "link": reverse_lazy("admin:admin_panel_platformsetting_changelist"),
+                    },
+                    {
+                        "title": "Очередь Telegram",
+                        "icon": "send",
+                        "link": reverse_lazy("admin:admin_panel_telegramoutbox_changelist"),
+                    },
+                ],
+            },
         ],
     },
 }
@@ -338,6 +356,11 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_PARSER_CLASSES': (
+        'admin_panel.api_utils.DualCaseJSONParser',
+        'rest_framework.parsers.FormParser',
+        'rest_framework.parsers.MultiPartParser',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_FILTER_BACKENDS': (

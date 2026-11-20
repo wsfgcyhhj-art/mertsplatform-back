@@ -303,7 +303,7 @@ class Task(AtomicModel):
     example_link = models.CharField('Ссылка на пример', max_length=500, blank=True, null=True)
     attachment_link = models.CharField('Ссылка на материалы', max_length=500, blank=True, null=True)
     has_score = models.BooleanField('Оценивается баллами', default=True)
-    max_score = models.IntegerField('Макс. балл', default=10, blank=True, null=True)
+    max_score = models.IntegerField('Макс. балл', blank=True, null=True)
     is_bonus = models.BooleanField('Бонусное задание', default=False)
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)
@@ -316,6 +316,11 @@ class Task(AtomicModel):
         ordering = ['month', 'order']
 
     def save(self, *args, **kwargs):
+        if self.has_score and self.max_score is None:
+            from admin_panel.services.settings_service import get_setting
+            base_points = int(get_setting('default_task_points', 10) or 10)
+            multiplier = int(get_setting('bonus_task_multiplier', 2) or 2) if self.is_bonus else 1
+            self.max_score = base_points * max(1, multiplier)
         self.updated_at = timezone.now()
         super().save(*args, **kwargs)
 
@@ -610,3 +615,53 @@ class ShopOrder(models.Model):
             models.CheckConstraint(condition=models.Q(status__in=ShopOrderStatus.values),
                                    name='shop_order_valid_status'),
         ]
+
+
+class SettingTypeChoices(models.TextChoices):
+    STRING = 'string', 'Строка (string)'
+    INT = 'int', 'Целое число (int)'
+    BOOL = 'bool', 'Флаг true/false (bool)'
+    JSON = 'json', 'JSON'
+    TEXT = 'text', 'Многострочный текст (text)'
+
+
+class SettingCategoryChoices(models.TextChoices):
+    BRANDING = 'branding', 'Брендинг и ссылки'
+    GAMIFICATION = 'gamification', 'Геймификация и обучение'
+    ACCESS = 'access', 'Регистрация и доступы'
+    TELEGRAM = 'telegram', 'Telegram и шаблоны'
+
+
+class PlatformSetting(models.Model):
+    key = models.CharField('Ключ', max_length=100, unique=True, db_index=True)
+    value = models.TextField('Значение', blank=True, default='')
+    value_type = models.CharField(
+        'Тип',
+        max_length=16,
+        choices=SettingTypeChoices.choices,
+        default=SettingTypeChoices.STRING,
+    )
+    category = models.CharField(
+        'Категория',
+        max_length=32,
+        choices=SettingCategoryChoices.choices,
+        default=SettingCategoryChoices.BRANDING,
+    )
+    description = models.CharField('Описание', max_length=500, blank=True, default='')
+    is_public = models.BooleanField('Публичная (отдаётся в API)', default=True)
+    updated_at = models.DateTimeField('Обновлено', auto_now=True)
+
+    class Meta:
+        managed = True
+        db_table = 'PlatformSetting'
+        verbose_name = 'Настройка платформы'
+        verbose_name_plural = 'Настройки платформы'
+        ordering = ('category', 'key')
+
+    def clean(self):
+        from admin_panel.services.settings_service import validate_setting_value
+        self.key = (self.key or '').strip()
+        self.value = validate_setting_value(self.key, self.value, self.value_type)
+
+    def __str__(self):
+        return f"{self.key} = {self.value[:60]}"

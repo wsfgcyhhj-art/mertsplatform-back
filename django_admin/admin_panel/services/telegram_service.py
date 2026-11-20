@@ -4,12 +4,14 @@ import html
 import hashlib
 import logging
 
+from contextvars import ContextVar
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
+from admin_panel.services.settings_service import get_setting, render_telegram_template
 import httpx
 from django.conf import settings
 from admin_panel.models import (
@@ -23,6 +25,11 @@ from admin_panel.models import (
 )
 
 logger = logging.getLogger('telegram_service')
+_last_telegram_error: ContextVar[str] = ContextVar('last_telegram_error', default='')
+
+
+def get_last_telegram_error() -> str:
+    return _last_telegram_error.get()
 
 TELEGRAM_CONNECTED = (
     "🎉 <b>Telegram успешно подключён к MertsPlatform!</b> Теперь сюда будут мгновенно "
@@ -42,6 +49,10 @@ def get_bot_token() -> str:
 
 
 def get_bot_username() -> str:
+    configured = str(get_setting('telegram_bot_username', '') or '').strip().lstrip('@')
+    if configured and re.fullmatch(r'[A-Za-z0-9_]{5,32}', configured):
+        return configured
+
     fallback = os.getenv('TELEGRAM_BOT_USERNAME', 'MertsPlatform_bot').strip().lstrip('@')
     token = get_bot_token()
     if not token:
@@ -65,6 +76,9 @@ def get_bot_username() -> str:
 
 
 def get_frontend_url() -> str:
+    configured = str(get_setting('frontend_url', '') or '').strip().rstrip('/')
+    if configured:
+        return configured
     return getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
 
 
@@ -73,9 +87,12 @@ def escape_html(text: Any) -> str:
 
 
 def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None, *, voice: str | None = None) -> bool:
+    _last_telegram_error.set('')
     token = get_bot_token()
     if not token or not chat_id:
-        logger.warning('Telegram skipped chat_id=%s reason=%s', chat_id, 'missing_token' if not token else 'missing_chat_id')
+        reason = 'missing_token' if not token else 'missing_chat_id'
+        _last_telegram_error.set(reason)
+        logger.warning('Telegram skipped chat_id=%s reason=%s', chat_id, reason)
         return False
 
     method = "sendVoice" if voice else "sendMessage"
@@ -94,10 +111,15 @@ def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] 
     try:
         with httpx.Client(timeout=4.0) as client:
             resp = client.post(url, json=payload)
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
             logger.info('Telegram response chat_id=%s http=%s ok=%s error_code=%s description=%s', chat_id, resp.status_code, data.get('ok'), data.get('error_code'), data.get('description', ''))
             if resp.status_code == 200 and data.get('ok'):
                 return True
+            desc = (data.get('description') or resp.text or '')[:180]
+            _last_telegram_error.set(f'HTTP {resp.status_code}: {desc}'[:250])
             # Handle 403 Forbidden (bot blocked by user) gracefully
             if resp.status_code == 403 or (data and data.get('error_code') == 403):
                 logger.info(f"User {chat_id} blocked bot (403 Forbidden).")
@@ -105,6 +127,7 @@ def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] 
             logger.warning("Telegram send failed chat_id=%s http=%s", chat_id, resp.status_code)
             return False
     except Exception as e:
+        _last_telegram_error.set(f'{type(e).__name__}: {str(e)[:180]}'[:250])
         logger.warning("Telegram request failed chat_id=%s error_type=%s", chat_id, type(e).__name__)
         return False
 
@@ -132,15 +155,23 @@ def async_broadcast_message(chat_ids: List[str], text: str) -> dict:
     counts = {'sent': 0, 'errors': 0, 'queued': 0}
     batch = event_context.get() or str(uuid.uuid4())
     keys = []
+    enqueue_errors = 0
     for chat_id in dict.fromkeys(str(cid).strip() for cid in chat_ids if cid and str(cid).strip()):
         key = batch + ':' + hashlib.sha256((chat_id + text).encode()).hexdigest()
         keys.append(key)
-        enqueue(chat_id, text, dedupe_key=key)
+        try:
+            enqueue(chat_id, text, dedupe_key=key)
+        except Exception as exc:
+            enqueue_errors += 1
+            logger.warning('Telegram broadcast enqueue error chat_id=%s error=%s', chat_id, type(exc).__name__)
+    counts['errors'] = enqueue_errors
     def report():
         items = TelegramOutbox.objects.filter(dedupe_key__in=keys)
-        counts.update(sent=items.filter(status='sent').count(),
-                      errors=items.exclude(last_error='').count(),
-                      queued=items.filter(status__in=['pending', 'sending']).count())
+        counts.update(
+            sent=items.filter(status='sent').count(),
+            errors=enqueue_errors + items.exclude(last_error='').count(),
+            queued=items.filter(status__in=['pending', 'sending']).count(),
+        )
         logger.info('Telegram batch sent=%s errors=%s queued=%s', counts['sent'], counts['errors'], counts['queued'])
     transaction.on_commit(report)
     return counts
@@ -162,28 +193,34 @@ def _notify_month_students(group: str | None, month: int, text: str) -> dict:
 
 
 def notify_lesson_published(lesson: Lesson) -> dict:
+    if not get_setting('tg_notify_lesson_published', True):
+        return {'sent': 0, 'errors': 0, 'queued': 0, 'unconnected': 0, 'disabled': True}
     group = (lesson.group_number or '').strip()
     group_label = f"Группа {escape_html(group)} • " if normalize_group_number(group) not in ('', 'all') else ""
     lesson_link = f"{get_frontend_url()}/lessons?month={lesson.month}&lesson={quote(str(lesson.pk), safe='')}"
-    msg = (
-        "🎬 <b>Вышел новый видеоурок!</b>\n\n"
-        f"📅 {group_label}Месяц {lesson.month} • Урок #{lesson.order}\n"
-        f"<b>{escape_html(lesson.title)}</b>\n\n"
-        f'👉 <a href="{escape_html(lesson_link)}">Смотреть урок на платформе</a>'
-    )
+    msg = render_telegram_template('tg_template_lesson_published', {
+        'group': group_label,
+        'month': lesson.month,
+        'order': lesson.order,
+        'lesson_title': escape_html(lesson.title),
+        'link': escape_html(lesson_link),
+    })
     return _notify_month_students(group, lesson.month, msg)
 
 
 def notify_task_published(task: Task) -> dict:
+    if not get_setting('tg_notify_task_published', True):
+        return {'sent': 0, 'errors': 0, 'queued': 0, 'unconnected': 0, 'disabled': True}
     bonus_badge = " 🔥 <b>Бонусное задание</b>" if task.is_bonus else ""
     max_score = f"{task.max_score} баллов" if task.has_score and task.max_score is not None else "Зачётная работа"
-    msg = (
-        f"📚 <b>Новое домашнее задание!</b>{bonus_badge}\n\n"
-        f"<b>{escape_html(task.title)}</b>\n"
-        f"Тема: <i>{escape_html(task.topic)}</i> (Месяц {task.month})\n"
-        f"Максимальный балл: <b>{max_score}</b>\n\n"
-        f'👉 <a href="{escape_html(task_link(task))}">Открыть задание</a>'
-    )
+    msg = render_telegram_template('tg_template_task_published', {
+        'bonus_badge': bonus_badge,
+        'task_title': escape_html(task.title),
+        'topic': escape_html(task.topic),
+        'month': task.month,
+        'score': max_score,
+        'link': escape_html(task_link(task)),
+    })
     return _notify_month_students(task.group_number, task.month, msg)
 
 
@@ -191,17 +228,20 @@ def notify_submission_created(submission: Submission):
     """
     Notifies mentors and assigned reviewer when student submits work.
     """
+    if not get_setting('tg_notify_submission_created', True):
+        return
     student = submission.user
     task = submission.task
-    msg = (
-        f"📝 <b>Новая сдача задания!</b>\n\n"
-        f"👤 Студент: <b>{escape_html(student.name or student.login)}</b> (@{escape_html(student.login)})\n"
-        f"📚 Задание: <b>{escape_html(task.title)}</b> (Месяц {task.month})\n"
-        f"🔗 Ссылка: {escape_html(submission.solution_link)}\n"
-        f"🔢 Версия: v{submission.version}\n"
-    )
-    if submission.comment:
-        msg += f"💬 Комментарий: {escape_html(submission.comment)}\n"
+    comment_block = f"💬 Комментарий: {escape_html(submission.comment)}\n" if submission.comment else ""
+    msg = render_telegram_template('tg_template_submission_created', {
+        'student_name': escape_html(student.name or student.login),
+        'student_login': escape_html(student.login),
+        'task_title': escape_html(task.title),
+        'month': task.month,
+        'solution_link': escape_html(submission.solution_link),
+        'version': submission.version,
+        'comment': comment_block,
+    })
 
     recipients = []
     if student.mentor and student.mentor.telegram_chat_id:
@@ -217,11 +257,13 @@ def notify_submission_reviewed(submission: Submission):
     """
     3) Submission Reviewed by Mentor (status, score or comment updated)
     """
+    if not get_setting('tg_notify_submission_reviewed', True):
+        return
     student = submission.user
     if not student.telegram_chat_id:
         return
 
-    status_text = REVIEW_STATUS[submission.status]
+    status_text = REVIEW_STATUS.get(submission.status, submission.status)
 
     score_text = ""
     if submission.score is not None:
@@ -237,14 +279,16 @@ def notify_submission_reviewed(submission: Submission):
     if voice.lower().startswith(('https://', 'http://')):
         voice_link = f'🎙 <a href="{escape_html(voice)}">Послушать голосовой разбор</a>\n'
 
-    msg = (
-        f"📝 <b>Ментор проверил ваше ДЗ!</b>\n\n"
-        f"Задание: <b>{escape_html(submission.task.title)}</b> (попытка #{submission.version})\n"
-        f"Статус: {status_text}\n"
-        f"{score_text}"
-        f"{comment_text}{voice_link}"
-        f'👉 <a href="{escape_html(task_link(submission.task))}">Посмотреть детали на платформе</a>'
-    )
+    msg = render_telegram_template('tg_template_submission_reviewed', {
+        'student_name': escape_html(student.name or student.login),
+        'task_title': escape_html(submission.task.title),
+        'version': submission.version,
+        'status': status_text,
+        'score': score_text,
+        'comment': comment_text,
+        'voice_block': voice_link,
+        'link': escape_html(task_link(submission.task)),
+    })
 
     send_async_notification(student.id, msg)
     if voice != getattr(submission, '_old_voice', None) and re.fullmatch(r'[A-Za-z0-9_-]+', voice):
@@ -256,19 +300,21 @@ def notify_achievement_unlocked(user_id: str, achievement):
     """
     4) New Achievement earned
     """
+    if not get_setting('tg_notify_achievement_unlocked', True):
+        return
     try:
         user = User.objects.get(id=user_id)
         if not user.telegram_chat_id:
             return
-        frontend_url = get_frontend_url()
-        profile_link = f"{frontend_url}/profile"
+        profile_link = f"{get_frontend_url()}/profile"
 
-        msg = (
-            f"🏆 <b>Получена новая ачивка!</b>\n\n"
-            f"«<b>{escape_html(achievement.title)}</b>» (+{achievement.points} очков)\n"
-            f"<i>{escape_html(achievement.description)}</i>\n\n"
-            f"👉 <a href=\"{profile_link}\">Посмотреть в профиле</a>"
-        )
+        msg = render_telegram_template('tg_template_achievement_unlocked', {
+            'student_name': escape_html(user.name or user.login),
+            'achievement_title': escape_html(achievement.title),
+            'points': achievement.points,
+            'description': escape_html(achievement.description),
+            'link': escape_html(profile_link),
+        })
         send_async_notification(user_id, msg)
     except User.DoesNotExist:
         logger.warning('Telegram achievement recipient missing user_id=%s', user_id)
@@ -278,26 +324,32 @@ def notify_score_adjustment_granted(adjustment: ScoreAdjustment):
     """
     5) Score Adjustment (bonus / penalty points)
     """
+    if not get_setting('tg_notify_score_adjustment', True):
+        return
     student = adjustment.user
     if not student.telegram_chat_id:
         return
 
-    frontend_url = get_frontend_url()
-    profile_link = f"{frontend_url}/profile"
+    profile_link = f"{get_frontend_url()}/profile"
 
     if adjustment.amount > 0:
         header = "⚡ <b>Начислены бонусные баллы!</b>"
-        amount_str = f"Начислено: <b>+{adjustment.amount} баллов</b>"
+        amount_text = f"Начислено: <b>+{adjustment.amount} баллов</b>"
+        amount_str = f"+{adjustment.amount}"
     else:
         header = "⚠️ <b>Начислен штраф!</b>"
-        amount_str = f"Списано: <b>{adjustment.amount} баллов</b>"
+        amount_text = f"Списано: <b>{adjustment.amount} баллов</b>"
+        amount_str = str(adjustment.amount)
 
-    msg = (
-        f"{header}\n\n"
-        f"{amount_str} (Месяц {adjustment.month})\n"
-        f"Причина: <i>{escape_html(adjustment.reason)}</i>\n\n"
-        f"👉 <a href=\"{profile_link}\">Открыть профиль и рейтинг</a>"
-    )
+    msg = render_telegram_template('tg_template_score_adjustment', {
+        'header': header,
+        'amount_text': amount_text,
+        'amount': amount_str,
+        'month': adjustment.month,
+        'reason': escape_html(adjustment.reason),
+        'student_name': escape_html(student.name or student.login),
+        'link': escape_html(profile_link),
+    })
     send_async_notification(student.id, msg)
 
 
@@ -423,21 +475,27 @@ def _student_tasks(user: User) -> str:
     )
 
 
-def process_telegram_update(update: Dict[str, Any]) -> None:
+def process_telegram_update(update: Dict[str, Any]) -> bool:
     from admin_panel.models import TelegramUpdate
     from .outbox_service import event_context
     update_id = update.get('update_id')
     if not isinstance(update_id, int):
-        return
+        return False
+    dedupe_cache_key = f'tg_update:{update_id}'
+    if cache.get(dedupe_cache_key):
+        return False
     with transaction.atomic():
         _, created = TelegramUpdate.objects.get_or_create(update_id=update_id)
         if not created:
-            return
+            cache.set(dedupe_cache_key, 1, 3600)
+            return False
         context = event_context.set(str(update_id))
         try:
             _process_telegram_update(update)
+            transaction.on_commit(lambda: cache.set(dedupe_cache_key, 1, 3600))
         finally:
             event_context.reset(context)
+    return True
 
 
 def _process_telegram_update(update):
@@ -487,26 +545,42 @@ def _process_telegram_update(update):
             enqueue(chat_id, _student_tasks(user))
 
 
-def run_telegram_polling():
+def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
     token = get_bot_token()
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN is not configured. Polling stopped.")
-        return
+        return 0
 
     logger.info("Starting Telegram Bot Long Polling...")
     offset = 0
     url = f"https://api.telegram.org/bot{token}/getUpdates"
+    cycles = 0
 
-    while True:
+    while max_cycles is None or cycles < max_cycles:
+        cycles += 1
         try:
             with httpx.Client(timeout=30.0) as client:
                 resp = client.get(url, params={'offset': offset, 'timeout': 20})
                 if resp.status_code == 200:
                     data = resp.json()
                     for upd in data.get('result', []):
-                        process_telegram_update(upd)
-                        offset = max(offset, upd['update_id'] + 1)
+                        try:
+                            process_telegram_update(upd)
+                        except Exception as exc:
+                            logger.warning(
+                                "Polling update failed update_id=%s error=%s",
+                                upd.get('update_id'),
+                                type(exc).__name__,
+                            )
+                            # Keep offset before failed update_id so it can be retried cleanly.
+                            break
+                        uid = upd.get('update_id')
+                        if isinstance(uid, int):
+                            offset = max(offset, uid + 1)
         except Exception as e:
             logger.warning("Polling error: %s", type(e).__name__)
+            if max_cycles is not None and cycles >= max_cycles:
+                break
             import time
             time.sleep(2)
+    return offset

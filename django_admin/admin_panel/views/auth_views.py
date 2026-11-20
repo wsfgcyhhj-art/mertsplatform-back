@@ -13,7 +13,7 @@ from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.parsers import JSONParser
+from admin_panel.api_utils import DualCaseJSONParser
 from rest_framework.permissions import AllowAny
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
@@ -22,6 +22,7 @@ from admin_panel.serializers import RegisterSerializer, LoginSerializer, UserPro
 from admin_panel.authentication import generate_tokens_for_user
 from admin_panel.services.achievement_service import evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.group_service import parse_month_from_group_name
+from admin_panel.services.settings_service import get_setting
 
 SIMPLE_FORM_CONTENT_TYPES = ('application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain')
 
@@ -92,7 +93,7 @@ def update_user_streak(user: User) -> int:
 
 @method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
-    parser_classes = (JSONParser,)
+    parser_classes = (DualCaseJSONParser,)
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
@@ -101,10 +102,16 @@ class RegisterView(APIView):
     @extend_schema(
         summary="Регистрация нового студента",
         request=RegisterSerializer,
-        responses={201: dict, 400: dict, 409: dict}
+        responses={201: dict, 400: dict, 403: dict, 409: dict}
     )
     @transaction.atomic
     def post(self, request):
+        if not get_setting('registration_open', True):
+            return Response(
+                {"statusCode": 403, "error": "Forbidden", "message": "Публичная регистрация временно закрыта"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = RegisterSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -133,13 +140,26 @@ class RegisterView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if not get_setting('allow_auto_create_groups', True) and group_num.upper() != 'ALL':
+            if not StudyGroup.objects.filter(name__iexact=group_num, is_active=True).exists():
+                return Response(
+                    {"statusCode": 400, "error": "Bad Request", "message": "Учебная группа не найдена или закрыта"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        default_start_month = max(1, int(get_setting('default_start_month', 1) or 1))
         month_val = data.get('currentMonth')
-        if not month_val or month_val == 1:
-            month_val = parse_month_from_group_name(group_num)
+        if not month_val:
+            parsed_month = parse_month_from_group_name(group_num)
+            month_val = parsed_month if parsed_month > 1 else default_start_month
+
+        configured_role = str(get_setting('default_role', RoleChoices.STUDENT) or RoleChoices.STUDENT).strip().upper()
+        # Security guardrail: public self-registration always assigns STUDENT even if tampered.
+        assigned_role = RoleChoices.STUDENT if configured_role != RoleChoices.STUDENT else configured_role
 
         user = User(
             login=login,
-            role=RoleChoices.STUDENT,
+            role=assigned_role,
             has_subscription=True,
             name=(data.get('name') or '').strip() or None,
             telegram=(data.get('telegram') or '').strip() or None,
@@ -176,7 +196,7 @@ class RegisterView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
-    parser_classes = (JSONParser,)
+    parser_classes = (DualCaseJSONParser,)
     throttle_classes = (AuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()

@@ -1,12 +1,19 @@
-from admin_panel.serializers import EmptyRequestSerializer
 import time
+from django.core.cache import cache
 from django.db import connection
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter
+from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.services.media_presets import get_all_media_presets_catalog
-from admin_panel.services.telegram_service import get_bot_token, get_bot_username
+from admin_panel.services.settings_service import (
+    SETTINGS_CACHE_TTL,
+    SYSTEM_CONFIG_CACHE_KEY,
+    get_all_settings,
+    get_public_settings,
+)
+from admin_panel.services.telegram_service import get_bot_token, get_bot_username, get_frontend_url
 
 ACHIEVEMENT_CATEGORIES = [
     {"code": "START", "label": "Старт"},
@@ -38,15 +45,40 @@ class SystemConfigView(APIView):
 
     @extend_schema(summary="Единый конфигурационный эндпоинт платформы для фронтенда")
     def get(self, request):
+        cached = cache.get(SYSTEM_CONFIG_CACHE_KEY)
+        if cached is not None:
+            return Response(cached)
+
+        cfg = get_all_settings()
+        public_cfg = get_public_settings()
         catalog = get_all_media_presets_catalog()
         bot_username = get_bot_username()
+        avatar_max_mb = max(1, int(cfg.get('avatar_max_mb', 2) or 2))
+        banner_max_mb = max(1, int(cfg.get('banner_max_mb', 5) or 5))
 
-        return Response({
+        payload = {
             "platform": {
-                "name": "MertsPlatform",
+                "name": cfg.get('platform_name') or "MertsPlatform",
                 "apiVersion": "3.0.0 (Django Unfold Edition)",
+                "frontendUrl": get_frontend_url(),
+                "supportUrl": cfg.get('support_url') or f"https://t.me/{bot_username}",
+                "welcomeTitle": cfg.get('welcome_title') or "",
+                "welcomeText": cfg.get('welcome_text') or "",
             },
             "roles": ["STUDENT", "ADMIN"],
+            "features": {
+                "registrationOpen": bool(cfg.get('registration_open', True)),
+                "easterEggEnabled": bool(cfg.get('easter_egg_enabled', True)),
+                "allowAutoCreateGroups": bool(cfg.get('allow_auto_create_groups', True)),
+            },
+            "gamification": {
+                "defaultTaskPoints": int(cfg.get('default_task_points', 10) or 10),
+                "bonusTaskMultiplier": int(cfg.get('bonus_task_multiplier', 2) or 2),
+                "streakThresholdDays": int(cfg.get('streak_threshold_days', 7) or 7),
+                "streakRewardPoints": int(cfg.get('streak_reward_points', 35) or 35),
+                "easterEggRewardPoints": int(cfg.get('easter_egg_reward_points', 25) or 25),
+                "defaultStartMonth": int(cfg.get('default_start_month', 1) or 1),
+            },
             "submissionStatuses": [
                 {"code": "SENT", "label": "Отправлено на проверку"},
                 {"code": "IN_REVIEW", "label": "На проверке у ментора"},
@@ -56,15 +88,14 @@ class SystemConfigView(APIView):
             "achievementCategories": ACHIEVEMENT_CATEGORIES,
             "achievementTriggerTypes": ACHIEVEMENT_TRIGGER_TYPES,
             "uploadLimits": {
-                "avatarMaxBytes": 2 * 1024 * 1024,
-                "bannerMaxBytes": 5 * 1024 * 1024,
+                "avatarMaxBytes": avatar_max_mb * 1024 * 1024,
+                "bannerMaxBytes": banner_max_mb * 1024 * 1024,
                 "customIconMaxBytes": 512 * 1024,
                 "allowedMimeTypes": [
                     "image/jpeg",
                     "image/png",
                     "image/webp",
                     "image/gif",
-
                 ],
             },
             "paginationDefaults": {
@@ -79,8 +110,11 @@ class SystemConfigView(APIView):
                 "disconnectEndpoint": "/api/v1/users/me/telegram/disconnect",
                 "recommendedPollIntervalMs": 3000,
             },
+            "settings": public_cfg,
             "mediaPresets": catalog,
-        })
+        }
+        cache.set(SYSTEM_CONFIG_CACHE_KEY, payload, SETTINGS_CACHE_TTL)
+        return Response(payload)
 
 
 class HealthCheckView(APIView):

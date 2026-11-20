@@ -22,6 +22,9 @@ def clear_data():
             with connection.constraint_checks_disabled():
                 for model in reversed(UNMANAGED_MODELS):
                     cursor.execute('DELETE FROM ' + connection.ops.quote_name(model._meta.db_table))
+    PlatformSetting.objects.all().delete()
+    from admin_panel.services.settings_service import invalidate_settings_cache
+    invalidate_settings_cache()
 
 
 def subscribe(user):

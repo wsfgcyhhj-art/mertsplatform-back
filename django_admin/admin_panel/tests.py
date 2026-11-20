@@ -894,3 +894,310 @@ class AdminSchemaRegressionTests(TransactionTestCase):
         bn_json = bn_resp.json()
         self.assertIn('user', bn_json)
         self.assertEqual(bn_json['user']['bannerUrl'], bn_json['bannerUrl'])
+
+
+class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        create_schema()
+
+    def setUp(self):
+        clear_data()
+        self.client = Client()
+        from django.core.cache import cache
+        cache.clear()
+        from django.contrib.auth import get_user_model
+        self.owner = get_user_model().objects.create_superuser(
+            username='flex-owner', email='owner@example.com', password='Owner-Password-2026!'
+        )
+
+    def test_bug_032_lesson_admin_registration_and_widget(self):
+        from django.contrib import admin
+        from admin_panel.admin import GroupSavingAdmin, LessonAdmin, LessonAdminForm, SearchableGroupWidget
+        self.assertIn(Lesson, admin.site._registry)
+        registered = admin.site._registry[Lesson]
+        self.assertIsInstance(registered, LessonAdmin)
+        self.assertIsInstance(registered, GroupSavingAdmin)
+        self.assertIs(registered.form, LessonAdminForm)
+        self.assertIsInstance(registered.form.base_fields['group_number'].widget, SearchableGroupWidget)
+
+    def test_bug_033_leaderboard_months_all_time_pagination_and_no_n_plus_1(self):
+        from rest_framework.test import APIClient
+        mentor = create_user(login='lb_mentor', role=RoleChoices.ADMIN)
+        t1 = Task.objects.create(title='M1 Task', topic='Py', month=1, max_score=30)
+        t2 = Task.objects.create(title='M2 Task', topic='Py', month=2, max_score=50)
+
+        students = []
+        for i in range(12):
+            st = create_user(login=f'lb_stud_{i:02d}', name=f'Student {i:02d}', role=RoleChoices.STUDENT, current_month=2)
+            students.append(st)
+            # Month 1 scores: v1 overwritten by v2; studio_00 gets 10+i, etc.
+            Submission.objects.create(user=st, task=t1, version=1, status=SubmissionStatusChoices.ACCEPTED, score=1)
+            Submission.objects.create(user=st, task=t1, version=2, status=SubmissionStatusChoices.ACCEPTED, score=10 + i)
+            # Month 2: reverse order via adjustments
+            ScoreAdjustment.objects.create(user=st, admin=mentor, amount=200 - i * 10, reason='M2 Bonus', month=2)
+
+        api = APIClient()
+        api.force_authenticate(students[0])
+
+        # Month 1: only month 1 counts, paginated, constant SQL queries (no N+1)
+        with self.assertNumQueries(2):
+            r_m1 = api.get('/api/v1/leaderboard', {'month': 1, 'page': 2, 'limit': 5})
+        self.assertEqual(r_m1.status_code, 200)
+        d_m1 = r_m1.json()
+        self.assertEqual(d_m1['month'], 1)
+        self.assertEqual(d_m1['total'], 12)
+        self.assertEqual(d_m1['totalPages'], 3)
+        self.assertEqual(len(d_m1['leaderboard']), 5)
+        self.assertEqual([row['rank'] for row in d_m1['leaderboard']], [6, 7, 8, 9, 10])
+        self.assertEqual(d_m1['leaderboard'][0]['totalScore'], 16)
+
+        # Month 2: lb_stud_00 has 200 pts in month 2 (month 1 ignored)
+        r_m2 = api.get('/api/v1/leaderboard', {'month': 2, 'limit': 3})
+        self.assertEqual(r_m2.status_code, 200)
+        self.assertEqual(r_m2.json()['month'], 2)
+        self.assertEqual(r_m2.json()['leaderboard'][0]['login'], 'lb_stud_00')
+        self.assertEqual(r_m2.json()['leaderboard'][0]['totalScore'], 200)
+
+        # No month param -> all-time sum (10 + 200 = 210 for lb_stud_00)
+        with self.assertNumQueries(2):
+            r_all = api.get('/api/v1/leaderboard', {'limit': 5})
+        self.assertEqual(r_all.status_code, 200)
+        self.assertIsNone(r_all.json()['month'])
+        self.assertEqual(r_all.json()['leaderboard'][0]['login'], 'lb_stud_00')
+        self.assertEqual(r_all.json()['leaderboard'][0]['totalScore'], 210)
+
+    def test_bug_034_telegram_dedupe_polling_offset_broadcast_and_retry(self):
+        from unittest.mock import MagicMock, patch
+        from admin_panel.models import TelegramOutbox, TelegramUpdate
+        from admin_panel.services import outbox_service, telegram_service as tg
+
+        # 1. Duplicate update_id processed once
+        upd = {'update_id': 9001, 'message': {'chat': {'id': 88, 'type': 'private'}, 'from': {'id': 88}, 'text': '/help'}}
+        self.assertTrue(tg.process_telegram_update(upd))
+        self.assertFalse(tg.process_telegram_update(upd))
+        self.assertEqual(TelegramUpdate.objects.filter(update_id=9001).count(), 1)
+        self.assertEqual(TelegramOutbox.objects.count(), 1)
+
+        # 2. Polling advances offset ONLY after successful processing
+        updates_batch = [
+            {'update_id': 9002, 'message': {'chat': {'id': 89, 'type': 'private'}, 'from': {'id': 89}, 'text': '/help'}},
+            {'update_id': 9003, 'message': {'chat': {'id': 90, 'type': 'private'}, 'from': {'id': 90}, 'text': '/help'}},
+        ]
+        mock_resp = MagicMock(status_code=200, json=lambda: {'ok': True, 'result': updates_batch})
+        with patch.object(tg, 'get_bot_token', return_value='tok'), \
+             patch.object(tg.httpx, 'Client') as mock_client, \
+             patch.object(tg, 'process_telegram_update', side_effect=[True, RuntimeError('boom')]):
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+            next_offset = tg.run_telegram_polling(max_cycles=1)
+        # 9002 succeeded -> offset moves to 9003, NOT 9004 because 9003 failed
+        self.assertEqual(next_offset, 9003)
+
+        # 3. Broadcast continues after individual enqueue failure
+        with patch.object(outbox_service, 'enqueue', side_effect=[RuntimeError('bad row'), True]):
+            res = tg.async_broadcast_message(['111', '222'], 'Hello all')
+        self.assertEqual(res['errors'], 1)
+
+        # 4. Real failure records concrete last_error and retry_outbox_queryset retries it
+        TelegramOutbox.objects.all().delete()
+        with self.settings(TELEGRAM_OUTBOX_EAGER=False):
+            outbox_service.enqueue('777', 'Retry test', dedupe_key='err-retry-1')
+        item = TelegramOutbox.objects.get(dedupe_key='err-retry-1')
+        bad_http = MagicMock(status_code=400, json=lambda: {'ok': False, 'description': 'Bad Request: chat not found'}, text='')
+        with patch.object(tg, 'get_bot_token', return_value='tok'), \
+             patch.object(tg.httpx, 'Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.post.return_value = bad_http
+            self.assertFalse(outbox_service.deliver(item.pk))
+        item.refresh_from_db()
+        self.assertIn('chat not found', item.last_error)
+
+        item.status = 'failed'
+        item.save()
+        ok_http = MagicMock(status_code=200, json=lambda: {'ok': True, 'result': {'message_id': 1}}, text='')
+        with patch.object(tg, 'get_bot_token', return_value='tok'), \
+             patch.object(tg.httpx, 'Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.post.return_value = ok_http
+            retry_res = outbox_service.retry_outbox_queryset(TelegramOutbox.objects.filter(pk=item.pk), drain_now=True)
+        self.assertEqual(retry_res, {'queued': 1, 'sent': 1})
+        item.refresh_from_db()
+        self.assertEqual(item.status, 'sent')
+        self.assertEqual(item.last_error, '')
+
+    def test_bug_035_password_validators_and_legacy_hash_compat(self):
+        import bcrypt
+        import hashlib
+        from admin_panel.serializers import RegisterSerializer, ChangePasswordSerializer
+
+        for weak_pw in ('short1!', 'password123', '123456789', 'student_test'):
+            ser = RegisterSerializer(data={'login': 'student_test', 'password': weak_pw, 'groupNumber': 'js-01'})
+            self.assertFalse(ser.is_valid(), f'Weak password unexpectedly accepted: {weak_pw}')
+
+        ok_ser = RegisterSerializer(data={'login': 'student_test', 'password': 'ValidPass#2026', 'groupNumber': 'js-01'})
+        self.assertTrue(ok_ser.is_valid(), ok_ser.errors)
+
+        bad_change = ChangePasswordSerializer(data={'currentPassword': 'x', 'newPassword': '123456789'})
+        self.assertFalse(bad_change.is_valid())
+
+        # Legacy SHA-256 + bcrypt login stays intact
+        legacy_pw = 'LegacyLogin#2026'
+        legacy_hash = bcrypt.hashpw(hashlib.sha256(legacy_pw.encode()).hexdigest().encode(), bcrypt.gensalt()).decode()
+        u = create_user(login='legacy_sha_user', password_hash=legacy_hash, password_uses_sha256=True, role=RoleChoices.STUDENT)
+        resp = self.client.post(
+            '/api/v1/auth/login',
+            data=json.dumps({'login': u.login, 'password': legacy_pw}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_platform_settings_system_config_and_runtime_wiring(self):
+        from django.core.exceptions import ValidationError
+        from rest_framework.test import APIClient
+        from admin_panel.models import PlatformSetting
+        from admin_panel.services.media_service import get_media_limit
+        from admin_panel.services.settings_service import ensure_default_settings, get_setting
+
+        ensure_default_settings()
+        self.assertGreaterEqual(PlatformSetting.objects.count(), 25)
+
+        # Security guardrail: default_role cannot be ADMIN
+        role_setting = PlatformSetting.objects.get(key='default_role')
+        role_setting.value = 'ADMIN'
+        with self.assertRaises(ValidationError):
+            role_setting.full_clean()
+
+        # Dynamic branding updates invalidate system/config cache automatically
+        PlatformSetting.objects.filter(key='platform_name').update(value='Merts Academy')
+        PlatformSetting.objects.get(key='platform_name').save()
+        cfg_resp = self.client.get('/api/v1/system/config')
+        self.assertEqual(cfg_resp.status_code, 200)
+        cfg_data = cfg_resp.json()
+        self.assertEqual(cfg_data['platform']['name'], 'Merts Academy')
+        self.assertIn('features', cfg_data)
+        self.assertIn('gamification', cfg_data)
+
+        # Dynamic upload limit (1 MB)
+        av_setting = PlatformSetting.objects.get(key='avatar_max_mb')
+        av_setting.value = '1'
+        av_setting.full_clean()
+        av_setting.save()
+        self.assertEqual(get_media_limit('AVATAR'), 1 * 1024 * 1024)
+        self.assertEqual(self.client.get('/api/v1/system/config').json()['uploadLimits']['avatarMaxBytes'], 1024 * 1024)
+
+        # Dynamic default_task_points * bonus_task_multiplier
+        PlatformSetting.objects.filter(key='default_task_points').update(value='15')
+        PlatformSetting.objects.get(key='default_task_points').save()
+        PlatformSetting.objects.filter(key='bonus_task_multiplier').update(value='3')
+        PlatformSetting.objects.get(key='bonus_task_multiplier').save()
+        bonus_task = Task.objects.create(title='Dynamic Bonus', topic='Py', is_bonus=True, has_score=True, max_score=None)
+        self.assertEqual(bonus_task.max_score, 45)
+
+        # registration_open = false blocks /api/v1/auth/register
+        reg_open = PlatformSetting.objects.get(key='registration_open')
+        reg_open.value = 'false'
+        reg_open.save()
+        blocked_reg = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps({'login': 'blocked_st', 'password': 'ValidPass#2026', 'groupNumber': 'js-01'}),
+            content_type='application/json',
+        )
+        self.assertEqual(blocked_reg.status_code, 403)
+        reg_open.value = 'true'
+        reg_open.save()
+
+        # easter_egg_enabled = false blocks /api/v1/users/me/easter-egg
+        st = create_user(login='egg_stud', role=RoleChoices.STUDENT, telegram_chat_id='555111')
+        api = APIClient()
+        api.force_authenticate(st)
+        egg = PlatformSetting.objects.get(key='easter_egg_enabled')
+        egg.value = 'false'
+        egg.save()
+        self.assertEqual(api.post('/api/v1/users/me/easter-egg').status_code, 403)
+        egg.value = 'true'
+        egg.save()
+
+    def test_telegram_templates_toggles_and_admin_actions(self):
+        from unittest.mock import patch
+        from admin_panel.models import PlatformSetting, TelegramOutbox, MonthlyScoreArchive
+        from admin_panel.services.achievement_service import ensure_default_achievements
+        from admin_panel.services.settings_service import ensure_default_settings
+
+        ensure_default_settings()
+        ensure_default_achievements()
+
+        st = create_user(login='tpl_student', name='Мария', group_number='js-01', current_month=1, telegram_chat_id='998877', streak_count=7)
+        mentor = create_user(login='tpl_mentor', role=RoleChoices.ADMIN)
+
+        # Toggle off lesson notification
+        tgl = PlatformSetting.objects.get(key='tg_notify_lesson_published')
+        tgl.value = 'false'
+        tgl.save()
+        Lesson.objects.create(title='Silent Lesson', group_number='js-01', month=1, youtube_id='abcdefghijk')
+        self.assertEqual(TelegramOutbox.objects.count(), 0)
+
+        # Custom submission review template with unknown placeholder safely rendered
+        tpl = PlatformSetting.objects.get(key='tg_template_submission_reviewed')
+        tpl.value = 'Привет, {student_name}! {task_title} -> {status} | {score}{unknown_field}'
+        tpl.save()
+        task = Task.objects.create(title='ДЗ-1', topic='Py', month=1, group_number='js-01', max_score=20)
+        TelegramOutbox.objects.all().delete()
+        with self.settings(TELEGRAM_OUTBOX_EAGER=True), \
+             patch('admin_panel.services.telegram_service.send_telegram_message', return_value=True) as mock_send:
+            Submission.objects.create(user=st, task=task, status=SubmissionStatusChoices.ACCEPTED, score=18)
+        self.assertTrue(mock_send.called)
+        sent_text = mock_send.call_args.kwargs['text']
+        self.assertIn('Привет, Мария! ДЗ-1', sent_text)
+        self.assertNotIn('{unknown_field}', sent_text)
+
+        # Dual-case snake_case registration + Tasks search/filtering/pagination
+        snake_reg = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps({'login': 'snake_user', 'password': 'ValidPass#2026', 'group_number': 'js-01'}),
+            content_type='application/json',
+        )
+        self.assertEqual(snake_reg.status_code, 201)
+        token = snake_reg.json()['accessToken']
+        Task.objects.create(title='Обычное ДЗ', topic='Git', month=1, group_number='js-01', is_bonus=False)
+        Task.objects.create(title='Бонус React', topic='React', month=1, group_number='js-01', is_bonus=True)
+        t_resp = self.client.get(
+            '/api/v1/tasks',
+            {'is_bonus': 'true', 'search': 'React', 'ordering': '-order', 'page': 1, 'limit': 5},
+            HTTP_AUTHORIZATION=f'Bearer {token}',
+        )
+        self.assertEqual(t_resp.status_code, 200)
+        self.assertEqual(t_resp.json()['total'], 1)
+        self.assertEqual(t_resp.json()['tasks'][0]['title'], 'Бонус React')
+
+        # PlatformSettingAdmin permissions & UserAdmin bulk actions
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 200)
+
+        staff_only = User.objects.create(login='junior_staff', password_hash='x', role=RoleChoices.ADMIN, id='999999')
+        from django.contrib.auth import get_user_model
+        non_owner_dj = get_user_model().objects.create_user(username='junior_staff', password='Staff-Password-2026!', is_staff=True)
+        self.client.force_login(non_owner_dj)
+        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 200)
+        self.assertEqual(self.client.get(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/').status_code, 200)
+        self.assertEqual(
+            self.client.post(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/', {'value': 'tampered'}).status_code,
+            403,
+        )
+        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/add/').status_code, 403)
+        staff_only.delete()
+
+        self.client.force_login(self.owner)
+        self.client.post('/admin/admin_panel/user/', {'action': 'recalculate_student_scores', '_selected_action': [st.pk]})
+        self.assertEqual(MonthlyScoreArchive.objects.get(user=st, month=1).final_score, 18)
+
+        self.client.post('/admin/admin_panel/user/', {'action': 'reevaluate_achievements', '_selected_action': [st.pk]})
+        self.assertTrue(UserAchievement.objects.filter(user=st, achievement__code='STREAK_MASTER').exists())
+
+        TelegramOutbox.objects.all().delete()
+        broadcast_resp = self.client.post('/admin/admin_panel/user/', {
+            'action': 'send_custom_telegram_message',
+            '_selected_action': [st.pk],
+            'apply': '1',
+            'message_text': 'Важное объявление!',
+        })
+        self.assertEqual(broadcast_resp.status_code, 302)
+        self.assertEqual(TelegramOutbox.objects.filter(chat_id='998877').count(), 1)

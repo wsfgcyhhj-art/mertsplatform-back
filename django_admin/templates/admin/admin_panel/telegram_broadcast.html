@@ -1,0 +1,43 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div style="max-width: 720px; margin: 24px auto; padding: 24px; border-radius: 14px; border: 1px solid #27272a; background: #18181b; color: #f4f4f5;">
+  <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 12px;">{{ title }}</h2>
+  <p style="color: #a1a1aa; margin-bottom: 16px;">
+    Выбрано объектов: <strong>{{ selected_count }}</strong> · Подключённых получателей Telegram: <strong>{{ recipients_count }}</strong>
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    {% for obj in queryset %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}" />
+    {% endfor %}
+    <input type="hidden" name="action" value="{{ action_name }}" />
+    <input type="hidden" name="apply" value="1" />
+
+    <div style="margin-bottom: 16px;">
+      <label for="id_broadcast_text" style="display: block; font-weight: 600; margin-bottom: 8px;">
+        Текст сообщения (поддерживается Telegram HTML)
+      </label>
+      <textarea
+        id="id_broadcast_text"
+        name="message_text"
+        rows="6"
+        required
+        placeholder="Например: Привет! Напоминаем про дедлайн домашнего задания сегодня в 23:59."
+        style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #3f3f46; background: #09090b; color: #f4f4f5; font-size: 14px;"
+      ></textarea>
+    </div>
+
+    <div style="display: flex; gap: 12px;">
+      <button type="submit" style="padding: 10px 20px; border-radius: 10px; border: none; background: #f59e0b; color: #09090b; font-weight: 700; cursor: pointer;">
+        Отправить в Telegram
+      </button>
+      <a href="." style="padding: 10px 20px; border-radius: 10px; border: 1px solid #3f3f46; color: #f4f4f5; text-decoration: none;">
+        Отмена
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

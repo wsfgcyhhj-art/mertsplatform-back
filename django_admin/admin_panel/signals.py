@@ -1,5 +1,5 @@
 import logging
-from django.db.models.signals import pre_save, post_save
+from django.db.models.signals import pre_save, post_save, post_delete
 from django.dispatch import receiver
 from admin_panel.models import (
     User,
@@ -10,6 +10,7 @@ from admin_panel.models import (
     ScoreAdjustment,
     UserAchievement,
     RoleChoices,
+    PlatformSetting,
 )
 from admin_panel.services.achievement_service import evaluate_user_achievements
 from admin_panel.services.telegram_service import (
@@ -149,3 +150,10 @@ def on_user_post_save(sender, instance: User, created, **kwargs):
             new_month = instance.current_month
 
             notify_month_advanced(instance, new_month)
+
+
+@receiver(post_save, sender=PlatformSetting)
+@receiver(post_delete, sender=PlatformSetting)
+def on_platform_setting_changed(sender, **kwargs):
+    from admin_panel.services.settings_service import invalidate_settings_cache
+    invalidate_settings_cache()

@@ -13,10 +13,12 @@ from admin_panel.serializers import (
     UserProfileSerializer,
     ChangePasswordSerializer,
     UserAchievementSerializer,
+    validate_new_password,
 )
 from admin_panel.services.media_service import save_optimized_media_asset, read_upload
 from admin_panel.services.achievement_service import award_achievement, evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.telegram_service import get_bot_username
+from admin_panel.services.settings_service import get_setting
 from admin_panel.services.shop_service import shop_balance
 from admin_panel.views.shop_views import ShopBalanceSerializer
 
@@ -99,6 +101,14 @@ class ChangePasswordView(APIView):
         if not user.check_password(current_password):
             return Response(
                 {"statusCode": 400, "error": "Bad Request", "message": "Неверный текущий пароль"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            validate_new_password(new_password, user=user)
+        except serializers.ValidationError as exc:
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": {"newPassword": exc.detail}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -188,8 +198,13 @@ class EasterEggView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="users_me_easter_egg", summary="Активация пасхалки и получение ачивки", responses={200: dict})
+    @extend_schema(operation_id="users_me_easter_egg", summary="Активация пасхалки и получение ачивки", responses={200: dict, 403: dict})
     def post(self, request):
+        if not get_setting('easter_egg_enabled', True):
+            return Response(
+                {"success": False, "message": "Пасхалка отключена администратором"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         awarded = evaluate_user_achievements(request.user.id, trigger_filter=TriggerTypeChoices.EASTER_EGG)
         if not awarded:
             # Check if user already had it

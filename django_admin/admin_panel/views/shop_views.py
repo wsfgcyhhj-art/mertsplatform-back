@@ -1,10 +1,12 @@
+from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
 from admin_panel.models import ShopOrder, ShopProduct
 from admin_panel.services.shop_service import ShopConflict, place_order, shop_balance
 
@@ -72,11 +74,41 @@ class ShopBalanceView(APIView):
 class ShopProductsView(APIView):
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(responses=ShopCatalogSerializer, summary='Активные товары и баланс магазина')
+    @extend_schema(
+        responses=ShopCatalogSerializer,
+        summary='Активные товары и баланс магазина',
+        parameters=[
+            OpenApiParameter(name='search', type=str, description='Поиск по названию или описанию'),
+            OpenApiParameter(name='inStock', type=bool, description='Только товары в наличии'),
+            OpenApiParameter(name='ordering', type=str, description='Сортировка (order, priceCoins, title, stock)'),
+            OpenApiParameter(name='page', type=int, description='Номер страницы'),
+            OpenApiParameter(name='limit', type=int, description='Размер страницы'),
+        ],
+    )
     def get(self, request):
         products = ShopProduct.objects.filter(is_active=True)
-        data = ShopProductSerializer(products, many=True, context={'request': request}).data
-        return Response({'products': data, **shop_balance(request.user)})
+        search = (qparam(request, 'search') or '').strip()
+        if search:
+            products = products.filter(Q(title__icontains=search) | Q(description__icontains=search))
+        in_stock = parse_bool_param(qparam(request, 'inStock', 'in_stock'))
+        if in_stock is True:
+            products = products.filter(stock__gt=0)
+        elif in_stock is False:
+            products = products.filter(stock=0)
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'order': 'order', 'priceCoins': 'price_coins', 'priceSom': 'price_som', 'title': 'title', 'stock': 'stock'},
+            ['order', 'title'],
+        )
+        products = products.order_by(*ordering)
+        page_meta, items = paginate_list_or_qs(request, products)
+        if isinstance(page_meta, dict) and 'error' in page_meta:
+            return Response({'message': page_meta['error']}, status=400)
+        data = ShopProductSerializer(items, many=True, context={'request': request}).data
+        payload = {'products': data, **shop_balance(request.user)}
+        if page_meta is not None:
+            payload.update(page_meta)
+        return Response(payload)
 
 
 class ShopOrdersView(APIView):
@@ -106,7 +138,23 @@ class ShopOrdersView(APIView):
 class MyShopOrdersView(APIView):
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(responses=ShopOrderSerializer(many=True), summary='История покупок студента')
+    @extend_schema(
+        responses=ShopOrderSerializer(many=True),
+        summary='История покупок студента',
+        parameters=[
+            OpenApiParameter(name='status', type=str, description='Фильтр по статусу (PENDING, COMPLETED, CANCELLED)'),
+            OpenApiParameter(name='ordering', type=str, description='Сортировка (createdAt, priceCoins, status)'),
+        ],
+    )
     def get(self, request):
         orders = request.user.shop_orders.select_related('product')
+        st = (qparam(request, 'status') or '').strip().upper()
+        if st:
+            orders = orders.filter(status=st)
+        ordering = resolve_ordering(
+            qparam(request, 'ordering'),
+            {'createdAt': 'created_at', 'priceCoins': 'price_coins', 'status': 'status'},
+            ['-created_at', '-id'],
+        )
+        orders = orders.order_by(*ordering)
         return Response(ShopOrderSerializer(orders, many=True).data)

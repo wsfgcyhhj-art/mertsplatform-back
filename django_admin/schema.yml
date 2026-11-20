@@ -9,6 +9,42 @@ paths:
     get:
       operationId: achievements_catalog
       summary: Каталог всех достижений платформы с отметкой о получении
+      parameters:
+      - in: query
+        name: category
+        schema:
+          type: string
+        description: Фильтр по категории
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (points, created_at, title)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по названию, коду, описанию
+      - in: query
+        name: triggerType
+        schema:
+          type: string
+        description: Фильтр по типу триггера
+      - in: query
+        name: unlocked
+        schema:
+          type: boolean
+        description: Только открытые/закрытые для текущего пользователя
       tags:
       - v1
       security:
@@ -103,6 +139,42 @@ paths:
     get:
       operationId: admin_users_list
       summary: Список всех пользователей для панели ментора
+      parameters:
+      - in: query
+        name: currentMonth
+        schema:
+          type: integer
+        description: Фильтр по текущему месяцу
+      - in: query
+        name: groupNumber
+        schema:
+          type: string
+        description: Фильтр по группе
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (createdAt, login, name, currentMonth, streakCount)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: role
+        schema:
+          type: string
+        description: Фильтр по роли (STUDENT, ADMIN)
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по логину, имени или Telegram
       tags:
       - v1
       security:
@@ -259,6 +331,13 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
         '409':
           content:
             application/json:
@@ -326,10 +405,30 @@ paths:
           type: string
         description: Фильтр по номеру группы
       - in: query
-        name: month
+        name: limit
         schema:
           type: integer
-        description: Месяц обучения
+        description: Количество записей на странице (1-200)
+      - in: query
+        name: month
+        schema:
+          type: string
+        description: Месяц обучения (число или 'all'; без параметра — за всё время)
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (totalScore, tasksAcceptedCount, streakCount)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по логину, имени или группе
       tags:
       - v1
       security:
@@ -353,10 +452,30 @@ paths:
           type: string
         description: Фильтр по группе (для менторов)
       - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
         name: month
         schema:
           type: string
         description: Номер месяца или 'all'
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (month, order, title, createdAt)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по названию или YouTube ID
       tags:
       - v1
       security:
@@ -510,6 +629,17 @@ paths:
     get:
       operationId: v1_shop_orders_my_list
       summary: История покупок студента
+      parameters:
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (createdAt, priceCoins, status)
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Фильтр по статусу (PENDING, COMPLETED, CANCELLED)
       tags:
       - v1
       security:
@@ -527,6 +657,32 @@ paths:
     get:
       operationId: v1_shop_products_retrieve
       summary: Активные товары и баланс магазина
+      parameters:
+      - in: query
+        name: inStock
+        schema:
+          type: boolean
+        description: Только товары в наличии
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (order, priceCoins, title, stock)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по названию или описанию
       tags:
       - v1
       security:
@@ -543,6 +699,31 @@ paths:
       operationId: submissions_list
       summary: Список решений (сдач) домашних заданий
       parameters:
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: Фильтр по месяцу задания
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (createdAt, score, version, status)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по студенту, заданию или ссылке
       - in: query
         name: status
         schema:
@@ -664,10 +845,50 @@ paths:
       summary: Список практических заданий
       parameters:
       - in: query
+        name: groupNumber
+        schema:
+          type: string
+        description: Фильтр по группе (для менторов)
+      - in: query
+        name: hasScore
+        schema:
+          type: boolean
+        description: Только оцениваемые баллами задания
+      - in: query
+        name: isBonus
+        schema:
+          type: boolean
+        description: Только бонусные или обычные задания
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: Размер страницы
+      - in: query
         name: month
         schema:
           type: string
         description: Номер месяца или 'all'
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Сортировка (month, order, title, maxScore, createdAt)
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: Номер страницы
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Поиск по названию, теме или описанию
+      - in: query
+        name: topic
+        schema:
+          type: string
+        description: Фильтр по теме
       tags:
       - v1
       security:
@@ -896,6 +1117,13 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
   /api/v1/users/me/password:
     put:
       operationId: users_me_change_password
@@ -1042,7 +1270,7 @@ components:
           minLength: 1
         newPassword:
           type: string
-          minLength: 12
+          minLength: 8
           maxLength: 1024
       required:
       - currentPassword
@@ -1262,7 +1490,6 @@ components:
           maxLength: 64
         currentMonth:
           type: integer
-          default: 1
       required:
       - groupNumber
       - login
@@ -1277,7 +1504,7 @@ components:
         new_password:
           type: string
           writeOnly: true
-          minLength: 12
+          minLength: 8
           maxLength: 1024
       required:
       - new_password

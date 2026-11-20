@@ -15,7 +15,7 @@ from admin_panel.models import PasswordResetTicket
 
 class ResetSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=128)
-    new_password = serializers.CharField(min_length=12, max_length=1024, write_only=True, trim_whitespace=False, validators=[validate_new_password])
+    new_password = serializers.CharField(min_length=8, max_length=1024, write_only=True, trim_whitespace=False, validators=[validate_new_password])
 
 
 @method_decorator(csrf_exempt, name='dispatch')

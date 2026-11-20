@@ -15,14 +15,15 @@
 - Перед любыми крупными архитектурными изменениями или миграциями БД сначала проводить аудит кода и задавать 3–5 уточняющих вопросов с вариантами и рекомендацией `[Recommended]` (протокол `grill-me`), не меняя файлы до подтверждения.
 - Использовать установленные скиллы из `~/.codex/skills/` и `.agents/skills/`.
 
-## 2. Текущая архитектура (после миграции на Django Ecosystem)
-- **Единый бэкенд и админка (`django_admin/`):** Django 6.1 + Django REST Framework + `drf-spectacular` (Swagger `/api/docs`, схема `/api/docs-json`) + `djangorestframework-simplejwt` + `django-filter` + **Django Unfold Admin** (`/admin/`).
-- **База данных:** Облачная **Neon PostgreSQL**. Все бизнес-модели (`User`, `Lesson`, `Task`, `Submission`, `ScoreAdjustment`, `Achievement`, `UserAchievement`, `MonthlyScoreArchive`, `MediaAsset`, `Session`) используют **`managed = False`** с точным маппингом существующих таблиц и колонок Prisma. Пароли проверяются через `bcrypt` (`admin_panel/authentication.py`).
-- **Медиа-хранилище (Render-safe):** Загружаемые аватарки (256×256 WebP), баннеры (1600×400 WebP) и иконки ачивок сжимаются через Pillow и сохраняются в таблицу `MediaAsset` в Neon (`admin_panel/services/media_service.py`), отдаются по `GET /api/v1/media/{id}`.
+## 2. Текущая архитектура (Backend-Only: Django Ecosystem)
+- **Репозиторий строго backend-only:** Весь фронтенд вынесен во внешний репозиторий (`https://mertsplatform.vercel.app`); в этом репозитории поддерживаются только `django_admin/`, `docker-compose.yml` и `deploy/`. Проверки: `manage.py check`, `manage.py test admin_panel --noinput`, `manage.py spectacular --validate --fail-on-warn`.
+- **Единый бэкенд и админка (`django_admin/`):** Django 6.1 + Django REST Framework + `drf-spectacular` (Swagger `/api/docs/`, схема `/api/docs-json/`) + `djangorestframework-simplejwt` + `django-filter` + **Django Unfold Admin** (`/admin/`).
+- **База данных:** PostgreSQL (`managed = False` для таблиц Prisma + `managed = True` для `PlatformSetting`). Пароли проверяются через Django hashers и legacy `bcrypt`/`sha256` (`admin_panel/authentication.py`).
+- **Динамические настройки (`PlatformSetting`):** Брендинг, ссылки, правила геймификации/доступа, шаблоны и тумблеры Telegram редактируются из Unfold Admin (`/admin/`) с кешированием и отдачей публичной конфигурации через `GET /api/v1/system/config`.
+- **Медиа-хранилище:** Загружаемые аватарки (256×256 WebP), баннеры (1600×400 WebP) и иконки ачивок сжимаются через Pillow и сохраняются в таблицу `MediaAsset` (`admin_panel/services/media_service.py`), отдаются по `GET /api/v1/media/{id}`.
 - **Геймификация:** Динамический движок правил ачивок (`admin_panel/services/achievement_service.py` + `signals.py`) на 10 триггеров (`MANUAL`, `ON_REGISTER`, `TOTAL_SCORE`, `ACCEPTED_TASKS`, `BONUS_TASKS`, `FIRST_TRY_ACCEPTED`, `PERFECT_SCORE`, `REVISION_ACCEPTED`, `STREAK_DAYS`, `EASTER_EGG`).
-- **Telegram-бот:** Гибридная схема (`admin_panel/services/telegram_service.py`): Webhook `POST /api/v1/telegram/webhook` для Render и `python manage.py runbot` для локального поллинга/Docker.
-- **Фронтенд (`src/`):** React + Vite + Tailwind CSS в строгой графитово-янтарной палитре **Dark Zinc & Amber** (без фиолетовых оттенков). Параллельно внешняя команда пишет свой фронт по OpenAPI-контракту `/api/docs-json`.
-- **Docker:** `django_admin/Dockerfile`, `Dockerfile.frontend`, `nginx.conf`, `docker-compose.yml`.
+- **Telegram-бот и outbox:** Гибридная схема (`admin_panel/services/telegram_service.py`, `outbox_service.py`): Webhook `POST /api/v1/telegram/webhook`, `python manage.py runbot` (сервис `telegram_bot`) и воркер `python manage.py deliver_telegram` (`telegram_worker`).
+- **Docker:** `django_admin/Dockerfile`, `docker-compose.yml` (`db`, `django_web`, `telegram_worker`, `telegram_bot`), `deploy/`.
 
 ## 3. Где читать полную историю и спецификации
 1. `docs/ANTIGRAVITY_HISTORY.md` — полная хронология последних 40 коммитов и изменённых файлов.
