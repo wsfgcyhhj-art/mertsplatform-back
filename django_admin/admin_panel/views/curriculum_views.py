@@ -8,6 +8,7 @@ from admin_panel.serializers import EmptyRequestSerializer
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
+from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -24,8 +25,53 @@ from admin_panel.serializers import (
     TaskSerializer,
     SubmissionSerializer,
     SubmissionReviewSerializer,
+    ErrorResponseSerializer,
+    MessageResponseSerializer,
+    PaginatedMetaMixin,
 )
+
+
+class LessonsListResponseSerializer(PaginatedMetaMixin):
+    lessons = LessonSerializer(many=True)
+
+
+class TasksListResponseSerializer(PaginatedMetaMixin):
+    tasks = TaskSerializer(many=True)
+
+
+class SubmissionCreateSerializer(serializers.Serializer):
+    taskId = serializers.CharField(max_length=64)
+    solutionLink = serializers.CharField(max_length=500)
+    comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class SubmissionsListResponseSerializer(PaginatedMetaMixin):
+    submissions = SubmissionSerializer(many=True)
 from admin_panel.services.telegram_service import notify_submission_created
+from admin_panel.views.auth_views import update_user_streak
+
+ALLOWED_SUBMISSION_TRANSITIONS = {
+    SubmissionStatusChoices.SENT: {
+        SubmissionStatusChoices.SENT,
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.IN_REVIEW: {
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.REVISION: {
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.ACCEPTED: {
+        SubmissionStatusChoices.ACCEPTED,
+        SubmissionStatusChoices.REVISION,
+    },
+}
 
 
 def task_is_visible(task, user):
@@ -40,7 +86,7 @@ class LessonsListView(APIView):
     @extend_schema(
         operation_id="lessons_list",
         summary="Список видеоуроков курса",
-        responses={200: LessonSerializer(many=True)},
+        responses={200: LessonsListResponseSerializer, 400: ErrorResponseSerializer},
         parameters=[
             OpenApiParameter(name="month", type=str, description="Номер месяца или 'all'"),
             OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе (для менторов)"),
@@ -113,7 +159,7 @@ class TasksListView(APIView):
     @extend_schema(
         operation_id="tasks_list",
         summary="Список практических заданий",
-        responses={200: TaskSerializer(many=True)},
+        responses={200: TasksListResponseSerializer, 400: ErrorResponseSerializer},
         parameters=[
             OpenApiParameter(name="month", type=str, description="Номер месяца или 'all'"),
             OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе (для менторов)"),
@@ -177,13 +223,30 @@ class TasksListView(APIView):
         if isinstance(page_meta, dict) and 'error' in page_meta:
             return Response({'message': page_meta['error']}, status=400)
 
-        serializer = TaskSerializer(items, many=True, context={'request': request})
+        task_ids = [t.id for t in items]
+        my_submissions_map = {}
+        if task_ids:
+            for sub in (
+                Submission.objects.filter(user_id=user.id, task_id__in=task_ids)
+                .order_by('task_id', '-version', '-created_at')
+            ):
+                my_submissions_map.setdefault(sub.task_id, sub)
+
+        serializer = TaskSerializer(
+            items,
+            many=True,
+            context={'request': request, 'my_submissions_map': my_submissions_map},
+        )
         payload = {"tasks": serializer.data}
         if page_meta is not None:
             payload.update(page_meta)
         return Response(payload)
 
-    @extend_schema(summary="Создать новое задание (только для ментора/админа)")
+    @extend_schema(
+        summary="Создать новое задание (только для ментора/админа)",
+        request=TaskSerializer,
+        responses={201: TaskSerializer, 400: ErrorResponseSerializer, 403: ErrorResponseSerializer},
+    )
     def post(self, request):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -206,7 +269,11 @@ class TaskDetailView(APIView):
     serializer_class = TaskSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="task_detail", summary="Детальная информация о задании", responses={200: TaskSerializer})
+    @extend_schema(
+        operation_id="task_detail",
+        summary="Детальная информация о задании",
+        responses={200: TaskSerializer, 403: ErrorResponseSerializer, 404: ErrorResponseSerializer},
+    )
     def get(self, request, id: str):
         try:
             task = Task.objects.get(id=id)
@@ -220,7 +287,16 @@ class TaskDetailView(APIView):
         serializer = TaskSerializer(task, context={'request': request})
         return Response(serializer.data)
 
-    @extend_schema(summary="Обновить задание (только для ментора/админа)")
+    @extend_schema(
+        summary="Обновить задание (только для ментора/админа)",
+        request=TaskSerializer,
+        responses={
+            200: TaskSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+        },
+    )
     @transaction.atomic
     def patch(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
@@ -246,14 +322,37 @@ class TaskDetailView(APIView):
         updated = serializer.save()
         return Response(TaskSerializer(updated, context={'request': request}).data)
 
-    @extend_schema(summary="Удалить задание (только для ментора/админа)")
+    @extend_schema(
+        summary="Удалить задание (только для ментора/админа)",
+        responses={
+            200: MessageResponseSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+    )
     def delete(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
                 {"statusCode": 403, "error": "Forbidden", "message": "Admin privileges required"},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        Task.objects.filter(id=id).delete()
+        task = Task.objects.filter(id=id).first()
+        if not task:
+            return Response(
+                {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if Submission.objects.filter(task_id=task.id).exists():
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "Нельзя удалить задание, по которому уже есть сдачи студентов.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        task.delete()
         return Response({"message": "Task deleted successfully"})
 
 
@@ -264,7 +363,7 @@ class SubmissionsView(APIView):
     @extend_schema(
         operation_id="submissions_list",
         summary="Список решений (сдач) домашних заданий",
-        responses={200: SubmissionSerializer(many=True)},
+        responses={200: SubmissionsListResponseSerializer, 400: ErrorResponseSerializer},
         parameters=[
             OpenApiParameter(name="status", type=str, description="Фильтр по статусу (SENT, IN_REVIEW, ACCEPTED, REVISION)"),
             OpenApiParameter(name="taskId", type=str, description="Фильтр по заданию"),
@@ -328,7 +427,17 @@ class SubmissionsView(APIView):
             payload.update(page_meta)
         return Response(payload)
 
-    @extend_schema(summary="Сдать решение задания на проверку ментору")
+    @extend_schema(
+        summary="Сдать решение задания на проверку ментору",
+        request=SubmissionCreateSerializer,
+        responses={
+            201: SubmissionSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+    )
     @transaction.atomic
     def post(self, request):
         user = User.objects.select_for_update().get(pk=request.user.pk)
@@ -357,6 +466,21 @@ class SubmissionsView(APIView):
             URLValidator(schemes=['https', 'http'])(solution_link)
         except ValidationError:
             return Response({'message': 'Укажите HTTP(S) ссылку на решение.'}, status=400)
+
+        if Submission.objects.filter(
+            user_id=user.id,
+            task_id=task.id,
+            status=SubmissionStatusChoices.ACCEPTED,
+        ).exists():
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "Задание уже принято ментором, повторная сдача не требуется.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         # Calculate version
         last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
         version = (last_sub.version + 1) if last_sub else 1
@@ -369,6 +493,7 @@ class SubmissionsView(APIView):
             comment=comment,
             status=SubmissionStatusChoices.SENT,
         )
+        update_user_streak(user)
 
         # Notify mentors via Telegram
         notify_submission_created(submission)
@@ -381,7 +506,11 @@ class SubmissionDetailView(APIView):
     serializer_class = SubmissionSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="submission_detail", summary="Детальная информация о сдаче ДЗ", responses={200: SubmissionSerializer})
+    @extend_schema(
+        operation_id="submission_detail",
+        summary="Детальная информация о сдаче ДЗ",
+        responses={200: SubmissionSerializer, 403: ErrorResponseSerializer, 404: ErrorResponseSerializer},
+    )
     def get(self, request, id: str):
         try:
             sub = Submission.objects.select_related('user', 'task', 'reviewer').get(id=id)
@@ -400,7 +529,17 @@ class SubmissionDetailView(APIView):
         serializer = SubmissionSerializer(sub)
         return Response(serializer.data)
 
-    @extend_schema(summary="Проверка ДЗ ментором (выставление статуса, баллов, комментария)", request=SubmissionReviewSerializer)
+    @extend_schema(
+        summary="Проверка ДЗ ментором (выставление статуса, баллов, комментария)",
+        request=SubmissionReviewSerializer,
+        responses={
+            200: SubmissionSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+    )
     @transaction.atomic
     def patch(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
@@ -420,15 +559,44 @@ class SubmissionDetailView(APIView):
         review = SubmissionReviewSerializer(data=request.data)
         review.is_valid(raise_exception=True)
         data = review.validated_data
+        expected_updated_at = data.get('expectedUpdatedAt')
+        if expected_updated_at is not None and sub.updated_at is not None:
+            if abs((sub.updated_at - expected_updated_at).total_seconds()) > 0.005:
+                return Response(
+                    {
+                        "statusCode": 409,
+                        "error": "Conflict",
+                        "message": "Сдача уже была изменена другим ментором. Обновите данные.",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
         if 'status' in data:
             new_status = data['status'].upper()
-            if new_status in SubmissionStatusChoices.values:
-                sub.status = new_status
+            allowed_targets = ALLOWED_SUBMISSION_TRANSITIONS.get(sub.status, set(SubmissionStatusChoices.values))
+            if new_status not in allowed_targets:
+                return Response(
+                    {
+                        "statusCode": 400,
+                        "error": "Bad Request",
+                        "message": f"Недопустимый переход статуса: {sub.status} -> {new_status}.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            sub.status = new_status
         if 'score' in data:
             score = data['score']
             if type(score) is not int or not 0 <= score <= (sub.task.max_score or 0):
                 return Response({'message': 'Оценка вне допустимого диапазона.'}, status=400)
             sub.score = score
+        if sub.status == SubmissionStatusChoices.ACCEPTED and sub.task.has_score and sub.score is None:
+            return Response(
+                {
+                    "statusCode": 400,
+                    "error": "Bad Request",
+                    "message": "Для оцениваемого задания укажите балл перед принятием.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if 'reviewerComment' in data:
             sub.reviewer_comment = data['reviewerComment'] or None
         if 'voiceFeedbackUrl' in data:

@@ -26,10 +26,20 @@ from admin_panel.models import (
 
 logger = logging.getLogger('telegram_service')
 _last_telegram_error: ContextVar[str] = ContextVar('last_telegram_error', default='')
+_last_telegram_permanent: ContextVar[bool] = ContextVar('last_telegram_permanent', default=False)
 
 
 def get_last_telegram_error() -> str:
     return _last_telegram_error.get()
+
+
+def is_last_telegram_error_permanent() -> bool:
+    return _last_telegram_permanent.get()
+
+
+def reset_last_telegram_error() -> None:
+    _last_telegram_error.set('')
+    _last_telegram_permanent.set(False)
 
 TELEGRAM_CONNECTED = (
     "🎉 <b>Telegram успешно подключён к MertsPlatform!</b> Теперь сюда будут мгновенно "
@@ -87,7 +97,7 @@ def escape_html(text: Any) -> str:
 
 
 def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None, *, voice: str | None = None) -> bool:
-    _last_telegram_error.set('')
+    reset_last_telegram_error()
     token = get_bot_token()
     if not token or not chat_id:
         reason = 'missing_token' if not token else 'missing_chat_id'
@@ -119,10 +129,25 @@ def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] 
             if resp.status_code == 200 and data.get('ok'):
                 return True
             desc = (data.get('description') or resp.text or '')[:180]
+            if not voice and resp.status_code == 400 and "can't parse entities" in desc.lower():
+                logger.warning('Telegram HTML parse error for chat_id=%s; retrying as plain text', chat_id)
+                plain_payload = {k: v for k, v in payload.items() if k != 'parse_mode'}
+                resp = client.post(url, json=plain_payload)
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {}
+                if resp.status_code == 200 and data.get('ok'):
+                    return True
+                desc = (data.get('description') or resp.text or '')[:180]
+
+            err_code = data.get('error_code') if isinstance(data, dict) else None
+            if resp.status_code in (400, 403) or err_code in (400, 403):
+                _last_telegram_permanent.set(True)
             _last_telegram_error.set(f'HTTP {resp.status_code}: {desc}'[:250])
             # Handle 403 Forbidden (bot blocked by user) gracefully
-            if resp.status_code == 403 or (data and data.get('error_code') == 403):
-                logger.info(f"User {chat_id} blocked bot (403 Forbidden).")
+            if resp.status_code == 403 or err_code == 403:
+                logger.info("User %s blocked bot (403 Forbidden).", chat_id)
                 return False
             logger.warning("Telegram send failed chat_id=%s http=%s", chat_id, resp.status_code)
             return False
@@ -546,10 +571,38 @@ def _process_telegram_update(update):
 
 
 def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
+    import time
+
+    mode = getattr(settings, 'TELEGRAM_MODE', 'polling')
+    if mode != 'polling':
+        logger.warning("Telegram polling skipped because TELEGRAM_MODE=%s.", mode)
+        return 0
+
     token = get_bot_token()
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN is not configured. Polling stopped.")
         return 0
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            wh_resp = client.post(
+                f"https://api.telegram.org/bot{token}/deleteWebhook",
+                json={'drop_pending_updates': False},
+            )
+            try:
+                wh_data = wh_resp.json()
+            except Exception:
+                wh_data = {}
+            if wh_resp.status_code == 200 and isinstance(wh_data, dict) and wh_data.get('ok'):
+                logger.info("Telegram webhook deleted before polling (drop_pending_updates=False).")
+            elif wh_resp.status_code != 200:
+                logger.warning(
+                    "Telegram deleteWebhook returned HTTP %s: %s",
+                    wh_resp.status_code,
+                    str(getattr(wh_resp, 'text', ''))[:200],
+                )
+    except Exception as exc:
+        logger.warning("Telegram deleteWebhook request failed: %s", type(exc).__name__)
 
     logger.info("Starting Telegram Bot Long Polling...")
     offset = 0
@@ -577,10 +630,18 @@ def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
                         uid = upd.get('update_id')
                         if isinstance(uid, int):
                             offset = max(offset, uid + 1)
+                else:
+                    snippet = str(getattr(resp, 'text', ''))[:200]
+                    if resp.status_code == 409:
+                        logger.error("Telegram getUpdates 409 Conflict (another poller or webhook active): %s", snippet)
+                    else:
+                        logger.warning("Telegram getUpdates HTTP %s: %s", resp.status_code, snippet)
+                    if max_cycles is not None and cycles >= max_cycles:
+                        break
+                    time.sleep(5 if resp.status_code == 409 else 2)
         except Exception as e:
             logger.warning("Polling error: %s", type(e).__name__)
             if max_cycles is not None and cycles >= max_cycles:
                 break
-            import time
             time.sleep(2)
     return offset

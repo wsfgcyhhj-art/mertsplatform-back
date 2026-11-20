@@ -1,14 +1,26 @@
 import logging
 import secrets
 from django.conf import settings
+from rest_framework import serializers, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
 from drf_spectacular.utils import extend_schema
-from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.serializers import EmptyRequestSerializer, ErrorResponseSerializer
 from admin_panel.services.telegram_service import process_telegram_update
 
 logger = logging.getLogger('telegram_service')
+
+
+class TelegramWebhookUpdateSerializer(serializers.Serializer):
+    update_id = serializers.IntegerField()
+    message = serializers.JSONField(required=False)
+    edited_message = serializers.JSONField(required=False)
+
+
+class TelegramWebhookResponseSerializer(serializers.Serializer):
+    ok = serializers.BooleanField()
+    error = serializers.CharField(required=False)
+    message = serializers.CharField(required=False)
 
 
 class TelegramWebhookView(APIView):
@@ -23,13 +35,24 @@ class TelegramWebhookView(APIView):
     @extend_schema(
         summary="Telegram Bot Webhook Receiver",
         description="Принимает обновления от Telegram Bot API и обрабатывает команды /start, /status, /tasks (/hw), /help и /reset.",
-        responses={200: dict}
+        request=TelegramWebhookUpdateSerializer,
+        responses={
+            200: TelegramWebhookResponseSerializer,
+            403: ErrorResponseSerializer,
+            409: TelegramWebhookResponseSerializer,
+            500: TelegramWebhookResponseSerializer,
+        },
     )
     def post(self, request):
         secret = settings.TELEGRAM_WEBHOOK_SECRET
         supplied = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
         if not secret or not secrets.compare_digest(secret, supplied):
             return Response({"message": "Forbidden"}, status=403)
+        if getattr(settings, 'TELEGRAM_MODE', 'polling') != 'webhook':
+            return Response(
+                {"ok": False, "message": "Webhook is disabled while TELEGRAM_MODE != webhook"},
+                status=status.HTTP_409_CONFLICT,
+            )
         data = request.data
         if isinstance(data, dict):
             try:

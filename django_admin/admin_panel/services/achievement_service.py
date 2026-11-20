@@ -258,6 +258,24 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
                     awarded.append(res)
         return awarded
 
+    if trigger_filter == TriggerTypeChoices.STREAK_DAYS:
+        user = User.objects.filter(id=user_id).only('id', 'streak_count').first()
+        current_streak = user.streak_count if user else 0
+        for ach in candidates:
+            if ach.trigger_type != TriggerTypeChoices.STREAK_DAYS:
+                continue
+            threshold = ach.threshold if ach.threshold is not None else 1
+            if ach.code == 'STREAK_MASTER' and int(streak_days_override) != 7:
+                threshold = int(streak_days_override)
+            if current_streak >= threshold:
+                if ach.code == 'STREAK_MASTER' and int(streak_points_override) != 35 and ach.points != int(streak_points_override):
+                    ach.points = int(streak_points_override)
+                    ach.save(update_fields=['points'])
+                res = award_achievement(user_id, ach.code)
+                if res:
+                    awarded.append(res)
+        return awarded
+
     # 2. Metric-Based Dynamic Triggers
     all_submissions = list(
         Submission.objects.filter(user_id=user_id)

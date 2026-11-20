@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict
 
 from django.core.cache import cache
@@ -306,6 +307,86 @@ DEFAULT_SETTINGS_MAP = {item['key']: item for item in DEFAULT_SETTINGS}
 _TRUE_VALUES = {'true', '1', 'yes', 'on'}
 _FALSE_VALUES = {'false', '0', 'no', 'off', ''}
 
+SENSITIVE_KEY_TOKENS = (
+    'secret',
+    'token',
+    'password',
+    'passwd',
+    'private',
+    'api_key',
+    'apikey',
+    'webhook',
+    'credential',
+)
+
+_ALLOWED_TG_HTML_TAGS = {
+    'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
+    'span', 'tg-spoiler', 'a', 'tg-emoji', 'code', 'pre', 'blockquote',
+}
+
+
+def is_sensitive_setting_key(key: str) -> bool:
+    low = (key or '').strip().lower()
+    return any(tok in low for tok in SENSITIVE_KEY_TOKENS)
+
+
+class _TelegramHTMLValidator(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.stack: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t not in _ALLOWED_TG_HTML_TAGS:
+            raise ValidationError(f'Неподдерживаемый Telegram HTML-тег: <{tag}>.')
+        if t == 'a':
+            href = dict(attrs).get('href', '').strip()
+            if href and not (href.startswith(('http://', 'https://', 'tg://', 'mailto:', '{'))):
+                raise ValidationError('Недопустимый href в шаблоне Telegram.')
+        self.stack.append(t)
+
+    def handle_startendtag(self, tag, attrs):
+        raise ValidationError(f'Самозакрывающийся тег <{tag}/> не поддерживается Telegram HTML.')
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if not self.stack or self.stack[-1] != t:
+            expected = f'</{self.stack[-1]}>' if self.stack else 'нет открытого тега'
+            raise ValidationError(f'Нарушен баланс HTML-тегов в шаблоне Telegram: получено </{tag}> ({expected}).')
+        self.stack.pop()
+
+
+def validate_telegram_html(text: str) -> None:
+    parser = _TelegramHTMLValidator()
+    try:
+        parser.feed(text)
+        parser.close()
+    except AssertionError as exc:
+        raise ValidationError(f'Некорректный HTML в шаблоне Telegram: {exc}') from exc
+    if parser.stack:
+        raise ValidationError(f'Незакрытый HTML-тег в шаблоне Telegram: <{parser.stack[-1]}>.')
+
+
+def cache_get_safe(key: str) -> Any:
+    try:
+        return cache.get(key)
+    except _DB_UNAVAILABLE_ERRORS:
+        return None
+
+
+def cache_set_safe(key: str, value: Any, timeout: int) -> None:
+    try:
+        cache.set(key, value, timeout)
+    except _DB_UNAVAILABLE_ERRORS:
+        pass
+
+
+def cache_delete_safe(key: str) -> None:
+    try:
+        cache.delete(key)
+    except _DB_UNAVAILABLE_ERRORS:
+        pass
+
 
 def parse_setting_value(raw: str, value_type: str) -> Any:
     text = '' if raw is None else str(raw)
@@ -326,9 +407,12 @@ def parse_setting_value(raw: str, value_type: str) -> Any:
     return text
 
 
-def validate_setting_value(key: str, raw: str, value_type: str) -> str:
+def validate_setting_value(key: str, raw: str, value_type: str, *, is_public: bool = False) -> str:
     text = '' if raw is None else str(raw)
     stripped = text.strip()
+
+    if is_public and is_sensitive_setting_key(key):
+        raise ValidationError(f'Настройка "{key}" содержит чувствительное имя и не может быть публичной (is_public=True).')
 
     if value_type == 'int':
         try:
@@ -367,13 +451,15 @@ def validate_setting_value(key: str, raw: str, value_type: str) -> str:
         raise ValidationError(f'Значение "{key}" должно быть от 1 до 365.')
     elif key in ('frontend_url', 'support_url') and stripped:
         URLValidator(schemes=['http', 'https'])(stripped)
+    elif key.startswith('tg_template_') and stripped:
+        validate_telegram_html(text)
 
     return text
 
 
 def invalidate_settings_cache() -> None:
-    cache.delete(SETTINGS_CACHE_KEY)
-    cache.delete(SYSTEM_CONFIG_CACHE_KEY)
+    cache_delete_safe(SETTINGS_CACHE_KEY)
+    cache_delete_safe(SYSTEM_CONFIG_CACHE_KEY)
 
 
 def ensure_default_settings() -> None:
@@ -409,7 +495,7 @@ def _fallback_settings_dict() -> Dict[str, Any]:
 
 def get_all_settings(force_refresh: bool = False) -> Dict[str, Any]:
     if not force_refresh:
-        cached = cache.get(SETTINGS_CACHE_KEY)
+        cached = cache_get_safe(SETTINGS_CACHE_KEY)
         if cached is not None:
             return cached
 
@@ -419,7 +505,7 @@ def get_all_settings(force_refresh: bool = False) -> Dict[str, Any]:
         from admin_panel.models import PlatformSetting
         for row in PlatformSetting.objects.all():
             data[row.key] = parse_setting_value(row.value, row.value_type)
-        cache.set(SETTINGS_CACHE_KEY, data, SETTINGS_CACHE_TTL)
+        cache_set_safe(SETTINGS_CACHE_KEY, data, SETTINGS_CACHE_TTL)
     except _DB_UNAVAILABLE_ERRORS:
         # Fallback if migrations haven't created PlatformSetting yet or running SimpleTestCase.
         return data
@@ -442,11 +528,13 @@ def get_public_settings() -> Dict[str, Any]:
     try:
         from admin_panel.models import PlatformSetting
         for row in PlatformSetting.objects.filter(is_public=True).order_by('category', 'key'):
+            if is_sensitive_setting_key(row.key):
+                continue
             result[row.key] = parse_setting_value(row.value, row.value_type)
         return result
     except _DB_UNAVAILABLE_ERRORS:
         for item in DEFAULT_SETTINGS:
-            if item['is_public']:
+            if item['is_public'] and not is_sensitive_setting_key(item['key']):
                 result[item['key']] = all_values.get(
                     item['key'], parse_setting_value(item['value'], item['value_type'])
                 )

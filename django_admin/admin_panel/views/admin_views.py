@@ -4,6 +4,7 @@ from rest_framework import serializers
 from admin_panel.api_utils import qparam, resolve_ordering, paginate_list_or_qs
 from admin_panel.serializers import validate_new_password
 from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.services.score_service import annotate_user_scores
 from admin_panel.permissions import is_owner
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -21,7 +22,34 @@ from admin_panel.serializers import (
     UserProfileSerializer,
     ScoreAdjustmentSerializer,
     ScoreAdjustmentRequestSerializer,
+    ErrorResponseSerializer,
+    PaginatedMetaMixin,
 )
+
+
+class AdminUsersListResponseSerializer(PaginatedMetaMixin):
+    users = UserProfileSerializer(many=True)
+
+
+class AdminCreateUserSerializer(serializers.Serializer):
+    login = serializers.CharField(max_length=255)
+    password = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False)
+    role = serializers.ChoiceField(choices=RoleChoices.choices, required=False, default=RoleChoices.STUDENT)
+    name = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+    telegram = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+    groupNumber = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=64)
+    currentMonth = serializers.IntegerField(required=False, min_value=1, max_value=24, default=1)
+
+
+class AdminUserRoleSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=RoleChoices.choices)
+
+
+class AdminStatsResponseSerializer(serializers.Serializer):
+    totalStudents = serializers.IntegerField()
+    totalSubmissions = serializers.IntegerField()
+    pendingSubmissions = serializers.IntegerField()
+    acceptedSubmissions = serializers.IntegerField()
 
 
 class AdminUsersListView(APIView):
@@ -31,7 +59,11 @@ class AdminUsersListView(APIView):
     @extend_schema(
         operation_id="admin_users_list",
         summary="Список всех пользователей для панели ментора",
-        responses={200: UserProfileSerializer(many=True)},
+        responses={
+            200: AdminUsersListResponseSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+        },
         parameters=[
             OpenApiParameter(name="role", type=str, description="Фильтр по роли (STUDENT, ADMIN)"),
             OpenApiParameter(name="groupNumber", type=str, description="Фильтр по группе"),
@@ -49,7 +81,7 @@ class AdminUsersListView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        qs = User.objects.all()
+        qs = annotate_user_scores(User.objects.select_related('study_group'))
         role = qparam(request, 'role')
         if role:
             qs = qs.filter(role=role.upper())
@@ -88,7 +120,11 @@ class AdminUsersListView(APIView):
             payload.update(page_meta)
         return Response(payload)
 
-    @extend_schema(summary="Создать пользователя администратором")
+    @extend_schema(
+        summary="Создать пользователя администратором",
+        request=AdminCreateUserSerializer,
+        responses={201: UserProfileSerializer, 400: ErrorResponseSerializer, 403: ErrorResponseSerializer},
+    )
     def post(self, request):
         if not is_owner(request.user):
             return Response({"message": "Owner privileges required"}, status=403)
@@ -114,6 +150,28 @@ class AdminUsersListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        raw_month = request.data.get('currentMonth', 1)
+        if raw_month in (None, ''):
+            current_month = 1
+        else:
+            if isinstance(raw_month, bool):
+                return Response(
+                    {"statusCode": 400, "error": "Bad Request", "message": "currentMonth must be an integer between 1 and 24"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                current_month = int(raw_month)
+            except (TypeError, ValueError):
+                return Response(
+                    {"statusCode": 400, "error": "Bad Request", "message": "currentMonth must be an integer between 1 and 24"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not 1 <= current_month <= 24:
+                return Response(
+                    {"statusCode": 400, "error": "Bad Request", "message": "currentMonth must be between 1 and 24"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         user = User(
             login=login,
             role=role if role in RoleChoices.values else RoleChoices.STUDENT,
@@ -121,7 +179,7 @@ class AdminUsersListView(APIView):
             name=request.data.get('name') or None,
             telegram=request.data.get('telegram') or None,
             group_number=request.data.get('groupNumber') or 'ALL',
-            current_month=request.data.get('currentMonth', 1),
+            current_month=current_month,
         )
         try:
             validate_new_password(password)
@@ -137,7 +195,12 @@ class AdminUserRoleView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="admin_user_role", summary="Изменить роль пользователя (STUDENT / ADMIN)", responses={200: UserProfileSerializer})
+    @extend_schema(
+        operation_id="admin_user_role",
+        summary="Изменить роль пользователя (STUDENT / ADMIN)",
+        request=AdminUserRoleSerializer,
+        responses={200: UserProfileSerializer, 403: ErrorResponseSerializer, 404: ErrorResponseSerializer},
+    )
     def patch(self, request, id: str):
         if not is_owner(request.user):
             return Response({"message": "Owner privileges required"}, status=403)
@@ -167,9 +230,19 @@ class AdminScoreAdjustmentView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="admin_score_adjustment", summary="Начисление или списание бонусных баллов ментором",
-                   request=ScoreAdjustmentRequestSerializer, responses={201: ScoreAdjustmentSerializer},
-                   parameters=[OpenApiParameter('Idempotency-Key', str, OpenApiParameter.HEADER, required=True)])
+    @extend_schema(
+        operation_id="admin_score_adjustment",
+        summary="Начисление или списание бонусных баллов ментором",
+        request=ScoreAdjustmentRequestSerializer,
+        responses={
+            201: ScoreAdjustmentSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+        parameters=[OpenApiParameter('Idempotency-Key', str, OpenApiParameter.HEADER, required=True)],
+    )
     def post(self, request):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
@@ -222,7 +295,11 @@ class AdminStatsView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="admin_stats", summary="Сводная статистика учебной активности", responses={200: dict})
+    @extend_schema(
+        operation_id="admin_stats",
+        summary="Сводная статистика учебной активности",
+        responses={200: AdminStatsResponseSerializer, 403: ErrorResponseSerializer},
+    )
     def get(self, request):
         if request.user.role != RoleChoices.ADMIN:
             return Response(

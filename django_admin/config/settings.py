@@ -148,6 +148,20 @@ DATABASES = {
     )
 }
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'merts-test-cache',
+    } if TESTING else {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache',
+        'OPTIONS': {
+            'MAX_ENTRIES': 2000,
+            'CULL_FREQUENCY': 4,
+        },
+    }
+}
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -319,7 +333,7 @@ UNFOLD = {
                         "link": reverse_lazy("admin:admin_panel_monthlyscorearchive_changelist"),
                     },
                     {
-                        "title": "Медиа-хранилище (Neon DB)",
+                        "title": "Медиа-хранилище (PostgreSQL)",
                         "icon": "perm_media",
                         "link": reverse_lazy("admin:admin_panel_mediaasset_changelist"),
                     },
@@ -438,6 +452,13 @@ LOGGING = {
     'loggers': {'telegram_service': {'handlers': ['console'], 'level': 'INFO', 'propagate': False}},
 }
 
-TELEGRAM_OUTBOX_EAGER = not TESTING
-AUTH_RATE_LIMIT = 10
-AUTH_TRUSTED_PROXY_HOPS = max(0, int(os.getenv('AUTH_TRUSTED_PROXY_HOPS', '0')))
+TELEGRAM_MODE = os.getenv('TELEGRAM_MODE', 'polling').strip().lower()
+if TELEGRAM_MODE not in ('polling', 'webhook', 'disabled'):
+    TELEGRAM_MODE = 'polling'
+TELEGRAM_OUTBOX_EAGER = (
+    False if TESTING else os.getenv('TELEGRAM_OUTBOX_EAGER', 'False').strip().lower() in ('true', '1')
+)
+AUTH_RATE_LIMIT = int(os.getenv('AUTH_RATE_LIMIT', '10'))
+AUTH_REFRESH_RATE_LIMIT = int(os.getenv('AUTH_REFRESH_RATE_LIMIT', '60'))
+_default_proxy_hops = '0' if TESTING else ('1' if os.getenv('TRUST_HTTPS_PROXY', '1') == '1' else '0')
+AUTH_TRUSTED_PROXY_HOPS = max(0, int(os.getenv('AUTH_TRUSTED_PROXY_HOPS', _default_proxy_hops)))

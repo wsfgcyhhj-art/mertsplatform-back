@@ -421,7 +421,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         preview_html = admin_obj.icon_preview(ach_instance)
         self.assertIn(f'src="{icon_url}"', preview_html)
         badge_html = admin_obj.icon_source_badge(ach_instance)
-        self.assertIn('Кастомный файл (Neon DB)', badge_html)
+        self.assertIn('Кастомный файл (PostgreSQL)', badge_html)
 
     def test_10_educational_notification_triggers_and_antispam(self):
         from unittest.mock import patch, MagicMock

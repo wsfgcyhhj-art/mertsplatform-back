@@ -5,20 +5,27 @@ from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.utils.decorators import decorator_from_middleware, method_decorator
 from django.views.decorators.csrf import csrf_exempt
 import re
-from admin_panel.throttles import AuthThrottle
+from admin_panel.throttles import AuthThrottle, RefreshAuthThrottle
 from admin_panel.authentication import rotate_refresh, revoke_session
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
 from rest_framework.views import APIView
+from rest_framework import serializers
 from rest_framework.response import Response
 from admin_panel.api_utils import DualCaseJSONParser
 from rest_framework.permissions import AllowAny
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
 from admin_panel.models import User, Session, RoleChoices, StudyGroup
-from admin_panel.serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer
+from admin_panel.serializers import (
+    RegisterSerializer,
+    LoginSerializer,
+    UserProfileSerializer,
+    ErrorResponseSerializer,
+    MessageResponseSerializer,
+)
 from admin_panel.authentication import generate_tokens_for_user
 from admin_panel.services.achievement_service import evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.group_service import parse_month_from_group_name
@@ -70,25 +77,43 @@ def set_auth_cookies(request, response, refresh_token: str):
 
 def update_user_streak(user: User) -> int:
     now = timezone.now()
+    changed = False
     if not user.last_active_date:
         user.streak_count = 1
         user.last_active_date = now
-        user.save()
-        return user.streak_count
-
-    days_diff = (now.date() - user.last_active_date.date()).days
-    if days_diff == 0:
-        pass
-    elif days_diff == 1:
-        user.streak_count += 1
-        user.last_active_date = now
-        user.save()
+        changed = True
     else:
-        user.streak_count = 1
-        user.last_active_date = now
-        user.save()
+        days_diff = (now.date() - user.last_active_date.date()).days
+        if days_diff == 1:
+            user.streak_count = (user.streak_count or 0) + 1
+            user.last_active_date = now
+            changed = True
+        elif days_diff > 1 or days_diff < 0:
+            user.streak_count = 1
+            user.last_active_date = now
+            changed = True
 
+    if changed:
+        user.save(update_fields=['streak_count', 'last_active_date', 'updated_at'])
+        evaluate_user_achievements(user.id, trigger_filter=TriggerTypeChoices.STREAK_DAYS)
     return user.streak_count
+
+
+class TokenPairResponseSerializer(serializers.Serializer):
+    accessToken = serializers.CharField()
+    refreshToken = serializers.CharField()
+
+
+class AuthSessionResponseSerializer(TokenPairResponseSerializer):
+    user = UserProfileSerializer()
+
+
+class RefreshTokenRequestSerializer(serializers.Serializer):
+    refreshToken = serializers.CharField(required=False, allow_blank=True)
+
+
+class CsrfTokenResponseSerializer(serializers.Serializer):
+    csrfToken = serializers.CharField()
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -102,7 +127,12 @@ class RegisterView(APIView):
     @extend_schema(
         summary="Регистрация нового студента",
         request=RegisterSerializer,
-        responses={201: dict, 400: dict, 403: dict, 409: dict}
+        responses={
+            201: AuthSessionResponseSerializer,
+            400: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
     )
     @transaction.atomic
     def post(self, request):
@@ -205,7 +235,11 @@ class LoginView(APIView):
     @extend_schema(
         summary="Аутентификация пользователя (логин + пароль)",
         request=LoginSerializer,
-        responses={200: dict, 401: dict}
+        responses={
+            200: AuthSessionResponseSerializer,
+            400: ErrorResponseSerializer,
+            401: ErrorResponseSerializer,
+        },
     )
     @transaction.atomic
     def post(self, request):
@@ -245,7 +279,7 @@ class LoginView(APIView):
 
 @method_decorator(auth_csrf_protect, name='dispatch')
 class RefreshTokenView(APIView):
-    throttle_classes = (AuthThrottle,)
+    throttle_classes = (RefreshAuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)
@@ -253,7 +287,12 @@ class RefreshTokenView(APIView):
     @extend_schema(
         operation_id="auth_refresh",
         summary="Обновление пары токенов по refresh-токену",
-        responses={200: dict, 401: dict}
+        request=RefreshTokenRequestSerializer,
+        responses={
+            200: TokenPairResponseSerializer,
+            401: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+        },
     )
     def post(self, request):
         incoming_token = (
@@ -266,10 +305,12 @@ class RefreshTokenView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        rotated = rotate_refresh(incoming_token)
-        if not rotated:
-            return Response({'message': 'Invalid or expired refresh token'}, status=401)
-        access_token, new_refresh_token, new_session = rotated
+        with transaction.atomic():
+            rotated = rotate_refresh(incoming_token)
+            if not rotated:
+                return Response({'message': 'Invalid or expired refresh token'}, status=401)
+            access_token, new_refresh_token, new_session = rotated
+            update_user_streak(new_session.user)
         response = Response({
             "accessToken": access_token,
             "refreshToken": new_refresh_token,
@@ -280,7 +321,7 @@ class RefreshTokenView(APIView):
 
 @method_decorator(auth_csrf_protect, name='dispatch')
 class LogoutView(APIView):
-    throttle_classes = (AuthThrottle,)
+    throttle_classes = (RefreshAuthThrottle,)
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)
@@ -288,7 +329,8 @@ class LogoutView(APIView):
     @extend_schema(
         operation_id="auth_logout",
         summary="Выход из системы и удаление сессии",
-        responses={200: dict}
+        request=RefreshTokenRequestSerializer,
+        responses={200: MessageResponseSerializer, 403: ErrorResponseSerializer},
     )
     def post(self, request):
         incoming_token = (
@@ -305,8 +347,9 @@ class LogoutView(APIView):
 
 
 class CsrfTokenView(APIView):
+    serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)
-    @extend_schema(responses={200: dict})
+    @extend_schema(responses={200: CsrfTokenResponseSerializer})
     def get(self, request):
         return Response({'csrfToken': get_token(request)})

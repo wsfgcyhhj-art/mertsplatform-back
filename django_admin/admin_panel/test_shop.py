@@ -43,12 +43,12 @@ class ShopTests(TransactionTestCase):
         ScoreAdjustment.objects.create(user=self.student, admin=owner, amount=-2, reason='Штраф', month=1)
         profile = self.api.get('/api/v1/users/me').json()
         self.assertEqual(profile['stats']['totalScore'], 35)
-        self.assertEqual(profile['totalEarnedPoints'], 120)
+        self.assertEqual(profile['totalEarnedPoints'], 100)
         self.assertEqual(self.api.get('/api/v1/shop/balance').json(),
-                         {'totalEarnedPoints': 120, 'spentPoints': 0, 'availableCoins': 120})
+                         {'totalEarnedPoints': 100, 'spentPoints': 0, 'availableCoins': 100})
         self.assertEqual(self.api.post('/api/v1/shop/orders', {'productId': self.product.pk}).status_code, 201)
         profile = self.api.get('/api/v1/users/me').json()
-        self.assertEqual((profile['stats']['totalScore'], profile['availableCoins']), (35, 80))
+        self.assertEqual((profile['stats']['totalScore'], profile['availableCoins']), (35, 60))
 
     def test_order_retry_insufficient_balance_and_cancellation(self):
         payload = {'productId': self.product.pk, 'requestId': str(uuid4())}

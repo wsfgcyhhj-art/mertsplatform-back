@@ -1,8 +1,9 @@
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
-from django.db.models import Sum, Count, Q, OuterRef, Subquery, F, Value, IntegerField
-from django.db.models.functions import Coalesce
+from admin_panel.services.score_service import annotate_user_scores
+from django.db.models import Count, Q
 from rest_framework.views import APIView
+from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -16,8 +17,66 @@ from admin_panel.models import (
     ScoreAdjustment,
     RoleChoices,
 )
-from admin_panel.serializers import AchievementSerializer
+from admin_panel.serializers import (
+    AchievementSerializer,
+    ErrorResponseSerializer,
+    PaginatedMetaMixin,
+)
 from admin_panel.services.achievement_service import ensure_default_achievements
+
+
+class AchievementCatalogItemSerializer(AchievementSerializer):
+    isUnlocked = serializers.BooleanField()
+    unlockedCount = serializers.IntegerField()
+
+    class Meta(AchievementSerializer.Meta):
+        fields = AchievementSerializer.Meta.fields + ('isUnlocked', 'unlockedCount')
+
+
+class AchievementsListResponseSerializer(PaginatedMetaMixin):
+    achievements = AchievementCatalogItemSerializer(many=True)
+
+
+class RecentAchieverSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField(allow_null=True)
+    login = serializers.CharField()
+    avatarUrl = serializers.CharField(allow_null=True)
+    awardedAt = serializers.DateTimeField()
+
+
+class AchievementDetailItemSerializer(AchievementCatalogItemSerializer):
+    recentAchievers = RecentAchieverSerializer(many=True)
+
+    class Meta(AchievementCatalogItemSerializer.Meta):
+        fields = AchievementCatalogItemSerializer.Meta.fields + ('recentAchievers',)
+
+
+class AchievementDetailResponseSerializer(serializers.Serializer):
+    achievement = AchievementDetailItemSerializer()
+
+
+class LeaderboardEntrySerializer(serializers.Serializer):
+    rank = serializers.IntegerField()
+    id = serializers.CharField()
+    name = serializers.CharField(allow_null=True)
+    login = serializers.CharField()
+    avatarUrl = serializers.CharField(allow_null=True)
+    groupNumber = serializers.CharField(allow_null=True)
+    currentMonth = serializers.IntegerField()
+    streakCount = serializers.IntegerField()
+    totalScore = serializers.IntegerField()
+    tasksSentCount = serializers.IntegerField()
+    tasksAcceptedCount = serializers.IntegerField()
+
+
+class LeaderboardResponseSerializer(serializers.Serializer):
+    total = serializers.IntegerField()
+    page = serializers.IntegerField()
+    limit = serializers.IntegerField()
+    totalPages = serializers.IntegerField()
+    month = serializers.IntegerField(allow_null=True)
+    leaderboard = LeaderboardEntrySerializer(many=True)
 
 
 class AchievementsCatalogView(APIView):
@@ -27,7 +86,7 @@ class AchievementsCatalogView(APIView):
     @extend_schema(
         operation_id="achievements_catalog",
         summary="Каталог всех достижений платформы с отметкой о получении",
-        responses={200: AchievementSerializer(many=True)},
+        responses={200: AchievementsListResponseSerializer, 400: ErrorResponseSerializer},
         parameters=[
             OpenApiParameter(name="category", type=str, description="Фильтр по категории"),
             OpenApiParameter(name="triggerType", type=str, description="Фильтр по типу триггера"),
@@ -101,7 +160,7 @@ class AchievementDetailView(APIView):
     @extend_schema(
         operation_id="achievements_retrieve",
         summary="Детальная информация о достижении",
-        responses={200: AchievementSerializer, 404: dict},
+        responses={200: AchievementDetailResponseSerializer, 404: ErrorResponseSerializer},
     )
     def get(self, request, id: str):
         ach = Achievement.objects.filter(
@@ -145,7 +204,7 @@ class LeaderboardView(APIView):
     @extend_schema(
         operation_id="leaderboard_list",
         summary="Таблица рейтинга студентов (лидерборд)",
-        responses={200: dict},
+        responses={200: LeaderboardResponseSerializer, 400: ErrorResponseSerializer},
         parameters=[
             OpenApiParameter(name="month", type=str, description="Месяц обучения (число или 'all'; без параметра — за всё время)"),
             OpenApiParameter(name="groupNumber", type=str, description="Фильтр по номеру группы"),
@@ -184,58 +243,7 @@ class LeaderboardView(APIView):
                 Q(login__icontains=search) | Q(name__icontains=search) | Q(group_number__icontains=search)
             )
 
-        # BUG-033: Pure SQL aggregation via Subquery + Coalesce (zero N+1 queries)
-        latest_sub_id = Submission.objects.filter(
-            user_id=OuterRef('user_id'),
-            task_id=OuterRef('task_id'),
-            status=SubmissionStatusChoices.ACCEPTED,
-        ).order_by('-version', '-created_at', '-id').values('id')[:1]
-
-        accepted_filter = Q(user_id=OuterRef('pk'), status=SubmissionStatusChoices.ACCEPTED, id=Subquery(latest_sub_id))
-        sent_filter = Q(user_id=OuterRef('pk'))
-        adj_filter = Q(user_id=OuterRef('pk'))
-        if target_month is not None:
-            accepted_filter &= Q(task__month=target_month)
-            sent_filter &= Q(task__month=target_month)
-            adj_filter &= Q(month=target_month)
-
-        sub_score_sq = Subquery(
-            Submission.objects.filter(accepted_filter)
-            .values('user_id')
-            .annotate(total=Coalesce(Sum('score'), 0))
-            .values('total')[:1],
-            output_field=IntegerField(),
-        )
-        accepted_cnt_sq = Subquery(
-            Submission.objects.filter(accepted_filter)
-            .values('user_id')
-            .annotate(cnt=Count('id'))
-            .values('cnt')[:1],
-            output_field=IntegerField(),
-        )
-        sent_cnt_sq = Subquery(
-            Submission.objects.filter(sent_filter)
-            .values('user_id')
-            .annotate(cnt=Count('id'))
-            .values('cnt')[:1],
-            output_field=IntegerField(),
-        )
-        adj_score_sq = Subquery(
-            ScoreAdjustment.objects.filter(adj_filter)
-            .values('user_id')
-            .annotate(total=Coalesce(Sum('amount'), 0))
-            .values('total')[:1],
-            output_field=IntegerField(),
-        )
-
-        students_qs = students_qs.annotate(
-            sub_score=Coalesce(sub_score_sq, Value(0)),
-            adj_score=Coalesce(adj_score_sq, Value(0)),
-            tasks_accepted_count=Coalesce(accepted_cnt_sq, Value(0)),
-            tasks_sent_count=Coalesce(sent_cnt_sq, Value(0)),
-        ).annotate(
-            total_score=F('sub_score') + F('adj_score'),
-        )
+        students_qs = annotate_user_scores(students_qs, month=target_month)
 
         ordering = resolve_ordering(
             qparam(request, 'ordering'),

@@ -75,7 +75,7 @@ class SubscriptionIntegrationTests(TransactionTestCase):
             Task.objects.create(title='All', topic='x', month=1, group_number=' all ')
             self.assertEqual({c.args[0] for c in send.call_args_list}, {'10', '20'})
 
-    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret', FRONTEND_URL='https://course.example')
+    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret', TELEGRAM_MODE='webhook', FRONTEND_URL='https://course.example')
     def test_profile_link_and_student_commands(self):
         from admin_panel.models import Task, Submission
         from admin_panel.test_support import create_user

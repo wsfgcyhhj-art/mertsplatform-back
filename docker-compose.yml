@@ -25,14 +25,19 @@ services:
     environment:
       DEBUG: "False"
       TRUST_HTTPS_PROXY: "1"
+      AUTH_TRUSTED_PROXY_HOPS: "${AUTH_TRUSTED_PROXY_HOPS:-1}"
+      TELEGRAM_MODE: "${TELEGRAM_MODE:-polling}"
+      TELEGRAM_OUTBOX_EAGER: "${TELEGRAM_OUTBOX_EAGER:-False}"
     command:
       - sh
       - -c
       - >-
+        python manage.py install_base_schema &&
         python manage.py install_subscriptions &&
         python manage.py install_security &&
         python manage.py install_shop --missing-only &&
         python manage.py migrate --noinput &&
+        python manage.py createcachetable &&
         python manage.py collectstatic --noinput &&
         exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
     ports:
@@ -55,6 +60,9 @@ services:
     pull_policy: never
     restart: unless-stopped
     env_file: .env
+    environment:
+      TELEGRAM_MODE: "${TELEGRAM_MODE:-polling}"
+      TELEGRAM_OUTBOX_EAGER: "False"
     command: ["python", "manage.py", "deliver_telegram"]
     volumes:
       - media_data:/app/media
@@ -70,6 +78,9 @@ services:
     pull_policy: never
     restart: unless-stopped
     env_file: .env
+    environment:
+      TELEGRAM_MODE: "${TELEGRAM_MODE:-polling}"
+      TELEGRAM_OUTBOX_EAGER: "False"
     command: ["python", "manage.py", "runbot"]
     volumes:
       - media_data:/app/media

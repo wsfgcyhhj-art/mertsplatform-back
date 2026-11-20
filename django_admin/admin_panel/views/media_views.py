@@ -1,9 +1,14 @@
-from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.serializers import (
+    EmptyRequestSerializer,
+    ErrorResponseSerializer,
+    MediaPresetsCatalogResponseSerializer,
+)
 import re
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from admin_panel.models import MediaAsset
 from admin_panel.services.media_presets import (
@@ -17,21 +22,21 @@ from admin_panel.achievement_icons import find_preset_icon
 class MediaAssetDetailView(APIView):
     serializer_class = EmptyRequestSerializer
     """
-    Streams raw image binary (WebP, SVG, PNG) stored in Neon PostgreSQL MediaAsset table.
-    Guarantees persistence across ephemeral cloud container restarts.
+    Streams raw image binary (WebP, PNG, JPEG, GIF) stored in PostgreSQL MediaAsset table.
     """
     authentication_classes = ()
     permission_classes = ()
 
     @extend_schema(
-        summary="Получить медиа-ассет по ID (WebP / SVG)",
+        summary="Получить медиа-ассет по ID (WebP / PNG / JPEG / GIF)",
         description="Возвращает оптимизированное бинарное изображение с кеширующими заголовками.",
         parameters=[
             OpenApiParameter(name="id", location=OpenApiParameter.PATH, description="UUID медиафайла", type=str),
         ],
         responses={
-            200: OpenApiResponse(description="Бинарные данные изображения"),
-            404: OpenApiResponse(description="Медиа-ассет не найден"),
+            200: OpenApiResponse(response=OpenApiTypes.BINARY, description="Бинарные данные изображения"),
+            404: ErrorResponseSerializer,
+            415: ErrorResponseSerializer,
         }
     )
     def get(self, request, id: str):
@@ -65,6 +70,7 @@ class MediaPresetsCatalogView(APIView):
     @extend_schema(
         summary="Каталог предустановленных медиа-ассетов",
         description="Возвращает списки готовых баннеров, аватарок и иконок достижений со встроенными dataUri и URL.",
+        responses={200: MediaPresetsCatalogResponseSerializer},
     )
     def get(self, request):
         catalog = get_all_media_presets_catalog()
@@ -76,7 +82,13 @@ class PresetBannerDetailView(APIView):
     authentication_classes = ()
     permission_classes = ()
 
-    @extend_schema(summary="Получить SVG-баннер по slug")
+    @extend_schema(
+        summary="Получить SVG-баннер по slug",
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.BINARY, description="SVG-изображение"),
+            404: ErrorResponseSerializer,
+        },
+    )
     def get(self, request, slug: str):
         preset = find_preset_banner(slug)
         if not preset:
@@ -94,7 +106,13 @@ class PresetAvatarDetailView(APIView):
     authentication_classes = ()
     permission_classes = ()
 
-    @extend_schema(summary="Получить SVG-аватар по slug")
+    @extend_schema(
+        summary="Получить SVG-аватар по slug",
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.BINARY, description="SVG-изображение"),
+            404: ErrorResponseSerializer,
+        },
+    )
     def get(self, request, slug: str):
         preset = find_preset_avatar(slug)
         if not preset:
@@ -112,7 +130,13 @@ class PresetIconDetailView(APIView):
     authentication_classes = ()
     permission_classes = ()
 
-    @extend_schema(summary="Получить SVG-иконку ачивки по slug")
+    @extend_schema(
+        summary="Получить SVG-иконку ачивки по slug",
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.BINARY, description="SVG-изображение"),
+            404: ErrorResponseSerializer,
+        },
+    )
     def get(self, request, slug: str):
         preset = find_preset_icon(slug)
         if not preset:

@@ -202,7 +202,7 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(item.status, 'sent')
         self.assertEqual(item.payload, {})
 
-    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret')
+    @override_settings(TELEGRAM_WEBHOOK_SECRET='test-secret', TELEGRAM_MODE='webhook')
     def test_duplicate_webhook_processed_once(self):
         client = APIClient()
         data = {'update_id': 123, 'message': {'chat': {'id': 77, 'type': 'private'}, 'from': {'id': 77, 'username': 'student_77'}, 'text': '/help'}}

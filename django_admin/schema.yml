@@ -54,9 +54,13 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Achievement'
+                $ref: '#/components/schemas/AchievementsListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/achievements/{id}:
     get:
@@ -77,14 +81,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Achievement'
+                $ref: '#/components/schemas/AchievementDetailResponse'
           description: ''
         '404':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/admin/score-adjustments:
     post:
@@ -119,6 +122,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ScoreAdjustment'
           description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/admin/stats:
     get:
       operationId: admin_stats
@@ -132,8 +159,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/AdminStatsResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/admin/users:
     get:
@@ -184,20 +216,58 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/UserProfile'
+                $ref: '#/components/schemas/AdminUsersListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
     post:
       operationId: v1_admin_users_create
       summary: Создать пользователя администратором
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AdminCreateUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AdminCreateUserRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
-        '200':
-          description: No response body
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/admin/users/{id}/role:
     patch:
       operationId: admin_user_role
@@ -210,6 +280,17 @@ paths:
         required: true
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminUserRoleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminUserRoleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAdminUserRoleRequest'
       security:
       - jwtAuth: []
       responses:
@@ -218,6 +299,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/auth/csrf:
     get:
@@ -231,8 +324,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/CsrfTokenResponse'
           description: ''
   /api/v1/auth/login:
     post:
@@ -253,15 +345,19 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/AuthSessionResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
         '401':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/auth/logout:
     post:
@@ -269,6 +365,17 @@ paths:
       summary: Выход из системы и удаление сессии
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
       security:
       - {}
       responses:
@@ -276,8 +383,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/auth/refresh:
     post:
@@ -285,6 +397,17 @@ paths:
       summary: Обновление пары токенов по refresh-токену
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequestRequest'
       security:
       - {}
       responses:
@@ -292,15 +415,19 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/TokenPairResponse'
           description: ''
         '401':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/auth/register:
     post:
@@ -321,29 +448,25 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/AuthSessionResponse'
           description: ''
         '400':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
         '403':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
         '409':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/auth/reset-password:
     post:
@@ -369,15 +492,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/MessageResponse'
           description: ''
         '400':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/health:
     get:
@@ -393,7 +514,17 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+          description: ''
   /api/v1/leaderboard:
     get:
       operationId: leaderboard_list
@@ -438,8 +569,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/LeaderboardResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/lessons:
     get:
@@ -485,16 +621,20 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Lesson'
+                $ref: '#/components/schemas/LessonsListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/media/{id}:
     get:
       operationId: v1_media_retrieve
       description: Возвращает оптимизированное бинарное изображение с кеширующими
         заголовками.
-      summary: Получить медиа-ассет по ID (WebP / SVG)
+      summary: Получить медиа-ассет по ID (WebP / PNG / JPEG / GIF)
       parameters:
       - in: path
         name: id
@@ -506,9 +646,24 @@ paths:
       - v1
       responses:
         '200':
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
           description: Бинарные данные изображения
         '404':
-          description: Медиа-ассет не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/media/presets:
     get:
       operationId: v1_media_presets_retrieve
@@ -519,7 +674,11 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPresetsCatalogResponse'
+          description: ''
   /api/v1/media/presets/avatars/{slug}:
     get:
       operationId: v1_media_presets_avatars_retrieve
@@ -534,7 +693,18 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: SVG-изображение
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/media/presets/banners/{slug}:
     get:
       operationId: v1_media_presets_banners_retrieve
@@ -549,7 +719,18 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: SVG-изображение
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/media/presets/icons/{slug}:
     get:
       operationId: v1_media_presets_icons_retrieve
@@ -564,7 +745,18 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: SVG-изображение
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/shop/balance:
     get:
       operationId: v1_shop_balance_retrieve
@@ -748,9 +940,13 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Submission'
+                $ref: '#/components/schemas/SubmissionsListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
     post:
       operationId: v1_submissions_create
@@ -761,22 +957,46 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SubmissionRequest'
+              $ref: '#/components/schemas/SubmissionCreateRequest'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/SubmissionRequest'
+              $ref: '#/components/schemas/SubmissionCreateRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/SubmissionRequest'
+              $ref: '#/components/schemas/SubmissionCreateRequest'
         required: true
       security:
       - jwtAuth: []
       responses:
-        '200':
+        '201':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Submission'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/submissions/{id}:
     get:
@@ -798,6 +1018,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Submission'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
     patch:
       operationId: v1_submissions_partial_update
@@ -830,6 +1062,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/Submission'
           description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/system/config:
     get:
       operationId: v1_system_config_retrieve
@@ -838,7 +1094,11 @@ paths:
       - v1
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemConfigResponse'
+          description: ''
   /api/v1/tasks:
     get:
       operationId: tasks_list
@@ -898,9 +1158,13 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Task'
+                $ref: '#/components/schemas/TasksListResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
     post:
       operationId: v1_tasks_create
@@ -922,11 +1186,23 @@ paths:
       security:
       - jwtAuth: []
       responses:
-        '200':
+        '201':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/tasks/{id}:
     get:
@@ -948,6 +1224,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Task'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
     patch:
       operationId: v1_tasks_partial_update
@@ -980,6 +1268,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Task'
           description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
     delete:
       operationId: v1_tasks_destroy
       summary: Удалить задание (только для ментора/админа)
@@ -994,8 +1300,30 @@ paths:
       security:
       - jwtAuth: []
       responses:
-        '204':
-          description: No response body
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/telegram/webhook:
     post:
       operationId: v1_telegram_webhook_create
@@ -1004,13 +1332,42 @@ paths:
       summary: Telegram Bot Webhook Receiver
       tags:
       - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramWebhookUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TelegramWebhookUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TelegramWebhookUpdateRequest'
+        required: true
       responses:
         '200':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/TelegramWebhookResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramWebhookResponse'
+          description: ''
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramWebhookResponse'
           description: ''
   /api/v1/users/me:
     get:
@@ -1036,13 +1393,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PatchedUserProfileRequest'
+              $ref: '#/components/schemas/PatchedUserProfileUpdateRequestRequest'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/PatchedUserProfileRequest'
+              $ref: '#/components/schemas/PatchedUserProfileUpdateRequestRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/PatchedUserProfileRequest'
+              $ref: '#/components/schemas/PatchedUserProfileUpdateRequestRequest'
       security:
       - jwtAuth: []
       responses:
@@ -1050,7 +1407,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserProfile'
+                $ref: '#/components/schemas/UserEnvelope'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/users/me/achievements:
     get:
@@ -1075,6 +1438,14 @@ paths:
       summary: Загрузить аватар профиля (оптимизация до WebP 256x256)
       tags:
       - v1
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AvatarUploadRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AvatarUploadRequestRequest'
       security:
       - jwtAuth: []
       responses:
@@ -1082,8 +1453,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/AvatarUploadResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/users/me/banner:
     post:
@@ -1091,6 +1467,14 @@ paths:
       summary: Загрузить баннер профиля (оптимизация до WebP 1600x400)
       tags:
       - v1
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BannerUploadRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BannerUploadRequestRequest'
       security:
       - jwtAuth: []
       responses:
@@ -1098,8 +1482,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/BannerUploadResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/users/me/easter-egg:
     post:
@@ -1114,15 +1503,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/EasterEggResponse'
           description: ''
         '403':
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/EasterEggResponse'
           description: ''
   /api/v1/users/me/password:
     put:
@@ -1149,8 +1536,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /api/v1/users/me/telegram/connect:
     post:
@@ -1167,8 +1559,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/TelegramConnectResponse'
           description: ''
   /api/v1/users/me/telegram/disconnect:
     delete:
@@ -1183,8 +1574,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: {}
+                $ref: '#/components/schemas/SuccessMessageResponse'
           description: ''
 components:
   schemas:
@@ -1246,6 +1636,341 @@ components:
       - isActive
       - title
       - triggerType
+    AchievementCatalogItem:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        code:
+          type: string
+          title: Код ачивки
+          maxLength: 128
+        title:
+          type: string
+          title: Название
+          maxLength: 255
+        description:
+          type: string
+          title: Описание
+        iconUrl:
+          type: string
+        category:
+          allOf:
+          - $ref: '#/components/schemas/CategoryEnum'
+          title: Категория
+        triggerType:
+          type: string
+        threshold:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Порог срабатывания (X)
+          description: 'Числовое значение для триггеров баллов и заданий (например:
+            100 для баллов или 5 для ДЗ). Для MANUAL / ON_REGISTER / EASTER_EGG оставьте
+            пустым.'
+        points:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Очки за ачивку (+pts)
+        criteria:
+          type: string
+          nullable: true
+          title: Критерий получения (текст для студента)
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        isUnlocked:
+          type: boolean
+        unlockedCount:
+          type: integer
+      required:
+      - code
+      - createdAt
+      - description
+      - iconUrl
+      - id
+      - isActive
+      - isUnlocked
+      - title
+      - triggerType
+      - unlockedCount
+    AchievementDetailItem:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+        code:
+          type: string
+          title: Код ачивки
+          maxLength: 128
+        title:
+          type: string
+          title: Название
+          maxLength: 255
+        description:
+          type: string
+          title: Описание
+        iconUrl:
+          type: string
+        category:
+          allOf:
+          - $ref: '#/components/schemas/CategoryEnum'
+          title: Категория
+        triggerType:
+          type: string
+        threshold:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+          title: Порог срабатывания (X)
+          description: 'Числовое значение для триггеров баллов и заданий (например:
+            100 для баллов или 5 для ДЗ). Для MANUAL / ON_REGISTER / EASTER_EGG оставьте
+            пустым.'
+        points:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          title: Очки за ачивку (+pts)
+        criteria:
+          type: string
+          nullable: true
+          title: Критерий получения (текст для студента)
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        isUnlocked:
+          type: boolean
+        unlockedCount:
+          type: integer
+        recentAchievers:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecentAchiever'
+      required:
+      - code
+      - createdAt
+      - description
+      - iconUrl
+      - id
+      - isActive
+      - isUnlocked
+      - recentAchievers
+      - title
+      - triggerType
+      - unlockedCount
+    AchievementDetailResponse:
+      type: object
+      properties:
+        achievement:
+          $ref: '#/components/schemas/AchievementDetailItem'
+      required:
+      - achievement
+    AchievementTriggerMeta:
+      type: object
+      properties:
+        code:
+          type: string
+        label:
+          type: string
+        requiresThreshold:
+          type: boolean
+      required:
+      - code
+      - label
+      - requiresThreshold
+    AchievementsListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        achievements:
+          type: array
+          items:
+            $ref: '#/components/schemas/AchievementCatalogItem'
+      required:
+      - achievements
+    AdminCreateUserRequest:
+      type: object
+      properties:
+        login:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          maxLength: 1024
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          default: STUDENT
+        name:
+          type: string
+          nullable: true
+          maxLength: 255
+        telegram:
+          type: string
+          nullable: true
+          maxLength: 255
+        groupNumber:
+          type: string
+          nullable: true
+          maxLength: 64
+        currentMonth:
+          type: integer
+          maximum: 24
+          minimum: 1
+          default: 1
+      required:
+      - login
+      - password
+    AdminStatsResponse:
+      type: object
+      properties:
+        totalStudents:
+          type: integer
+        totalSubmissions:
+          type: integer
+        pendingSubmissions:
+          type: integer
+        acceptedSubmissions:
+          type: integer
+      required:
+      - acceptedSubmissions
+      - pendingSubmissions
+      - totalStudents
+      - totalSubmissions
+    AdminUsersListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserProfile'
+      required:
+      - users
+    AuthSessionResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - accessToken
+      - refreshToken
+      - user
+    AvatarUploadRequestRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+        avatar:
+          type: string
+          format: binary
+    AvatarUploadResponse:
+      type: object
+      properties:
+        avatarUrl:
+          type: string
+        asset:
+          $ref: '#/components/schemas/MediaAssetMeta'
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - asset
+      - avatarUrl
+      - user
+    AwardedAchievement:
+      type: object
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        iconUrl:
+          type: string
+        category:
+          type: string
+        triggerType:
+          type: string
+        threshold:
+          type: integer
+          nullable: true
+        points:
+          type: integer
+        criteria:
+          type: string
+          nullable: true
+        awardedAt:
+          type: string
+          format: date-time
+      required:
+      - awardedAt
+      - category
+      - code
+      - criteria
+      - description
+      - iconUrl
+      - id
+      - points
+      - threshold
+      - title
+      - triggerType
+    BannerUploadRequestRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+        banner:
+          type: string
+          format: binary
+    BannerUploadResponse:
+      type: object
+      properties:
+        bannerUrl:
+          type: string
+        asset:
+          $ref: '#/components/schemas/MediaAssetMeta'
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - asset
+      - bannerUrl
+      - user
     CategoryEnum:
       enum:
       - START
@@ -1275,6 +2000,23 @@ components:
       required:
       - currentPassword
       - newPassword
+    CodeLabelMeta:
+      type: object
+      properties:
+        code:
+          type: string
+        label:
+          type: string
+      required:
+      - code
+      - label
+    CsrfTokenResponse:
+      type: object
+      properties:
+        csrfToken:
+          type: string
+      required:
+      - csrfToken
     CurrentUserResponse:
       type: object
       properties:
@@ -1314,6 +2056,123 @@ components:
       - streakCount
       - tasksAcceptedCount
       - totalScore
+    EasterEggResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        awarded:
+          type: array
+          items:
+            $ref: '#/components/schemas/AwardedAchievement'
+      required:
+      - success
+    ErrorResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+        error:
+          type: string
+        message: {}
+        detail:
+          type: string
+    HealthCheckResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+        mode:
+          type: string
+        responseTimeMs:
+          type: integer
+        checks:
+          $ref: '#/components/schemas/HealthChecksDetail'
+      required:
+      - checks
+      - mode
+      - responseTimeMs
+      - service
+      - status
+    HealthChecksDetail:
+      type: object
+      properties:
+        database:
+          type: string
+        telegramBot:
+          type: string
+      required:
+      - database
+      - telegramBot
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        login:
+          type: string
+        avatarUrl:
+          type: string
+          nullable: true
+        groupNumber:
+          type: string
+          nullable: true
+        currentMonth:
+          type: integer
+        streakCount:
+          type: integer
+        totalScore:
+          type: integer
+        tasksSentCount:
+          type: integer
+        tasksAcceptedCount:
+          type: integer
+      required:
+      - avatarUrl
+      - currentMonth
+      - groupNumber
+      - id
+      - login
+      - name
+      - rank
+      - streakCount
+      - tasksAcceptedCount
+      - tasksSentCount
+      - totalScore
+    LeaderboardResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        month:
+          type: integer
+          nullable: true
+        leaderboard:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaderboardEntry'
+      required:
+      - leaderboard
+      - limit
+      - month
+      - page
+      - total
+      - totalPages
     Lesson:
       type: object
       properties:
@@ -1357,6 +2216,23 @@ components:
       - updatedAt
       - videoLink
       - youtubeId
+    LessonsListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        lessons:
+          type: array
+          items:
+            $ref: '#/components/schemas/Lesson'
+      required:
+      - lessons
     LoginRequest:
       type: object
       properties:
@@ -1370,6 +2246,66 @@ components:
       required:
       - login
       - password
+    MediaAssetMeta:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        mimeType:
+          type: string
+        sizeBytes:
+          type: integer
+      required:
+      - id
+      - mimeType
+      - sizeBytes
+      - url
+    MediaPresetsCatalogResponse:
+      type: object
+      properties:
+        banners:
+          type: array
+          items:
+            $ref: '#/components/schemas/PresetMediaItem'
+        avatars:
+          type: array
+          items:
+            $ref: '#/components/schemas/PresetMediaItem'
+        achievementIcons:
+          type: array
+          items:
+            $ref: '#/components/schemas/PresetAchievementIcon'
+      required:
+      - achievementIcons
+      - avatars
+      - banners
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    PaginationDefaults:
+      type: object
+      properties:
+        defaultPage:
+          type: integer
+        defaultLimit:
+          type: integer
+        maxLimit:
+          type: integer
+      required:
+      - defaultLimit
+      - defaultPage
+      - maxLimit
+    PatchedAdminUserRoleRequest:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/RoleEnum'
     PatchedSubmissionReviewRequest:
       type: object
       properties:
@@ -1390,6 +2326,10 @@ components:
             maxLength: 2048
           - type: string
             maxLength: 0
+        expectedUpdatedAt:
+          type: string
+          format: date-time
+          nullable: true
     PatchedTaskRequest:
       type: object
       properties:
@@ -1439,31 +2379,91 @@ components:
         isBonus:
           type: boolean
           default: false
-    PatchedUserProfileRequest:
+    PatchedUserProfileUpdateRequestRequest:
       type: object
       properties:
-        login:
-          type: string
-          minLength: 1
-          title: Логин
-          maxLength: 255
-        role:
-          allOf:
-          - $ref: '#/components/schemas/RoleEnum'
-          title: Роль
         name:
           type: string
           nullable: true
-          title: Имя
           maxLength: 255
         telegram:
           type: string
           nullable: true
           maxLength: 255
-        created_at:
+        avatarUrl:
+          type: string
+          nullable: true
+        bannerUrl:
+          type: string
+          nullable: true
+    PresetAchievementIcon:
+      type: object
+      properties:
+        slug:
+          type: string
+        legacyKey:
+          type: string
+        code:
+          type: string
+        label:
+          type: string
+        color:
+          type: string
+        url:
+          type: string
+        dataUri:
+          type: string
+      required:
+      - code
+      - color
+      - dataUri
+      - label
+      - legacyKey
+      - slug
+      - url
+    PresetMediaItem:
+      type: object
+      properties:
+        slug:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        dataUri:
+          type: string
+      required:
+      - dataUri
+      - slug
+      - title
+      - url
+    RecentAchiever:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        login:
+          type: string
+        avatarUrl:
+          type: string
+          nullable: true
+        awardedAt:
           type: string
           format: date-time
-          title: Дата создания
+      required:
+      - avatarUrl
+      - awardedAt
+      - id
+      - login
+      - name
+    RefreshTokenRequestRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
     RegisterRequest:
       type: object
       properties:
@@ -1598,6 +2598,14 @@ components:
           type: integer
         availableCoins:
           type: integer
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
         products:
           type: array
           items:
@@ -1725,6 +2733,34 @@ components:
       - order
       - spentPoints
       - totalEarnedPoints
+    ShortMySubmission:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/StatusEnum'
+        score:
+          type: integer
+          nullable: true
+        solutionLink:
+          type: string
+        reviewerComment:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - createdAt
+      - id
+      - reviewerComment
+      - score
+      - solutionLink
+      - status
+      - version
     ShortTask:
       type: object
       properties:
@@ -1760,38 +2796,6 @@ components:
       required:
       - id
       - title
-    ShortTaskRequest:
-      type: object
-      properties:
-        title:
-          type: string
-          minLength: 1
-          title: Название задания
-          maxLength: 255
-        month:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          title: Месяц
-        order:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          title: Порядок
-        has_score:
-          type: boolean
-          title: Оценивается баллами
-        max_score:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          nullable: true
-          title: Макс. балл
-        is_bonus:
-          type: boolean
-          title: Бонусное задание
-      required:
-      - title
     ShortUser:
       type: object
       properties:
@@ -1822,34 +2826,6 @@ components:
           maxLength: 64
       required:
       - id
-      - login
-    ShortUserRequest:
-      type: object
-      properties:
-        login:
-          type: string
-          minLength: 1
-          title: Логин
-          maxLength: 255
-        name:
-          type: string
-          nullable: true
-          title: Имя
-          maxLength: 255
-        role:
-          allOf:
-          - $ref: '#/components/schemas/RoleEnum'
-          title: Роль
-        avatar_url:
-          type: string
-          nullable: true
-          title: URL аватара
-        group_number:
-          type: string
-          nullable: true
-          title: Номер группы
-          maxLength: 64
-      required:
       - login
     StatusEnum:
       enum:
@@ -1937,50 +2913,152 @@ components:
       - updatedAt
       - user
       - userId
-    SubmissionRequest:
+    SubmissionCreateRequest:
       type: object
       properties:
-        userId:
-          type: string
-          minLength: 1
         taskId:
           type: string
           minLength: 1
-        version:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          default: 1
-          title: Попытка (версия)
-        comment:
-          type: string
-          nullable: true
-          title: Комментарий студента
+          maxLength: 64
         solutionLink:
           type: string
           minLength: 1
-        status:
-          allOf:
-          - $ref: '#/components/schemas/StatusEnum'
-          title: Статус
-        score:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          nullable: true
-          title: Баллы
-        reviewerComment:
+          maxLength: 500
+        comment:
           type: string
           nullable: true
-          minLength: 1
-        voiceFeedbackUrl:
-          type: string
-          nullable: true
-          minLength: 1
       required:
       - solutionLink
       - taskId
-      - userId
+    SubmissionsListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        submissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Submission'
+      required:
+      - submissions
+    SuccessMessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+      - success
+    SystemConfigResponse:
+      type: object
+      properties:
+        platform:
+          $ref: '#/components/schemas/SystemPlatformInfo'
+        roles:
+          type: array
+          items:
+            type: string
+        features:
+          $ref: '#/components/schemas/SystemFeatures'
+        gamification:
+          $ref: '#/components/schemas/SystemGamification'
+        submissionStatuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeLabelMeta'
+        achievementCategories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeLabelMeta'
+        achievementTriggerTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AchievementTriggerMeta'
+        uploadLimits:
+          $ref: '#/components/schemas/UploadLimits'
+        paginationDefaults:
+          $ref: '#/components/schemas/PaginationDefaults'
+        telegram:
+          $ref: '#/components/schemas/TelegramConfig'
+        settings:
+          type: object
+          additionalProperties: {}
+        mediaPresets:
+          $ref: '#/components/schemas/MediaPresetsCatalogResponse'
+      required:
+      - achievementCategories
+      - achievementTriggerTypes
+      - features
+      - gamification
+      - mediaPresets
+      - paginationDefaults
+      - platform
+      - roles
+      - settings
+      - submissionStatuses
+      - telegram
+      - uploadLimits
+    SystemFeatures:
+      type: object
+      properties:
+        registrationOpen:
+          type: boolean
+        easterEggEnabled:
+          type: boolean
+      required:
+      - easterEggEnabled
+      - registrationOpen
+    SystemGamification:
+      type: object
+      properties:
+        defaultTaskPoints:
+          type: integer
+        bonusTaskMultiplier:
+          type: integer
+        streakThresholdDays:
+          type: integer
+        streakRewardPoints:
+          type: integer
+        easterEggRewardPoints:
+          type: integer
+        defaultStartMonth:
+          type: integer
+      required:
+      - bonusTaskMultiplier
+      - defaultStartMonth
+      - defaultTaskPoints
+      - easterEggRewardPoints
+      - streakRewardPoints
+      - streakThresholdDays
+    SystemPlatformInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        apiVersion:
+          type: string
+        frontendUrl:
+          type: string
+        supportUrl:
+          type: string
+        welcomeTitle:
+          type: string
+        welcomeText:
+          type: string
+      required:
+      - apiVersion
+      - frontendUrl
+      - name
+      - supportUrl
+      - welcomeText
+      - welcomeTitle
     Task:
       type: object
       properties:
@@ -2029,6 +3107,9 @@ components:
           type: boolean
           default: false
         mySubmission:
+          allOf:
+          - $ref: '#/components/schemas/ShortMySubmission'
+          nullable: true
           readOnly: true
         createdAt:
           type: string
@@ -2099,6 +3180,103 @@ components:
       - description
       - title
       - topic
+    TasksListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+      required:
+      - tasks
+    TelegramConfig:
+      type: object
+      properties:
+        botUsername:
+          type: string
+        botUrl:
+          type: string
+        connectEndpoint:
+          type: string
+        disconnectEndpoint:
+          type: string
+        recommendedPollIntervalMs:
+          type: integer
+      required:
+      - botUrl
+      - botUsername
+      - connectEndpoint
+      - disconnectEndpoint
+      - recommendedPollIntervalMs
+    TelegramConnectResponse:
+      type: object
+      properties:
+        link:
+          type: string
+        code:
+          type: string
+        botUsername:
+          type: string
+      required:
+      - botUsername
+      - code
+      - link
+    TelegramWebhookResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+        message:
+          type: string
+      required:
+      - ok
+    TelegramWebhookUpdateRequest:
+      type: object
+      properties:
+        update_id:
+          type: integer
+        message: {}
+        edited_message: {}
+      required:
+      - update_id
+    TokenPairResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+      required:
+      - accessToken
+      - refreshToken
+    UploadLimits:
+      type: object
+      properties:
+        avatarMaxBytes:
+          type: integer
+        bannerMaxBytes:
+          type: integer
+        customIconMaxBytes:
+          type: integer
+        allowedMimeTypes:
+          type: array
+          items:
+            type: string
+      required:
+      - allowedMimeTypes
+      - avatarMaxBytes
+      - bannerMaxBytes
+      - customIconMaxBytes
     UserAchievement:
       type: object
       properties:
@@ -2122,6 +3300,13 @@ components:
       - awardedAt
       - id
       - userId
+    UserEnvelope:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - user
     UserProfile:
       type: object
       properties:

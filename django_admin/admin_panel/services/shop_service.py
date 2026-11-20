@@ -6,11 +6,12 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from admin_panel.models import RoleChoices, ShopOrder, ShopOrderStatus, ShopProduct, SubmissionStatusChoices, User
+from admin_panel.services.score_service import latest_accepted
 from admin_panel.services.telegram_service import escape_html, send_async_notification
 
 
 def shop_balance(user):
-    homework = user.submissions.filter(status=SubmissionStatusChoices.ACCEPTED).aggregate(total=Sum('score', default=0))
+    homework = latest_accepted(user.submissions.all()).aggregate(total=Sum('score', default=0))
     achievements = user.user_achievements.aggregate(total=Sum('achievement__points', default=0))
     adjustments = user.score_adjustments.aggregate(total=Sum('amount', default=0))
     earned = homework['total'] + achievements['total'] + user.streak_count * 5 + adjustments['total']

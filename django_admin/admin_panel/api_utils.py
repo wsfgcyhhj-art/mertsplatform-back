@@ -1,4 +1,5 @@
 import re
+from rest_framework.exceptions import ParseError
 from rest_framework.parsers import JSONParser
 
 
@@ -16,19 +17,30 @@ def to_snake_case(name: str) -> str:
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
-def expand_dual_case(obj):
-    if isinstance(obj, list):
-        return [expand_dual_case(item) for item in obj]
-    if not isinstance(obj, dict):
-        return obj
-    result = {k: expand_dual_case(v) for k, v in obj.items()}
-    for key, val in list(result.items()):
-        if not isinstance(key, str):
-            continue
-        for alias in (to_camel_case(key), to_snake_case(key)):
-            if alias and alias not in result:
-                result[alias] = val
-    return result
+def expand_dual_case(obj, *, max_depth: int = 16, max_nodes: int = 10000):
+    nodes = 0
+
+    def _walk(val, depth):
+        nonlocal nodes
+        if depth > max_depth:
+            raise ParseError('Слишком глубокая вложенность JSON.')
+        nodes += 1
+        if nodes > max_nodes:
+            raise ParseError('Слишком большой объект JSON.')
+        if isinstance(val, list):
+            return [_walk(item, depth + 1) for item in val]
+        if not isinstance(val, dict):
+            return val
+        result = {k: _walk(v, depth + 1) for k, v in val.items()}
+        for key, value in list(result.items()):
+            if not isinstance(key, str):
+                continue
+            for alias in (to_camel_case(key), to_snake_case(key)):
+                if alias and alias not in result:
+                    result[alias] = value
+        return result
+
+    return _walk(obj, 0)
 
 
 class DualCaseJSONParser(JSONParser):
@@ -79,11 +91,11 @@ def resolve_ordering(raw_ordering, allowed_map, default_ordering):
     return resolved or default_ordering
 
 
-def paginate_list_or_qs(request, qs_or_list):
+def paginate_list_or_qs(request, qs_or_list, *, max_unpaginated: int = 200):
     raw_page = qparam(request, 'page')
     raw_limit = qparam(request, 'limit', 'pageSize', 'page_size')
     if raw_page is None and raw_limit is None:
-        return None, qs_or_list
+        return None, list(qs_or_list[:max_unpaginated])
     try:
         page = max(1, int(raw_page or 1))
         limit = min(200, max(1, int(raw_limit or 50)))

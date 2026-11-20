@@ -91,10 +91,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.IntegerField)
     def get_totalScore(self, obj) -> int:
+        annotated = getattr(obj, 'total_score', None)
+        if annotated is not None:
+            return int(annotated)
         return obj.calculate_total_score()
 
     @extend_schema_field(serializers.IntegerField)
     def get_tasksAcceptedCount(self, obj) -> int:
+        annotated = getattr(obj, 'tasks_accepted_count', None)
+        if annotated is not None:
+            return int(annotated)
         return obj.accepted_tasks_count()
 
 
@@ -151,6 +157,16 @@ class LessonSerializer(serializers.ModelSerializer):
         )
 
 
+class ShortMySubmissionSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    status = serializers.ChoiceField(choices=SubmissionStatusChoices.choices)
+    score = serializers.IntegerField(allow_null=True)
+    solutionLink = serializers.CharField()
+    reviewerComment = serializers.CharField(allow_null=True)
+    version = serializers.IntegerField()
+    createdAt = serializers.DateTimeField()
+
+
 class TaskSerializer(serializers.ModelSerializer):
     groupNumber = serializers.CharField(source="group_number", required=False, allow_blank=True, allow_null=True)
     exampleLink = serializers.URLField(source='example_link', allow_null=True, required=False)
@@ -190,16 +206,19 @@ class TaskSerializer(serializers.ModelSerializer):
             'updatedAt',
         )
 
-    @extend_schema_field(serializers.JSONField)
+    @extend_schema_field(ShortMySubmissionSerializer(allow_null=True))
     def get_mySubmission(self, obj):
         request = self.context.get('request')
         if not request or not request.user or not request.user.is_authenticated:
             return None
-        last_sub = (
-            Submission.objects.filter(task_id=obj.id, user_id=request.user.id)
-            .order_by('-version', '-created_at')
-            .first()
-        )
+        if 'my_submissions_map' in self.context:
+            last_sub = self.context['my_submissions_map'].get(obj.id)
+        else:
+            last_sub = (
+                Submission.objects.filter(task_id=obj.id, user_id=request.user.id)
+                .order_by('-version', '-created_at')
+                .first()
+            )
         if not last_sub:
             return None
         return {
@@ -309,6 +328,7 @@ class SubmissionReviewSerializer(serializers.Serializer):
     reviewerComment = serializers.CharField(max_length=10000, required=False, allow_null=True, allow_blank=True)
     voiceFeedbackUrl = serializers.CharField(max_length=2048, required=False, allow_null=True, allow_blank=True,
                                             validators=[URLValidator(schemes=['http', 'https'])])
+    expectedUpdatedAt = serializers.DateTimeField(required=False, allow_null=True)
 
 
 class ScoreAdjustmentRequestSerializer(serializers.Serializer):
@@ -316,3 +336,56 @@ class ScoreAdjustmentRequestSerializer(serializers.Serializer):
     amount = serializers.IntegerField(min_value=-10000, max_value=10000)
     reason = serializers.CharField(max_length=5000)
     month = serializers.IntegerField(min_value=1, max_value=24, default=1)
+
+
+class ErrorResponseSerializer(serializers.Serializer):
+    statusCode = serializers.IntegerField(required=False)
+    error = serializers.CharField(required=False)
+    message = serializers.JSONField(required=False)
+    detail = serializers.CharField(required=False)
+
+
+class MessageResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+
+
+class SuccessMessageResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    message = serializers.CharField(required=False)
+
+
+class PaginatedMetaMixin(serializers.Serializer):
+    total = serializers.IntegerField(required=False)
+    page = serializers.IntegerField(required=False)
+    limit = serializers.IntegerField(required=False)
+    totalPages = serializers.IntegerField(required=False)
+
+
+class MediaAssetMetaSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    url = serializers.CharField()
+    mimeType = serializers.CharField()
+    sizeBytes = serializers.IntegerField()
+
+
+class PresetMediaItemSerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    title = serializers.CharField()
+    url = serializers.CharField()
+    dataUri = serializers.CharField()
+
+
+class PresetAchievementIconSerializer(serializers.Serializer):
+    slug = serializers.CharField()
+    legacyKey = serializers.CharField(allow_blank=True)
+    code = serializers.CharField(allow_blank=True)
+    label = serializers.CharField(allow_blank=True)
+    color = serializers.CharField(allow_blank=True)
+    url = serializers.CharField()
+    dataUri = serializers.CharField()
+
+
+class MediaPresetsCatalogResponseSerializer(serializers.Serializer):
+    banners = PresetMediaItemSerializer(many=True)
+    avatars = PresetMediaItemSerializer(many=True)
+    achievementIcons = PresetAchievementIconSerializer(many=True)

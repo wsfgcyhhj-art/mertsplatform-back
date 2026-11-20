@@ -485,8 +485,8 @@ class MediaAsset(models.Model):
     class Meta:
         managed = False
         db_table = 'MediaAsset'
-        verbose_name = 'Медиа-ассет (БД Neon)'
-        verbose_name_plural = 'Медиа-ассеты (БД Neon)'
+        verbose_name = 'Медиа-ассет (PostgreSQL)'
+        verbose_name_plural = 'Медиа-ассеты (PostgreSQL)'
         ordering = ['-created_at']
 
     def __str__(self):
@@ -648,7 +648,7 @@ class PlatformSetting(models.Model):
         default=SettingCategoryChoices.BRANDING,
     )
     description = models.CharField('Описание', max_length=500, blank=True, default='')
-    is_public = models.BooleanField('Публичная (отдаётся в API)', default=True)
+    is_public = models.BooleanField('Публичная (отдаётся в API)', default=False)
     updated_at = models.DateTimeField('Обновлено', auto_now=True)
 
     class Meta:
@@ -661,7 +661,7 @@ class PlatformSetting(models.Model):
     def clean(self):
         from admin_panel.services.settings_service import validate_setting_value
         self.key = (self.key or '').strip()
-        self.value = validate_setting_value(self.key, self.value, self.value_type)
+        self.value = validate_setting_value(self.key, self.value, self.value_type, is_public=self.is_public)
 
     def __str__(self):
         return f"{self.key} = {self.value[:60]}"

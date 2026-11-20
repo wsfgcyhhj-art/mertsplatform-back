@@ -96,25 +96,20 @@ Django сохраняет явно заданный `sslmode` из URL. Без �
 
 ## Запуск и Telegram
 
-Перед включением `telegram_bot` polling остановите прежние polling-процессы и удалите
-старый webhook методом Telegram `deleteWebhook` с `drop_pending_updates=false`.
-Можно вызвать метод из уже собранного образа, используя токен из `.env`:
+По умолчанию `TELEGRAM_MODE=polling`: `runbot` на старте автоматически вызывает `deleteWebhook(drop_pending_updates=False)`, чтобы очистить старый webhook без потери накопившихся сообщений и избежать ошибки `409 Conflict`. Не масштабируйте `telegram_bot` на несколько экземпляров. Для перехода на webhook задайте `TELEGRAM_MODE=webhook` и секрет `TELEGRAM_WEBHOOK_SECRET`.
 
 ```sh
-docker compose run --rm --no-deps --entrypoint python django_web -c 'import os; import httpx; r = httpx.post("https://api.telegram.org/bot" + os.environ["TELEGRAM_BOT_TOKEN"] + "/deleteWebhook", json={"drop_pending_updates": False}); assert r.status_code == 200 and r.json().get("ok"), "deleteWebhook failed"; print("Webhook removed; pending updates retained")'
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 django_web telegram_worker telegram_bot
 ```
 
-Django ждёт готовности БД, затем выполняет `install_subscriptions`,
-`install_security`, `install_shop --missing-only`, `migrate`, `collectstatic`
-и запускает Gunicorn с двумя workers. Цены и описания существующих товаров
+Django ждёт готовности БД, затем выполняет `install_base_schema`, `install_subscriptions`,
+`install_security`, `install_shop --missing-only`, `migrate --noinput`, `createcachetable` (таблица `django_cache` для общего `DatabaseCache` между воркерами Gunicorn и процессами бота), `collectstatic --noinput`
+и запускает Gunicorn с двумя workers (`TELEGRAM_OUTBOX_EAGER=False`, `AUTH_TRUSTED_PROXY_HOPS=1`). Цены и описания существующих товаров
 не перезаписываются. `telegram_bot` и `telegram_worker` ждут healthcheck Django, чтобы
-схема была готова. Не масштабируйте `telegram_bot` на несколько экземпляров.
-`deliver_telegram` доставляет outbox постоянно; цикл проверки — 5 секунд,
-неудачные отправки повторяются с задержкой. При обычном запросе Django
-также пробует доставить уведомление сразу после commit.
+схема была готова.
+`deliver_telegram` доставляет outbox постоянно с интервалом 2 секунды (постоянные ошибки 400/403 сразу переводятся в `failed`, временные повторяются с backoff). При включённом `TELEGRAM_OUTBOX_EAGER=True` Django также пробует доставить уведомление сразу после commit.
 
 ## Nginx и HTTPS
 

@@ -13,6 +13,10 @@ from admin_panel.serializers import (
     UserProfileSerializer,
     ChangePasswordSerializer,
     UserAchievementSerializer,
+    ErrorResponseSerializer,
+    MessageResponseSerializer,
+    SuccessMessageResponseSerializer,
+    MediaAssetMetaSerializer,
     validate_new_password,
 )
 from admin_panel.services.media_service import save_optimized_media_asset, read_upload
@@ -36,6 +40,65 @@ class CurrentUserResponseSerializer(ShopBalanceSerializer):
     stats = CurrentUserStatsSerializer()
 
 
+class UserProfileUpdateRequestSerializer(serializers.Serializer):
+    name = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+    telegram = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+    avatarUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    bannerUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+
+class UserEnvelopeSerializer(serializers.Serializer):
+    user = UserProfileSerializer()
+
+
+class AvatarUploadRequestSerializer(serializers.Serializer):
+    file = serializers.FileField(required=False)
+    avatar = serializers.FileField(required=False)
+
+
+class BannerUploadRequestSerializer(serializers.Serializer):
+    file = serializers.FileField(required=False)
+    banner = serializers.FileField(required=False)
+
+
+class AvatarUploadResponseSerializer(serializers.Serializer):
+    avatarUrl = serializers.CharField()
+    asset = MediaAssetMetaSerializer()
+    user = UserProfileSerializer()
+
+
+class BannerUploadResponseSerializer(serializers.Serializer):
+    bannerUrl = serializers.CharField()
+    asset = MediaAssetMetaSerializer()
+    user = UserProfileSerializer()
+
+
+class AwardedAchievementSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    code = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    iconUrl = serializers.CharField()
+    category = serializers.CharField()
+    triggerType = serializers.CharField()
+    threshold = serializers.IntegerField(allow_null=True)
+    points = serializers.IntegerField()
+    criteria = serializers.CharField(allow_null=True)
+    awardedAt = serializers.DateTimeField()
+
+
+class EasterEggResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    message = serializers.CharField(required=False)
+    awarded = AwardedAchievementSerializer(many=True, required=False)
+
+
+class TelegramConnectResponseSerializer(serializers.Serializer):
+    link = serializers.CharField()
+    code = serializers.CharField()
+    botUsername = serializers.CharField()
+
+
 class CurrentUserView(APIView):
     serializer_class = UserProfileSerializer
     permission_classes = (IsAuthenticated,)
@@ -57,7 +120,12 @@ class CurrentUserView(APIView):
             **shop_balance(user),
         })
 
-    @extend_schema(operation_id="users_me_update", summary="Обновить данные профиля (имя, контакты, оформление)", responses={200: UserProfileSerializer})
+    @extend_schema(
+        operation_id="users_me_update",
+        summary="Обновить данные профиля (имя, контакты, оформление)",
+        request=UserProfileUpdateRequestSerializer,
+        responses={200: UserEnvelopeSerializer, 400: ErrorResponseSerializer},
+    )
     def patch(self, request):
         user = request.user
         field_map = {
@@ -68,12 +136,25 @@ class CurrentUserView(APIView):
         }
         from urllib.parse import urlsplit
         for key in ('avatarUrl', 'bannerUrl'):
+            if key not in request.data:
+                continue
             value = request.data.get(key)
-            if value and (not isinstance(value, str) or urlsplit(value).scheme not in ('', 'https', 'http') or str(value).startswith('//')):
+            if not value:
+                continue
+            if not isinstance(value, str):
+                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
+            cleaned = value.strip()
+            if not cleaned:
+                continue
+            if '\\' in cleaned or any(ord(ch) < 32 for ch in cleaned) or cleaned.startswith('//'):
+                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
+            parsed = urlsplit(cleaned)
+            if parsed.scheme not in ('', 'https', 'http') or (parsed.scheme == '' and not cleaned.startswith('/')):
                 return Response({'message': 'Недопустимый URL изображения.'}, status=400)
         for json_key, model_key in field_map.items():
             if json_key in request.data:
-                setattr(user, model_key, request.data[json_key] or None)
+                raw_val = request.data[json_key]
+                setattr(user, model_key, (raw_val.strip() if isinstance(raw_val, str) else raw_val) or None)
 
         user.save(update_fields=[field_map[key] for key in field_map if key in request.data] + ['updated_at'])
         data = UserProfileSerializer(user, context={'request': request}).data
@@ -84,7 +165,12 @@ class ChangePasswordView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="users_me_change_password", summary="Смена пароля пользователя", request=ChangePasswordSerializer, responses={200: dict})
+    @extend_schema(
+        operation_id="users_me_change_password",
+        summary="Смена пароля пользователя",
+        request=ChangePasswordSerializer,
+        responses={200: MessageResponseSerializer, 400: ErrorResponseSerializer},
+    )
     @transaction.atomic
     def put(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
@@ -125,7 +211,12 @@ class AvatarUploadView(APIView):
     permission_classes = (IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
 
-    @extend_schema(operation_id="users_me_avatar_upload", summary="Загрузить аватар профиля (оптимизация до WebP 256x256)", responses={200: dict})
+    @extend_schema(
+        operation_id="users_me_avatar_upload",
+        summary="Загрузить аватар профиля (оптимизация до WebP 256x256)",
+        request=AvatarUploadRequestSerializer,
+        responses={200: AvatarUploadResponseSerializer, 400: ErrorResponseSerializer},
+    )
     def post(self, request):
         file_obj = request.FILES.get('file') or request.FILES.get('avatar')
         if not file_obj:
@@ -162,7 +253,12 @@ class BannerUploadView(APIView):
     permission_classes = (IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
 
-    @extend_schema(operation_id="users_me_banner_upload", summary="Загрузить баннер профиля (оптимизация до WebP 1600x400)", responses={200: dict})
+    @extend_schema(
+        operation_id="users_me_banner_upload",
+        summary="Загрузить баннер профиля (оптимизация до WebP 1600x400)",
+        request=BannerUploadRequestSerializer,
+        responses={200: BannerUploadResponseSerializer, 400: ErrorResponseSerializer},
+    )
     def post(self, request):
         file_obj = request.FILES.get('file') or request.FILES.get('banner')
         if not file_obj:
@@ -198,7 +294,12 @@ class EasterEggView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="users_me_easter_egg", summary="Активация пасхалки и получение ачивки", responses={200: dict, 403: dict})
+    @extend_schema(
+        operation_id="users_me_easter_egg",
+        summary="Активация пасхалки и получение ачивки",
+        request=None,
+        responses={200: EasterEggResponseSerializer, 403: EasterEggResponseSerializer},
+    )
     def post(self, request):
         if not get_setting('easter_egg_enabled', True):
             return Response(
@@ -235,7 +336,8 @@ class TelegramConnectView(APIView):
         operation_id="users_me_telegram_connect",
         summary="Инициализировать привязку Telegram",
         description="Генерирует уникальный auth-код и возвращает прямую ссылку на бота вида https://t.me/Bot?start=CODE",
-        responses={200: dict}
+        request=None,
+        responses={200: TelegramConnectResponseSerializer},
     )
     def post(self, request):
         user = request.user
@@ -256,7 +358,11 @@ class TelegramDisconnectView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
-    @extend_schema(operation_id="users_me_telegram_disconnect", summary="Отвязать Telegram-бота от аккаунта", responses={200: dict})
+    @extend_schema(
+        operation_id="users_me_telegram_disconnect",
+        summary="Отвязать Telegram-бота от аккаунта",
+        responses={200: SuccessMessageResponseSerializer},
+    )
     def delete(self, request):
         user = request.user
         user.telegram_chat_id = None

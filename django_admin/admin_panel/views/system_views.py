@@ -1,15 +1,19 @@
 import time
-from django.core.cache import cache
 from django.db import connection
+from rest_framework import serializers, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.serializers import (
+    EmptyRequestSerializer,
+    MediaPresetsCatalogResponseSerializer,
+)
 from admin_panel.services.media_presets import get_all_media_presets_catalog
 from admin_panel.services.settings_service import (
     SETTINGS_CACHE_TTL,
     SYSTEM_CONFIG_CACHE_KEY,
+    cache_get_safe,
+    cache_set_safe,
     get_all_settings,
     get_public_settings,
 )
@@ -38,14 +42,98 @@ ACHIEVEMENT_TRIGGER_TYPES = [
 ]
 
 
+class SystemPlatformInfoSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    apiVersion = serializers.CharField()
+    frontendUrl = serializers.CharField()
+    supportUrl = serializers.CharField()
+    welcomeTitle = serializers.CharField()
+    welcomeText = serializers.CharField()
+
+
+class SystemFeaturesSerializer(serializers.Serializer):
+    registrationOpen = serializers.BooleanField()
+    easterEggEnabled = serializers.BooleanField()
+
+
+class SystemGamificationSerializer(serializers.Serializer):
+    defaultTaskPoints = serializers.IntegerField()
+    bonusTaskMultiplier = serializers.IntegerField()
+    streakThresholdDays = serializers.IntegerField()
+    streakRewardPoints = serializers.IntegerField()
+    easterEggRewardPoints = serializers.IntegerField()
+    defaultStartMonth = serializers.IntegerField()
+
+
+class CodeLabelMetaSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    label = serializers.CharField()
+
+
+class AchievementTriggerMetaSerializer(CodeLabelMetaSerializer):
+    requiresThreshold = serializers.BooleanField()
+
+
+class UploadLimitsSerializer(serializers.Serializer):
+    avatarMaxBytes = serializers.IntegerField()
+    bannerMaxBytes = serializers.IntegerField()
+    customIconMaxBytes = serializers.IntegerField()
+    allowedMimeTypes = serializers.ListField(child=serializers.CharField())
+
+
+class PaginationDefaultsSerializer(serializers.Serializer):
+    defaultPage = serializers.IntegerField()
+    defaultLimit = serializers.IntegerField()
+    maxLimit = serializers.IntegerField()
+
+
+class TelegramConfigSerializer(serializers.Serializer):
+    botUsername = serializers.CharField()
+    botUrl = serializers.CharField()
+    connectEndpoint = serializers.CharField()
+    disconnectEndpoint = serializers.CharField()
+    recommendedPollIntervalMs = serializers.IntegerField()
+
+
+class SystemConfigResponseSerializer(serializers.Serializer):
+    platform = SystemPlatformInfoSerializer()
+    roles = serializers.ListField(child=serializers.CharField())
+    features = SystemFeaturesSerializer()
+    gamification = SystemGamificationSerializer()
+    submissionStatuses = CodeLabelMetaSerializer(many=True)
+    achievementCategories = CodeLabelMetaSerializer(many=True)
+    achievementTriggerTypes = AchievementTriggerMetaSerializer(many=True)
+    uploadLimits = UploadLimitsSerializer()
+    paginationDefaults = PaginationDefaultsSerializer()
+    telegram = TelegramConfigSerializer()
+    settings = serializers.DictField(child=serializers.JSONField())
+    mediaPresets = MediaPresetsCatalogResponseSerializer()
+
+
+class HealthChecksDetailSerializer(serializers.Serializer):
+    database = serializers.CharField()
+    telegramBot = serializers.CharField()
+
+
+class HealthCheckResponseSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    service = serializers.CharField()
+    mode = serializers.CharField()
+    responseTimeMs = serializers.IntegerField()
+    checks = HealthChecksDetailSerializer()
+
+
 class SystemConfigView(APIView):
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = ()
 
-    @extend_schema(summary="Единый конфигурационный эндпоинт платформы для фронтенда")
+    @extend_schema(
+        summary="Единый конфигурационный эндпоинт платформы для фронтенда",
+        responses={200: SystemConfigResponseSerializer},
+    )
     def get(self, request):
-        cached = cache.get(SYSTEM_CONFIG_CACHE_KEY)
+        cached = cache_get_safe(SYSTEM_CONFIG_CACHE_KEY)
         if cached is not None:
             return Response(cached)
 
@@ -69,7 +157,6 @@ class SystemConfigView(APIView):
             "features": {
                 "registrationOpen": bool(cfg.get('registration_open', True)),
                 "easterEggEnabled": bool(cfg.get('easter_egg_enabled', True)),
-                "allowAutoCreateGroups": bool(cfg.get('allow_auto_create_groups', True)),
             },
             "gamification": {
                 "defaultTaskPoints": int(cfg.get('default_task_points', 10) or 10),
@@ -113,7 +200,7 @@ class SystemConfigView(APIView):
             "settings": public_cfg,
             "mediaPresets": catalog,
         }
-        cache.set(SYSTEM_CONFIG_CACHE_KEY, payload, SETTINGS_CACHE_TTL)
+        cache_set_safe(SYSTEM_CONFIG_CACHE_KEY, payload, SETTINGS_CACHE_TTL)
         return Response(payload)
 
 
@@ -126,7 +213,8 @@ class HealthCheckView(APIView):
         summary="Проверка работоспособности сервиса (Health Check)",
         parameters=[
             OpenApiParameter(name="shallow", type=bool, description="Быстрая проверка без обращения к БД"),
-        ]
+        ],
+        responses={200: HealthCheckResponseSerializer, 503: HealthCheckResponseSerializer},
     )
     def get(self, request):
         is_shallow = request.query_params.get('shallow') in ('true', '1')

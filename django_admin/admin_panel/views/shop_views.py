@@ -8,6 +8,7 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
 from admin_panel.models import ShopOrder, ShopProduct
+from admin_panel.serializers import PaginatedMetaMixin
 from admin_panel.services.shop_service import ShopConflict, place_order, shop_balance
 
 
@@ -51,7 +52,7 @@ class ShopPurchaseSerializer(serializers.Serializer):
     expectedPriceCoins = serializers.IntegerField(required=False, min_value=0)
 
 
-class ShopCatalogSerializer(ShopBalanceSerializer):
+class ShopCatalogSerializer(ShopBalanceSerializer, PaginatedMetaMixin):
     products = ShopProductSerializer(many=True)
 
 

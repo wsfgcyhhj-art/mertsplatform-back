@@ -27,10 +27,14 @@ def client_ip(request):
 
 
 @transaction.atomic
-def consume_auth_attempt(ip, login=''):
-    keys = [('ip:' + ip, settings.AUTH_RATE_LIMIT * 5)]
+def consume_auth_attempt(ip, login='', *, scope='auth', ip_limit=None, account_limit=None):
+    resolved_ip_limit = ip_limit if ip_limit is not None else settings.AUTH_RATE_LIMIT * 5
+    resolved_account_limit = account_limit if account_limit is not None else settings.AUTH_RATE_LIMIT
+    ip_prefix = 'ip:' if scope == 'auth' else f'{scope}:ip:'
+    keys = [(ip_prefix + ip, resolved_ip_limit)]
     if login:
-        keys.append(('account:' + str(login).strip().lower()[:255], settings.AUTH_RATE_LIMIT))
+        acc_prefix = 'account:' if scope == 'auth' else f'{scope}:account:'
+        keys.append((acc_prefix + str(login).strip().lower()[:255], resolved_account_limit))
     for value, limit in keys:
         key = hashlib.sha256(value.encode()).hexdigest()
         bucket, _ = AuthRateBucket.objects.select_for_update().get_or_create(key=key)
@@ -48,6 +52,15 @@ class AuthThrottle(BaseThrottle):
         identity = client_ip(request)
         login = request.data.get('login', '') if isinstance(request.data, Mapping) else ''
         return consume_auth_attempt(identity, login)
+
+    def wait(self):
+        return 300
+
+
+class RefreshAuthThrottle(BaseThrottle):
+    def allow_request(self, request, view):
+        limit = getattr(settings, 'AUTH_REFRESH_RATE_LIMIT', settings.AUTH_RATE_LIMIT * 6)
+        return consume_auth_attempt(client_ip(request), '', scope='refresh', ip_limit=limit)
 
     def wait(self):
         return 300

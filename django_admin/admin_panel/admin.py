@@ -1,8 +1,9 @@
 from django.db import models, transaction
+from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import render
 from django.utils.html import format_html_join, escape
 from admin_panel.permissions import is_admin_owner
-import base64
 import os
 import re
 from django import forms
@@ -102,8 +103,10 @@ class SubmissionAdmin(ModelAdmin):
     @admin.action(description='✅ Принять выбранные ДЗ (ACCEPTED)')
     def mark_accepted(self, request, queryset):
         updated = 0
-        for sub in queryset:
+        for sub in queryset.select_related('task', 'reviewer'):
             sub.status = SubmissionStatusChoices.ACCEPTED
+            if sub.score is None and sub.task.has_score and sub.task.max_score is not None:
+                sub.score = sub.task.max_score
             sub.reviewer_id = getattr(sub.reviewer, 'pk', None)
             sub.reviewed_at = timezone.now()
             sub.save()
@@ -140,6 +143,8 @@ class SubmissionAdmin(ModelAdmin):
         return '—'
 
     def save_model(self, request, obj, form, change):
+        if obj.status == SubmissionStatusChoices.ACCEPTED and obj.score is None and obj.task_id and obj.task.has_score and obj.task.max_score is not None:
+            obj.score = obj.task.max_score
         if obj.status in ('ACCEPTED', 'REVISION') and not obj.reviewed_at:
             obj.reviewed_at = timezone.now()
         super().save_model(request, obj, form, change)
@@ -221,19 +226,48 @@ class StudyGroupAdmin(ModelAdmin):
     ordering = ('month', 'name')
     inlines = [StudyGroupStudentInline]
 
-    @admin.display(description='Студентов')
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        students_sq = Subquery(
+            User.objects.filter(role=RoleChoices.STUDENT, group_number=OuterRef('name'))
+            .values('group_number')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField(),
+        )
+        lessons_sq = Subquery(
+            Lesson.objects.filter(group_number=OuterRef('name'))
+            .values('group_number')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField(),
+        )
+        tasks_sq = Subquery(
+            Task.objects.filter(group_number=OuterRef('name'))
+            .values('group_number')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField(),
+        )
+        return qs.annotate(
+            _students_count=Coalesce(students_sq, Value(0)),
+            _lessons_count=Coalesce(lessons_sq, Value(0)),
+            _tasks_count=Coalesce(tasks_sq, Value(0)),
+        )
+
+    @admin.display(description='Студентов', ordering='_students_count')
     def students_count_badge(self, obj):
-        cnt = obj.students_count
+        cnt = getattr(obj, '_students_count', obj.students_count)
         return format_html('<span class="merts-positive">{} студ.</span>', cnt)
 
-    @admin.display(description='Видеоуроков')
+    @admin.display(description='Видеоуроков', ordering='_lessons_count')
     def lessons_count_badge(self, obj):
-        cnt = obj.lessons_count
+        cnt = getattr(obj, '_lessons_count', obj.lessons_count)
         return format_html('<span class="merts-link">{} ур.</span>', cnt)
 
-    @admin.display(description='Заданий')
+    @admin.display(description='Заданий', ordering='_tasks_count')
     def tasks_count_badge(self, obj):
-        cnt = obj.tasks_count
+        cnt = getattr(obj, '_tasks_count', obj.tasks_count)
         return format_html('<span class="merts-warning">{} ДЗ</span>', cnt)
 
 
@@ -423,6 +457,33 @@ class TaskAdmin(GroupSavingAdmin):
         results = [notify_task_published(task) for task in queryset]
         self.message_user(request, telegram_delivery_report(results), level=telegram_delivery_level(results))
 
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and Submission.objects.filter(task_id=obj.pk).exists():
+            return False
+        return super().has_delete_permission(request, obj=obj)
+
+    def delete_model(self, request, obj):
+        if Submission.objects.filter(task_id=obj.pk).exists():
+            self.message_user(
+                request,
+                f'Нельзя удалить задание «{obj.title}»: по нему уже есть сдачи студентов.',
+                level=messages.ERROR,
+            )
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        blocked_ids = set(queryset.filter(submissions__isnull=False).values_list('pk', flat=True))
+        if blocked_ids:
+            self.message_user(
+                request,
+                f'Пропущено удаление {len(blocked_ids)} заданий: по ним уже есть сдачи студентов.',
+                level=messages.ERROR,
+            )
+        deletable = queryset.exclude(pk__in=blocked_ids)
+        if deletable.exists():
+            super().delete_queryset(request, deletable)
+
 
 class ScoreAdjustmentInline(TabularInline):
     model = ScoreAdjustment
@@ -479,11 +540,13 @@ class UserAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        grp = clean_group((cleaned_data.get('group_selector') or '').strip())
-        if grp:
-            cleaned_data['group_number'] = grp
-            if cleaned_data.get('current_month') == 1:
-                cleaned_data['current_month'] = parse_month_from_group_name(grp)
+        if 'group_selector' in self.fields:
+            grp = clean_group((cleaned_data.get('group_selector') or '').strip())
+            cleaned_data['group_selector'] = grp
+            if grp:
+                cleaned_data['group_number'] = grp
+                if cleaned_data.get('current_month') == 1:
+                    cleaned_data['current_month'] = parse_month_from_group_name(grp)
         return cleaned_data
 
 
@@ -528,8 +591,15 @@ class UserAdmin(GroupSavingAdmin):
     ]
 
     def save_model(self, request, obj, form, change):
-        if change and 'group_number' in getattr(form, 'changed_data', ()):
+        changed = set(getattr(form, 'changed_data', ()))
+        cleaned = getattr(form, 'cleaned_data', {})
+        if 'group_selector' in cleaned and (not change or 'group_selector' in changed):
+            grp = (cleaned.get('group_selector') or '').strip()
+            obj.group_number = grp or None
+            obj.study_group = StudyGroup.objects.filter(name=grp).first() if grp else None
+        elif change and 'group_number' in changed:
             grp = (obj.group_number or '').strip()
+            obj.group_number = grp or None
             obj.study_group = StudyGroup.objects.filter(name=grp).first() if grp else None
         super().save_model(request, obj, form, change)
 
@@ -554,23 +624,48 @@ class UserAdmin(GroupSavingAdmin):
     @admin.action(description="🧮 Пересчитать баллы и обновить архив текущего месяца")
     def recalculate_student_scores(self, request, queryset):
         from django.db.models import Sum
-        from admin_panel.services.score_service import latest_accepted
+        from admin_panel.services.score_service import annotate_user_scores, latest_accepted
+
+        selected_users = list(queryset)
+        target_months = sorted({max(1, int(u.current_month or 1)) for u in selected_users})
+        ranks_by_month = {}
+        for month in target_months:
+            ranked = list(
+                annotate_user_scores(User.objects.filter(role=RoleChoices.STUDENT), month=month)
+                .order_by('-total_score', '-tasks_accepted_count', 'created_at', 'id')
+                .values('id', 'total_score', 'tasks_accepted_count')
+            )
+            ranks_by_month[month] = {
+                row['id']: (idx + 1, int(row['total_score'] or 0), int(row['tasks_accepted_count'] or 0))
+                for idx, row in enumerate(ranked)
+            }
+            for archive in MonthlyScoreArchive.objects.filter(month=month):
+                if archive.user_id in ranks_by_month[month]:
+                    new_rank, _, _ = ranks_by_month[month][archive.user_id]
+                    if archive.final_rank != new_rank:
+                        archive.final_rank = new_rank
+                        archive.save(update_fields=['final_rank'])
 
         updated = 0
-        for student in queryset:
+        for student in selected_users:
             month = max(1, int(student.current_month or 1))
-            accepted = latest_accepted(Submission.objects.filter(user_id=student.pk, task__month=month))
-            sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
-            adj_score = ScoreAdjustment.objects.filter(user_id=student.pk, month=month).aggregate(s=Sum('amount'))['s'] or 0
-            month_score = sub_score + adj_score
-            tasks_cnt = accepted.count()
+            month_map = ranks_by_month.get(month, {})
+            if student.pk in month_map:
+                final_rank, month_score, tasks_cnt = month_map[student.pk]
+            else:
+                accepted = latest_accepted(Submission.objects.filter(user_id=student.pk, task__month=month))
+                sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
+                adj_score = ScoreAdjustment.objects.filter(user_id=student.pk, month=month).aggregate(s=Sum('amount'))['s'] or 0
+                month_score = sub_score + adj_score
+                tasks_cnt = accepted.count()
+                final_rank = len(month_map) + 1
             MonthlyScoreArchive.objects.update_or_create(
                 user=student,
                 month=month,
                 defaults={
                     'final_score': month_score,
                     'tasks_accepted_count': tasks_cnt,
-                    'final_rank': 0,
+                    'final_rank': final_rank,
                 },
             )
             updated += 1
@@ -727,7 +822,7 @@ class PresetIconGalleryWidget(forms.Widget):
                                 var previewImg = document.getElementById('merts_live_icon_preview');
                                 if (previewImg) previewImg.src = evt.target.result;
                                 var caption = document.getElementById('merts_live_icon_caption');
-                                if (caption) caption.textContent = 'Файл готов к загрузке в Neon DB: ' + file.name + ' (' + Math.round(file.size / 1024) + ' КБ)';
+                                if (caption) caption.textContent = 'Файл готов к загрузке в PostgreSQL: ' + file.name + ' (' + Math.round(file.size / 1024) + ' КБ)';
                                 var iconInput = document.getElementById('id_icon_url');
                                 if (iconInput) iconInput.value = '';
                             }};
@@ -750,7 +845,7 @@ class AchievementAdminForm(forms.ModelForm):
     custom_icon_file = forms.FileField(
         label='Загрузить свою кастомную иконку (PNG / WebP)',
         required=False,
-        help_text='Максимальный размер: 512 КБ. При загрузке файла он автоматически кодируется и надежно сохраняется в БД Neon (не пропадает при редеплое на Render).',
+        help_text='Максимальный размер: 512 КБ. При загрузке файла он автоматически сжимается и надёжно сохраняется в таблице MediaAsset (PostgreSQL).',
         widget=forms.ClearableFileInput(attrs={'accept': '.png,.jpg,.webp,image/png,image/jpeg,image/webp'}),
     )
 
@@ -897,6 +992,33 @@ class AchievementAdmin(ModelAdmin):
     ordering = ('created_at',)
     actions = ['reevaluate_all_students']
 
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and UserAchievement.objects.filter(achievement_id=obj.pk).exists():
+            return False
+        return super().has_delete_permission(request, obj=obj)
+
+    def delete_model(self, request, obj):
+        if UserAchievement.objects.filter(achievement_id=obj.pk).exists():
+            self.message_user(
+                request,
+                f'Нельзя удалить достижение «{obj.title}»: оно уже выдано студентам.',
+                level=messages.ERROR,
+            )
+            return
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        blocked_ids = set(queryset.filter(user_achievements__isnull=False).values_list('pk', flat=True))
+        if blocked_ids:
+            self.message_user(
+                request,
+                f'Пропущено удаление {len(blocked_ids)} достижений: они уже выданы студентам.',
+                level=messages.ERROR,
+            )
+        deletable = queryset.exclude(pk__in=blocked_ids)
+        if deletable.exists():
+            super().delete_queryset(request, deletable)
+
     @admin.action(description='🏆 Перепроверить все ачивки для всех студентов')
     def reevaluate_all_students(self, request, queryset):
         total = 0
@@ -967,7 +1089,7 @@ class AchievementAdmin(ModelAdmin):
         if preset:
             return format_html('<span class="merts-warning">Пресет ({})</span>', preset['slug'])
         if obj.icon_url and ('/api/v1/media/' in obj.icon_url or obj.icon_url.startswith('data:image/')):
-            return format_html('<span class="merts-positive">{}</span>', 'Кастомный файл (Neon DB)')
+            return format_html('<span class="merts-positive">{}</span>', 'Кастомный файл (PostgreSQL)')
         return 'Внешний URL'
 
 
@@ -1001,22 +1123,21 @@ class MediaAssetAdmin(ModelAdmin):
     readonly_fields = ('id', 'kind', 'mime_type', 'size_bytes', 'owner_id', 'created_at', 'asset_preview')
     ordering = ('-created_at',)
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).defer('data')
+
     @admin.display(description='Превью')
     def asset_preview(self, obj):
-        try:
-            raw_bytes = bytes(obj.data)
-            b64 = base64.b64encode(raw_bytes).decode('ascii')
-            src = f"data:{obj.mime_type};base64,{b64}"
-            return format_html(
-                '<div style="width:48px;height:48px;border-radius:10px;background:#09090b;'
-                'border:1px solid #27272a;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
-                '<img src="{}" alt="{}" style="width:100%;height:100%;object-fit:cover;" />'
-                '</div>',
-                src,
-                obj.kind,
-            )
-        except Exception:
+        if not obj or not obj.pk:
             return '—'
+        return format_html(
+            '<div style="width:48px;height:48px;border-radius:10px;background:#09090b;'
+            'border:1px solid #27272a;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
+            '<img src="/api/v1/media/{}" alt="{}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" />'
+            '</div>',
+            obj.id,
+            obj.kind,
+        )
 
     @admin.display(description='Размер')
     def size_kb(self, obj):

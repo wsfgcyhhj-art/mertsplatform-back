@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from datetime import timedelta
 from cryptography.fernet import Fernet
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from admin_panel.models import TelegramOutbox
 
@@ -34,9 +34,21 @@ def enqueue(chat_id, text, reply_markup=None, dedupe_key=None, *, voice=None):
 
 
 def deliver(pk):
-    from .telegram_service import get_last_telegram_error, send_telegram_message
+    from .telegram_service import (
+        get_last_telegram_error,
+        is_last_telegram_error_permanent,
+        reset_last_telegram_error,
+        send_telegram_message,
+    )
     with transaction.atomic():
-        item = TelegramOutbox.objects.select_for_update().get(pk=pk)
+        qs = (
+            TelegramOutbox.objects.select_for_update(skip_locked=True)
+            if connection.features.has_select_for_update_skip_locked
+            else TelegramOutbox.objects.select_for_update()
+        )
+        item = qs.filter(pk=pk).first()
+        if not item:
+            return False
         now = timezone.now()
         if item.status in ('sent', 'failed') or item.available_at > now:
             return False
@@ -45,16 +57,19 @@ def deliver(pk):
         item.attempts += 1
         item.available_at = now + timedelta(minutes=2)
         item.save()
+    permanent = False
     try:
+        reset_last_telegram_error()
         payload = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
         ok = send_telegram_message(item.chat_id, **payload)
         error = '' if ok else (get_last_telegram_error() or 'Telegram rejected message or network unavailable')
+        permanent = False if ok else is_last_telegram_error_permanent()
     except Exception as exc:
         ok, error = False, f'{type(exc).__name__}: {str(exc)[:180]}'
     error = (error or '')[:255]
     with transaction.atomic():
         item = TelegramOutbox.objects.select_for_update().get(pk=pk)
-        item.status = 'sent' if ok else ('failed' if item.attempts >= 10 else 'pending')
+        item.status = 'sent' if ok else ('failed' if (permanent or item.attempts >= 10) else 'pending')
         item.last_error = error
         item.available_at = timezone.now() + timedelta(seconds=min(3600, 2 ** item.attempts * 5))
         if ok:

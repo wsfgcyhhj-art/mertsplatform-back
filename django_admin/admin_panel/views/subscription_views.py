@@ -1,6 +1,11 @@
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from admin_panel.serializers import validate_new_password, EmptyRequestSerializer
+from admin_panel.serializers import (
+    validate_new_password,
+    EmptyRequestSerializer,
+    ErrorResponseSerializer,
+    MessageResponseSerializer,
+)
 from admin_panel.throttles import AuthThrottle
 import hashlib
 from django.db import transaction
@@ -25,7 +30,7 @@ class PasswordResetView(APIView):
     authentication_classes = ()
     permission_classes = (AllowAny,)
 
-    @extend_schema(request=ResetSerializer, responses={200: dict, 400: dict})
+    @extend_schema(request=ResetSerializer, responses={200: MessageResponseSerializer, 400: ErrorResponseSerializer})
     @transaction.atomic
     def post(self, request):
         serializer = ResetSerializer(data=request.data)
