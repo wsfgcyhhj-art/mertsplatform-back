@@ -23,27 +23,42 @@ export function ShopPage() {
     const [busy, setBusy] = useState(false);
     const purchaseInProgress = useRef(false);
 
-    const load = useCallback(async (signal) => {
+    const applyShopData = useCallback((products, history) => {
         setError('');
+        setCatalog(products.data);
+        setOrders(history.data);
+    }, []);
+
+    const load = useCallback(async (signal) => {
         try {
             const [products, history] = await Promise.all([
                 api.get('/shop/products', { signal }),
                 api.get('/shop/orders/my', { signal }),
             ]);
-            setCatalog(products.data);
-            setOrders(history.data);
+            applyShopData(products, history);
         } catch (err) {
             if (!signal?.aborted) {
                 setError(err.response?.data?.detail || 'Не удалось загрузить магазин. Попробуйте ещё раз.');
             }
         }
-    }, []);
+    }, [applyShopData]);
 
     useEffect(() => {
         const controller = new AbortController();
-        load(controller.signal);
+        Promise.all([
+            api.get('/shop/products', { signal: controller.signal }),
+            api.get('/shop/orders/my', { signal: controller.signal }),
+        ])
+            .then(([products, history]) => {
+                if (!controller.signal.aborted) applyShopData(products, history);
+            })
+            .catch((err) => {
+                if (!controller.signal.aborted) {
+                    setError(err.response?.data?.detail || 'Не удалось загрузить магазин. Попробуйте ещё раз.');
+                }
+            });
         return () => controller.abort();
-    }, [load]);
+    }, [applyShopData]);
 
     async function buy() {
         if (!selection || purchaseInProgress.current) return;
@@ -91,7 +106,7 @@ export function ShopPage() {
 
             {notice && <p className={styles.notice} role="status">{notice}</p>}
             {error && !selection && <p className={styles.error} role="alert">
-                {error} <button type="button" onClick={() => load()}>Обновить</button>
+                {error} <button type="button" onClick={() => { setError(''); load(); }}>Обновить</button>
             </p>}
             {!catalog && !error && <p role="status">Загрузка магазина…</p>}
 

@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from django.db.models import Sum
 from django.utils import timezone
+from admin_panel.achievement_icons import normalize_icon_url
 from admin_panel.models import (
     User,
     Achievement,
@@ -200,7 +201,7 @@ def award_achievement(user_id: str, code: str) -> Optional[Dict[str, Any]]:
         'code': ach.code,
         'title': ach.title,
         'description': ach.description,
-        'iconUrl': ach.icon_url,
+        'iconUrl': normalize_icon_url(ach.icon_url),
         'category': ach.category,
         'triggerType': ach.trigger_type,
         'threshold': ach.threshold,

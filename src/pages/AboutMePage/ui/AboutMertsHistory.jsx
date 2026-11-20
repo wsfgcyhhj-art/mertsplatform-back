@@ -1,5 +1,5 @@
 import cls from '../styles/aboutHistory.module.scss'
-import { FaCalendarAlt, FaRegUser, FaTelegramPlane, FaUserAlt} from "react-icons/fa";
+import { FaCalendarAlt, FaRegUser, FaTelegramPlane } from "react-icons/fa";
 import {useHistory} from "../../../store/historyStore.js";
 import {useState} from "react";
 

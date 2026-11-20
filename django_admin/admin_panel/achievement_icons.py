@@ -92,12 +92,40 @@ RAW_PRESET_ICONS: List[Dict[str, str]] = [
         'label': 'Медаль (Герой месяца)',
         'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>',
     },
+    {
+        'slug': 'star',
+        'legacy_key': 'Star',
+        'code': 'SCORE_20',
+        'label': 'Звезда (Первая двадцатка)',
+        'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    },
+    {
+        'slug': 'search',
+        'legacy_key': 'Search',
+        'code': 'EASTER_EGG',
+        'label': 'Поиск (Любопытный исследователь)',
+        'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+    },
+    {
+        'slug': 'calendar',
+        'legacy_key': 'Calendar',
+        'code': 'STREAK_MASTER',
+        'label': 'Календарь (Железная воля)',
+        'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>',
+    },
+    {
+        'slug': 'code',
+        'legacy_key': 'Code',
+        'code': 'BUG_HUNTER',
+        'label': 'Код (Работа над ошибками)',
+        'svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    },
 ]
 
 PRESET_ACHIEVEMENT_ICONS: List[Dict[str, str]] = [
     {
         **item,
-        'url': f"/api/v1/achievements/icons/{item['slug']}.svg",
+        'url': f"/api/v1/media/presets/icons/{item['slug']}.svg",
         'data_uri': _to_data_uri(item['svg']),
     }
     for item in RAW_PRESET_ICONS

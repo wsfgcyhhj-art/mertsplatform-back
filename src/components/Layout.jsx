@@ -11,9 +11,9 @@ export const Layout = () => {
             <AchievementToastHost/>
             <div style={{ display: "flex", minHeight: "100vh", width: "100%" }}>
                 <Header />
-                <div style={{ marginLeft: "61px", flex: 1, width: "calc(100% - 61px)", minWidth: 0 }}>
+                <main style={{ marginLeft: "64px", flex: 1, width: "calc(100% - 64px)", minWidth: 0 }}>
                     <Outlet/>
-                </div>
+                </main>
             </div>
             <Footer/>
         </>

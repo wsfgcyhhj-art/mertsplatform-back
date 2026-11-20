@@ -17,5 +17,14 @@ export const useProfile = create(persist((set) => ({
             tg: tg,
             group: group,
         }
-    })
+    }),
+    resetProfile: () => set({
+        bannerUrlImg: '',
+        profileUrlImg: '',
+        profileCustomInfo: {
+            name: 'пусто',
+            tg: 'пусто',
+            group: 'пусто',
+        }
+    }),
 }), {name: 'profile-user-merts-chat'}));

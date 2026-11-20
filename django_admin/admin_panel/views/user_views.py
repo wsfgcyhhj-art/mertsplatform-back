@@ -133,10 +133,12 @@ class AvatarUploadView(APIView):
                 kind='AVATAR',
                 owner_id=request.user.id,
             )
+            request.user.refresh_from_db()
 
             return Response({
                 "avatarUrl": asset['url'],
                 "asset": asset,
+                "user": UserProfileSerializer(request.user, context={'request': request}).data,
             })
         except ValueError as e:
             return Response(
@@ -168,10 +170,12 @@ class BannerUploadView(APIView):
                 kind='BANNER',
                 owner_id=request.user.id,
             )
+            request.user.refresh_from_db()
 
             return Response({
                 "bannerUrl": asset['url'],
                 "asset": asset,
+                "user": UserProfileSerializer(request.user, context={'request': request}).data,
             })
         except ValueError as e:
             return Response(

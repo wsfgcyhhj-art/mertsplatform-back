@@ -1,6 +1,6 @@
-import { useRef, useEffect } from 'react';
-import cls from '../../src/components/header.module.scss';
-import { FaHome, FaNewspaper, FaTasks, FaTrophy, FaAward, FaShoppingBag, FaTerminal } from "react-icons/fa";
+import { useRef, useEffect, useState } from 'react';
+import cls from './header.module.scss';
+import { FaHome, FaNewspaper, FaTasks, FaTrophy, FaAward, FaShoppingBag } from "react-icons/fa";
 import { FaBookOpenReader, FaRegMessage } from "react-icons/fa6";
 import { MdAdminPanelSettings } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
@@ -8,8 +8,9 @@ import { IoMdExit } from "react-icons/io";
 import { ProfileImgMobile } from "./ProfileImgMobile.jsx";
 import { HiMiniQuestionMarkCircle } from "react-icons/hi2";
 import { useFindUser } from "../store/userStore.js";
-import { api, extractAuthToken } from "../api/client.js";
-import { showAchievementToast } from "./AchievementToast.jsx";
+import { useProfile } from "../store/useProfile.js";
+import { api, extractAuthToken, resetCsrfToken } from "../api/client.js";
+import { claimEasterEgg } from "../utils/achievements.js";
 
 function getStreakWord(count) {
     const abs = Math.abs(count) % 100;
@@ -21,8 +22,9 @@ function getStreakWord(count) {
 }
 
 export const Header = () => {
-    const { userInfo, addUser, removeUser } = useFindUser();
+    const { userInfo, removeUser } = useFindUser();
     const navigate = useNavigate();
+    const [expanded, setExpanded] = useState(false);
 
     const clickCountRef = useRef(0);
     const timerRef = useRef(null);
@@ -35,8 +37,9 @@ export const Header = () => {
                 const res = await api.get('/users/me');
                 if (isMounted && res.data?.user) {
                     const resolvedStreak = res.data?.stats?.streakCount ?? res.data?.user?.streakCount ?? 0;
+                    const { userInfo: currentUser, addUser } = useFindUser.getState();
                     addUser({
-                        ...(userInfo || {}),
+                        ...(currentUser || {}),
                         ...res.data.user,
                         streakCount: resolvedStreak,
                     });
@@ -46,8 +49,7 @@ export const Header = () => {
             }
         };
 
-        const token = extractAuthToken();
-        if (token) {
+        if (extractAuthToken()) {
             fetchMe();
         }
 
@@ -69,23 +71,7 @@ export const Header = () => {
             clickCountRef.current = 0;
             claimingRef.current = true;
             try {
-                const res = await api.post('/users/me/easter-egg');
-                if (res.data?.achievement) {
-                    showAchievementToast({
-                        title: 'Любопытный хакер',
-                        customMessage: '🎉 Вы нашли секретную пасхалку! Получена ачивка "Любопытный хакер" (+20 очков)',
-                        description: res.data.achievement.description,
-                        points: 20,
-                        iconUrl: 'Terminal',
-                    });
-                    window.dispatchEvent(new CustomEvent('merts:refresh-achievements'));
-                } else if (res.data?.alreadyUnlocked) {
-                    showAchievementToast({
-                        title: 'Любопытный хакер',
-                        customMessage: 'Пасхалка уже активирована — ачивка «Любопытный хакер» получена!',
-                        iconUrl: 'Terminal',
-                    });
-                }
+                await claimEasterEgg();
             } catch (err) {
                 console.error('Easter egg claim error', err);
             } finally {
@@ -149,118 +135,124 @@ export const Header = () => {
         });
     }
 
-    const exit = async () => {
-        try { await api.post('/auth/logout'); } catch { window.alert('Не удалось завершить сессию'); return; }
-        removeUser();
-        localStorage.removeItem('user-merts-chat');
-        navigate('/auth');
+    const handleNavigate = (path) => {
+        setExpanded(false);
+        navigate(path);
     };
 
+    const exit = async () => {
+        setExpanded(false);
+        try {
+            await api.post('/auth/logout');
+        } catch {
+            // Завершаем локальную сессию даже если сервер недоступен или сессия уже истекла
+        } finally {
+            resetCsrfToken();
+            removeUser();
+            useProfile.getState().resetProfile();
+            localStorage.removeItem('user-merts-chat');
+            localStorage.removeItem('profile-user-merts-chat');
+            navigate('/auth', { replace: true });
+        }
+    };
+
+    const streakCount = userInfo?.streakCount || 0;
+
     return (
-        <div className={cls.header}>
+        <nav
+            aria-label="Навигация"
+            className={`${cls.header} ${expanded ? cls.expanded : ''}`}
+            onMouseEnter={() => setExpanded(true)}
+            onMouseLeave={() => setExpanded(false)}
+        >
             <div className={cls.header_items}>
                 <div className={cls.feuters}>
                     <div
                         onClick={handleLogoEasterEgg}
                         title="MertsPlatform"
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            margin: '14px auto -36px auto',
-                            padding: '4px',
-                            cursor: 'pointer',
-                            userSelect: 'none',
-                            width: '100%',
-                            maxHeight: '44px',
-                            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                        }}
+                        className={cls.brand_logo}
                     >
                         <img
                             src="/logo.png"
                             alt="MertsPlatform"
-                            style={{
-                                height: '36px',
-                                maxWidth: '90%',
-                                objectFit: 'contain',
-                                filter: 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3))',
-                                transition: 'transform 0.25s ease, filter 0.25s ease',
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.transform = 'scale(1.06)';
-                                e.currentTarget.style.filter = 'drop-shadow(0 4px 12px rgba(245, 158, 11, 0.4))';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.transform = 'scale(1)';
-                                e.currentTarget.style.filter = 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3))';
-                            }}
+                            className={cls.brand_logo_img}
                         />
                     </div>
 
                     {userInfo && (
-                        <div
+                        <button
+                            type="button"
                             title="Дней подряд в платформе"
-                            onClick={() => navigate('/profile')}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '6px',
-                                margin: '46px auto -52px auto',
-                                padding: '5px 10px',
-                                borderRadius: '20px',
-                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(245, 158, 11, 0.15))',
-                                border: '1px solid rgba(245, 158, 11, 0.35)',
-                                color: '#fbbf24',
-                                cursor: 'pointer',
-                                userSelect: 'none',
-                                fontSize: '13px',
-                                fontWeight: 700,
-                                transition: 'all 0.3s ease',
-                                width: 'fit-content',
-                                maxWidth: '220px',
-                                whiteSpace: 'nowrap',
-                                boxShadow: '0 2px 8px rgba(245, 158, 11, 0.15)',
-                            }}
+                            onClick={() => handleNavigate('/profile')}
+                            className={cls.streak_badge}
                         >
-                            <span style={{ fontSize: '15px', lineHeight: 1 }}>🔥</span>
-                            <span>{userInfo?.streakCount || 0}</span>
-                            <span style={{ fontSize: '11px', color: '#fed7aa', fontWeight: 600 }}>
-                                {getStreakWord(userInfo?.streakCount || 0)}
-                            </span>
-                        </div>
+                            <span style={{ fontSize: '14px', lineHeight: 1 }}>🔥</span>
+                            <span>{streakCount}</span>
+                            {expanded && (
+                                <span style={{ fontSize: '11px', color: '#fed7aa', fontWeight: 600 }}>
+                                    {getStreakWord(streakCount)}
+                                </span>
+                            )}
+                        </button>
                     )}
 
                     <div className={cls.feut_items}>
                         {feutersItems?.map((i) => (
-                            <div key={i?.id} className={cls.feut_item} onClick={() => navigate(`/${i.path}`)}>
-                                <div className={cls.imgs}>
+                            <button
+                                key={i?.id}
+                                type="button"
+                                className={cls.feut_item}
+                                onClick={() => handleNavigate(`/${i.path}`)}
+                                title={i?.name}
+                            >
+                                <span className={cls.imgs}>
                                     <i.img />
-                                </div>
-                                <h4>{i?.name}</h4>
-                            </div>
+                                </span>
+                                <span className={cls.nav_label}>{i?.name}</span>
+                            </button>
                         ))}
-                        <div className={cls.feut_item}>
-                            <div className={cls.imgs}>
-                                <HiMiniQuestionMarkCircle className={cls.l} />
-                            </div>
-                            <h4><a href="/MertsPlatform_Instruction.pdf" download>Инструкция</a></h4>
-                        </div>
-                    </div>
-                    <div className={cls.header_footer}>
-                        <div className={cls.support}>
-                            <FaRegMessage className={cls.supp_img} />
-                            <h4 onClick={() => window.location.href = 'https://t.me/Merts228'}>Нужна помощь?</h4>
-                        </div>
-                        <div className={cls.exit}>
-                            <div className={cls.exit_item} onClick={exit}>
-                                <IoMdExit className={cls.supp_img} />
-                                Выйти
-                            </div>
-                        </div>
+                        <a
+                            href="/MertsPlatform_Instruction.pdf"
+                            download
+                            className={cls.feut_item}
+                            onClick={() => setExpanded(false)}
+                            title="Инструкция"
+                        >
+                            <span className={cls.imgs}>
+                                <HiMiniQuestionMarkCircle />
+                            </span>
+                            <span className={cls.nav_label}>Инструкция</span>
+                        </a>
                     </div>
                 </div>
+
+                <div className={cls.header_footer}>
+                    <a
+                        href="https://t.me/Merts228"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={cls.feut_item}
+                        onClick={() => setExpanded(false)}
+                        title="Нужна помощь?"
+                    >
+                        <span className={cls.imgs}>
+                            <FaRegMessage />
+                        </span>
+                        <span className={cls.nav_label}>Нужна помощь?</span>
+                    </a>
+                    <button
+                        type="button"
+                        className={`${cls.feut_item} ${cls.exit_item}`}
+                        onClick={exit}
+                        title="Выйти"
+                    >
+                        <span className={cls.imgs}>
+                            <IoMdExit />
+                        </span>
+                        <span className={cls.nav_label}>Выйти</span>
+                    </button>
+                </div>
             </div>
-        </div>
+        </nav>
     );
 };

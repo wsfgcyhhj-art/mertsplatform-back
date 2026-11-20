@@ -636,7 +636,7 @@ class AchievementAdminForm(forms.ModelForm):
         widgets = {
             'icon_url': forms.TextInput(
                 attrs={
-                    'placeholder': '/api/v1/achievements/icons/trophy.svg или https://... или data:image/...',
+                    'placeholder': '/api/v1/media/presets/icons/trophy.svg или https://... или data:image/...',
                 }
             ),
             'criteria': forms.Textarea(

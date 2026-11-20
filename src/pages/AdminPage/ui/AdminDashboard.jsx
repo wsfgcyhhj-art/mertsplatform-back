@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Tabs, Tag, ConfigProvider, theme, Button, Space } from 'antd';
+import { Tag, ConfigProvider, theme, Button, Space, Spin } from 'antd';
 import {
   FileTextOutlined,
   VideoCameraOutlined,
@@ -7,107 +7,57 @@ import {
   TeamOutlined,
   DatabaseOutlined,
   ClockCircleOutlined,
+  CheckCircleOutlined,
+  TrophyOutlined,
+  ExportOutlined,
 } from '@ant-design/icons';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { SubmissionsTab } from './SubmissionsTab.jsx';
-import { LessonsTab } from './LessonsTab.jsx';
-import { TasksTab } from './TasksTab.jsx';
-import { StudentsTab } from './StudentsTab.jsx';
 import { useFindUser } from '../../../store/userStore.js';
 import { api, API_BASE_URL } from '../../../api/client.js';
 import styles from '../styles/admin.module.scss';
 
 export const AdminDashboard = () => {
-  const location = useLocation();
-  const navigate = useNavigate();
   const { userInfo } = useFindUser();
-
-  const [kpi, setKpi] = useState({
-    pendingSubmissions: 0,
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
     totalStudents: 0,
-    totalLessons: 0,
-    totalTasks: 0,
+    totalSubmissions: 0,
+    pendingSubmissions: 0,
+    acceptedSubmissions: 0,
   });
 
-  const getTabFromPath = () => {
-    const path = location.pathname;
-    if (path.includes('/admin/lessons')) return 'lessons';
-    if (path.includes('/admin/tasks')) return 'tasks';
-    if (path.includes('/admin/students')) return 'students';
-    return 'submissions';
-  };
-
-  const [activeKey, setActiveKey] = useState(getTabFromPath());
-
-  useEffect(() => {
-    setActiveKey(getTabFromPath());
-  }, [location.pathname]);
+  const adminBaseUrl = new URL('/admin/', new URL(API_BASE_URL, window.location.origin)).href;
+  const adminSections = [
+    { key: 'submission', label: 'Проверка ДЗ', icon: <CheckSquareOutlined />, path: 'admin_panel/submission/' },
+    { key: 'lesson', label: 'Видеоуроки', icon: <VideoCameraOutlined />, path: 'admin_panel/lesson/' },
+    { key: 'task', label: 'Учебные задания', icon: <FileTextOutlined />, path: 'admin_panel/task/' },
+    { key: 'user', label: 'Студенты и Баллы', icon: <TeamOutlined />, path: 'admin_panel/user/' },
+    { key: 'achievement', label: 'Каталог ачивок', icon: <TrophyOutlined />, path: 'admin_panel/achievement/' },
+  ];
 
   useEffect(() => {
+    let active = true;
     const loadSummary = async () => {
       try {
-        const [subsRes, leadRes, lessonsRes, tasksRes] = await Promise.all([
-          api.get('/admin/submissions', { params: { status: 'SENT' } }),
-          api.get('/leaderboard'),
-          api.get('/admin/lessons'),
-          api.get('/admin/tasks'),
-        ]);
-        setKpi({
-          pendingSubmissions: subsRes.data?.submissions?.length || 0,
-          totalStudents: Array.isArray(leadRes.data) ? leadRes.data.length : 0,
-          totalLessons: lessonsRes.data?.lessons?.length || 0,
-          totalTasks: tasksRes.data?.tasks?.length || 0,
-        });
+        const res = await api.get('/admin/stats');
+        if (active && res.data) {
+          setStats({
+            totalStudents: res.data.totalStudents || 0,
+            totalSubmissions: res.data.totalSubmissions || 0,
+            pendingSubmissions: res.data.pendingSubmissions || 0,
+            acceptedSubmissions: res.data.acceptedSubmissions || 0,
+          });
+        }
       } catch (err) {
         console.error('KPI load error', err);
+      } finally {
+        if (active) setLoading(false);
       }
     };
     loadSummary();
-  }, [activeKey]);
-
-  const handleTabChange = (key) => {
-    setActiveKey(key);
-    navigate(`/admin/${key}`);
-  };
-
-  const tabItems = [
-    {
-      key: 'submissions',
-      label: (
-        <span>
-          <FileTextOutlined /> Проверка ДЗ ({kpi.pendingSubmissions})
-        </span>
-      ),
-      children: <SubmissionsTab />,
-    },
-    {
-      key: 'lessons',
-      label: (
-        <span>
-          <VideoCameraOutlined /> Видеоуроки ({kpi.totalLessons})
-        </span>
-      ),
-      children: <LessonsTab />,
-    },
-    {
-      key: 'tasks',
-      label: (
-        <span>
-          <CheckSquareOutlined /> Задания ({kpi.totalTasks})
-        </span>
-      ),
-      children: <TasksTab />,
-    },
-    {
-      key: 'students',
-      label: (
-        <span>
-          <TeamOutlined /> Студенты и Баллы ({kpi.totalStudents})
-        </span>
-      ),
-      children: <StudentsTab />,
-    },
-  ];
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <ConfigProvider
@@ -115,8 +65,8 @@ export const AdminDashboard = () => {
         algorithm: theme.darkAlgorithm,
         token: {
           colorPrimary: '#f59e0b',
-          colorBgContainer: '#182042',
-          colorBgElevated: '#1e274f',
+          colorBgContainer: '#18181b',
+          colorBgElevated: '#27272a',
           borderRadius: 12,
           fontSize: 16,
           controlHeight: 44,
@@ -125,34 +75,42 @@ export const AdminDashboard = () => {
     >
       <div className={styles.adminContainer}>
         <div className={styles.adminHeader}>
-          <div>
+          <div style={{ minWidth: 0, maxWidth: '100%' }}>
             <h1>Панель управления MertsPlatform</h1>
-            <p>Полноэкранный центр проверки домашних работ, управления уроками, заданиями и рейтингом</p>
+            <p>Сводка платформы и быстрый переход в Django Unfold Admin для управления учебным процессом</p>
           </div>
-          <Space size="middle" wrap>
+          <Space size="middle" wrap style={{ maxWidth: '100%' }}>
             <Button
               type="primary"
               size="large"
               icon={<DatabaseOutlined />}
-              href={new URL('/admin/', new URL(API_BASE_URL, window.location.origin)).href}
+              href={adminBaseUrl}
               target="_blank"
+              rel="noopener noreferrer"
               style={{
-                background: 'linear-gradient(135deg, #f59e0b 0%, #6366f1 100%)',
+                background: '#f59e0b',
+                color: '#09090b',
                 border: 'none',
-                fontWeight: 600,
-                height: 48,
-                padding: '0 24px',
+                fontWeight: 700,
+                minHeight: 48,
+                height: 'auto',
+                padding: '10px 16px',
+                whiteSpace: 'normal',
+                maxWidth: '100%',
               }}
             >
-              Открыть СУБД (Django Admin) ↗
+              Открыть Django Unfold Admin ↗
             </Button>
             <Tag
-              color="purple"
+              color="gold"
               style={{
                 fontSize: 15,
                 padding: '10px 18px',
                 borderRadius: 12,
                 fontWeight: 600,
+                maxWidth: '100%',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
               }}
             >
               👑 {userInfo?.name || userInfo?.login} (ADMIN)
@@ -161,64 +119,89 @@ export const AdminDashboard = () => {
         </div>
 
         {/* Крупные карточки статистики */}
-        <div className={styles.statsGrid}>
-          <div className={styles.statCard} onClick={() => handleTabChange('submissions')} style={{ cursor: 'pointer' }}>
-            <div>
-              <div className={styles.statTitle}>Ожидают проверки</div>
-              <div className={styles.statValue} style={{ color: '#f59e0b' }}>
-                {kpi.pendingSubmissions}
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '60px 0' }}>
+            <Spin size="large" />
+          </div>
+        ) : (
+          <div className={styles.statsGrid}>
+            <div className={styles.statCard}>
+              <div>
+                <div className={styles.statTitle}>Ожидают проверки</div>
+                <div className={styles.statValue} style={{ color: '#f59e0b' }}>
+                  {stats.pendingSubmissions}
+                </div>
+              </div>
+              <div className={styles.statIcon} style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                <ClockCircleOutlined />
               </div>
             </div>
-            <div className={styles.statIcon} style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
-              <ClockCircleOutlined />
-            </div>
-          </div>
 
-          <div className={styles.statCard} onClick={() => handleTabChange('students')} style={{ cursor: 'pointer' }}>
-            <div>
-              <div className={styles.statTitle}>Активных студентов</div>
-              <div className={styles.statValue} style={{ color: '#10b981' }}>
-                {kpi.totalStudents}
+            <div className={styles.statCard}>
+              <div>
+                <div className={styles.statTitle}>Активных студентов</div>
+                <div className={styles.statValue} style={{ color: '#10b981' }}>
+                  {stats.totalStudents}
+                </div>
+              </div>
+              <div className={styles.statIcon} style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                <TeamOutlined />
               </div>
             </div>
-            <div className={styles.statIcon} style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
-              <TeamOutlined />
-            </div>
-          </div>
 
-          <div className={styles.statCard} onClick={() => handleTabChange('lessons')} style={{ cursor: 'pointer' }}>
-            <div>
-              <div className={styles.statTitle}>Видеоуроков в базе</div>
-              <div className={styles.statValue} style={{ color: '#3b82f6' }}>
-                {kpi.totalLessons}
+            <div className={styles.statCard}>
+              <div>
+                <div className={styles.statTitle}>Всего сдач ДЗ</div>
+                <div className={styles.statValue} style={{ color: '#3b82f6' }}>
+                  {stats.totalSubmissions}
+                </div>
+              </div>
+              <div className={styles.statIcon} style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
+                <FileTextOutlined />
               </div>
             </div>
-            <div className={styles.statIcon} style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
-              <VideoCameraOutlined />
-            </div>
-          </div>
 
-          <div className={styles.statCard} onClick={() => handleTabChange('tasks')} style={{ cursor: 'pointer' }}>
-            <div>
-              <div className={styles.statTitle}>Учебных заданий</div>
-              <div className={styles.statValue} style={{ color: '#f59e0b' }}>
-                {kpi.totalTasks}
+            <div className={styles.statCard}>
+              <div>
+                <div className={styles.statTitle}>Принятых работ</div>
+                <div className={styles.statValue} style={{ color: '#22c55e' }}>
+                  {stats.acceptedSubmissions}
+                </div>
+              </div>
+              <div className={styles.statIcon} style={{ background: 'rgba(34, 197, 94, 0.15)', color: '#22c55e' }}>
+                <CheckCircleOutlined />
               </div>
             </div>
-            <div className={styles.statIcon} style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
-              <CheckSquareOutlined />
-            </div>
           </div>
-        </div>
+        )}
 
-        {/* Основная рабочая область во весь экран */}
-        <div className={styles.mainWorkspace}>
-          <Tabs
-            activeKey={activeKey}
-            onChange={handleTabChange}
-            items={tabItems}
-            size="large"
-          />
+        <div className={styles.mainWorkspace} style={{ minHeight: 'auto' }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 10, color: '#f4f4f5' }}>
+            Управление разделами перенесено в Django Unfold Admin
+          </h2>
+          <p style={{ color: '#a1a1aa', marginBottom: 24, fontSize: 15 }}>
+            Проверка домашних работ, видеоуроки, задания, студенты, баллы и каталог достижений теперь управляются централизованно на бэкенде.
+          </p>
+          <Space size="middle" wrap style={{ maxWidth: '100%' }}>
+            {adminSections.map((section) => (
+              <Button
+                key={section.key}
+                size="large"
+                icon={section.icon}
+                href={`${adminBaseUrl}${section.path}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  maxWidth: '100%',
+                  height: 'auto',
+                  minHeight: 44,
+                  whiteSpace: 'normal',
+                }}
+              >
+                {section.label} <ExportOutlined />
+              </Button>
+            ))}
+          </Space>
         </div>
       </div>
     </ConfigProvider>

@@ -763,3 +763,134 @@ class AdminSchemaRegressionTests(TransactionTestCase):
         for _ in range(2):
             call_command('install_subscriptions', stdout=io.StringIO())
         self.assertEqual(StudyGroup.objects.count(), 0)
+
+    def test_achievement_preset_icons_and_detail_endpoint(self):
+        from admin_panel.services.achievement_service import DEFAULT_ACHIEVEMENTS_DATA
+
+        ensure_default_achievements()
+
+        # 1. All presets & default achievement icons use /api/v1/media/presets/icons/ and return 200 SVG
+        presets_resp = self.client.get('/api/v1/media/presets')
+        self.assertEqual(presets_resp.status_code, 200)
+        preset_icons = presets_resp.json()['achievementIcons']
+        self.assertEqual(len(preset_icons), 16)
+        for item in preset_icons:
+            self.assertTrue(item['url'].startswith('/api/v1/media/presets/icons/'), item)
+            svg_resp = self.client.get(item['url'])
+            self.assertEqual(svg_resp.status_code, 200, item['url'])
+            self.assertIn('image/svg+xml', svg_resp['Content-Type'])
+
+        for item in DEFAULT_ACHIEVEMENTS_DATA:
+            self.assertTrue(item['icon_url'].startswith('/api/v1/media/presets/icons/'), item)
+            svg_resp = self.client.get(item['icon_url'])
+            self.assertEqual(svg_resp.status_code, 200, item['icon_url'])
+            self.assertIn('image/svg+xml', svg_resp['Content-Type'])
+
+        # 2. Detail endpoint GET /api/v1/achievements/<id>
+        ach = Achievement.objects.get(code='SCORE_20')
+        # Legacy DB path must be normalized by serializer
+        Achievement.objects.filter(pk=ach.pk).update(icon_url='/api/v1/achievements/icons/star.svg')
+
+        self.assertEqual(self.client.get(f'/api/v1/achievements/{ach.id}').status_code, 401)
+
+        student = create_user(login='ach_detail_user', role=RoleChoices.STUDENT, has_subscription=True)
+        student.set_password('Strong-Pass-2026!')
+        student.save()
+        UserAchievement.objects.create(user=student, achievement=ach)
+
+        login_resp = self.client.post(
+            '/api/v1/auth/login',
+            data=json.dumps({'login': 'ach_detail_user', 'password': 'Strong-Pass-2026!'}),
+            content_type='application/json',
+        )
+        auth = {'HTTP_AUTHORIZATION': f"Bearer {login_resp.json()['accessToken']}"}
+
+        self.assertEqual(self.client.get('/api/v1/achievements/nonexistent-id', **auth).status_code, 404)
+
+        detail_resp = self.client.get(f'/api/v1/achievements/{ach.id}', **auth)
+        self.assertEqual(detail_resp.status_code, 200)
+        payload = detail_resp.json()['achievement']
+        self.assertEqual(payload['id'], ach.id)
+        self.assertEqual(payload['iconUrl'], '/api/v1/media/presets/icons/star.svg')
+        self.assertTrue(payload['isUnlocked'])
+        self.assertEqual(payload['unlockedCount'], 1)
+        self.assertEqual(len(payload['recentAchievers']), 1)
+        self.assertEqual(payload['recentAchievers'][0]['login'], 'ach_detail_user')
+
+    def test_dangling_study_group_does_not_break_login_or_profile(self):
+        group = StudyGroup.objects.create(name='js-09', month=2)
+        student = create_user(
+            login='dangling_group_user',
+            role=RoleChoices.STUDENT,
+            group_number='js-09',
+            study_group=group,
+            has_subscription=True,
+        )
+        student.set_password('Strong-Pass-2026!')
+        student.save()
+
+        login_resp = self.client.post(
+            '/api/v1/auth/login',
+            data=json.dumps({'login': 'dangling_group_user', 'password': 'Strong-Pass-2026!'}),
+            content_type='application/json',
+        )
+        self.assertEqual(login_resp.status_code, 200)
+        self.assertEqual(login_resp.json()['user']['groupId'], group.id)
+
+        # Simulate a deleted StudyGroup leaving a dangling group_id in DB
+        with connection.cursor() as cursor:
+            if connection.vendor == 'sqlite':
+                cursor.execute('PRAGMA foreign_keys = OFF')
+            try:
+                cursor.execute('UPDATE "User" SET group_id = %s WHERE id = %s', ['deleted-group-id', student.id])
+            finally:
+                if connection.vendor == 'sqlite':
+                    cursor.execute('PRAGMA foreign_keys = ON')
+
+        relogin_resp = self.client.post(
+            '/api/v1/auth/login',
+            data=json.dumps({'login': 'dangling_group_user', 'password': 'Strong-Pass-2026!'}),
+            content_type='application/json',
+        )
+        self.assertEqual(relogin_resp.status_code, 200)
+        self.assertIsNone(relogin_resp.json()['user']['groupId'])
+
+        token = relogin_resp.json()['accessToken']
+        me_resp = self.client.get('/api/v1/users/me', HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(me_resp.status_code, 200)
+        self.assertIsNone(me_resp.json()['user']['groupId'])
+
+    def test_avatar_and_banner_upload_return_fresh_user(self):
+        student = create_user(login='media_user_payload', role=RoleChoices.STUDENT, has_subscription=True)
+        student.set_password('Strong-Pass-2026!')
+        student.save()
+
+        login_resp = self.client.post(
+            '/api/v1/auth/login',
+            data=json.dumps({'login': 'media_user_payload', 'password': 'Strong-Pass-2026!'}),
+            content_type='application/json',
+        )
+        auth = {'HTTP_AUTHORIZATION': f"Bearer {login_resp.json()['accessToken']}"}
+
+        img = Image.new('RGB', (400, 400), color=(245, 158, 11))
+        av_buf = io.BytesIO()
+        img.save(av_buf, format='PNG')
+        av_buf.seek(0)
+        av_buf.name = 'avatar.png'
+
+        av_resp = self.client.post('/api/v1/users/me/avatar', data={'avatar': av_buf}, **auth)
+        self.assertEqual(av_resp.status_code, 200)
+        av_json = av_resp.json()
+        self.assertIn('user', av_json)
+        self.assertEqual(av_json['user']['avatarUrl'], av_json['avatarUrl'])
+
+        bn_buf = io.BytesIO()
+        img.save(bn_buf, format='PNG')
+        bn_buf.seek(0)
+        bn_buf.name = 'banner.png'
+
+        bn_resp = self.client.post('/api/v1/users/me/banner', data={'banner': bn_buf}, **auth)
+        self.assertEqual(bn_resp.status_code, 200)
+        bn_json = bn_resp.json()
+        self.assertIn('user', bn_json)
+        self.assertEqual(bn_json['user']['bannerUrl'], bn_json['bannerUrl'])

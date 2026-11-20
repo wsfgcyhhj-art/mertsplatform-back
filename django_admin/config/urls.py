@@ -29,6 +29,7 @@ from admin_panel.views import (
     SubmissionsView,
     SubmissionDetailView,
     AchievementsCatalogView,
+    AchievementDetailView,
     LeaderboardView,
     AdminUsersListView,
     AdminUserRoleView,
@@ -99,6 +100,7 @@ urlpatterns = [
 
     # Gamification: Achievements & Leaderboard
     path('api/v1/achievements', AchievementsCatalogView.as_view(), name='achievements-catalog'),
+    path('api/v1/achievements/<str:id>', AchievementDetailView.as_view(), name='achievement-detail'),
     path('api/v1/leaderboard', LeaderboardView.as_view(), name='leaderboard'),
 
     path('api/v1/shop/balance', ShopBalanceView.as_view(), name='shop-balance'),

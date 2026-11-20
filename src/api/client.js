@@ -2,6 +2,7 @@ import { getAccessToken, setAccessToken } from './authToken.js';
 import axios from 'axios';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const API_ORIGIN = /^https?:\/\//i.test(API_BASE_URL) ? new URL(API_BASE_URL).origin : '';
 
 export function resolveMediaUrl(rawUrl, fallbackPath = null) {
   const val = String(rawUrl || '').trim();
@@ -12,10 +13,10 @@ export function resolveMediaUrl(rawUrl, fallbackPath = null) {
     return val;
   }
   if (val.startsWith('/api/v1/')) {
-    return val;
+    return `${API_ORIGIN}${val}`;
   }
   if (val.startsWith('/')) {
-    return `/api/v1${val}`;
+    return `${API_ORIGIN}/api/v1${val}`;
   }
   return val;
 }
@@ -23,6 +24,9 @@ export function resolveMediaUrl(rawUrl, fallbackPath = null) {
 export const extractAuthToken = getAccessToken;
 let csrfToken = null;
 let refreshPromise = null;
+export function resetCsrfToken() {
+  csrfToken = null;
+}
 async function csrf() {
   if (!csrfToken) csrfToken = (await axios.get(`${API_BASE_URL}/auth/csrf`, {withCredentials: true})).data.csrfToken;
   return csrfToken;
@@ -37,7 +41,8 @@ export const api = axios.create({
 
 // Добавление Bearer токена к каждому запросу
 api.interceptors.request.use(async (config) => {
-  if (!["get", "head", "options"].includes(config.method)) config.headers["X-CSRFToken"] = await csrf();
+  const method = (config.method || 'get').toLowerCase();
+  if (!["get", "head", "options"].includes(method)) config.headers["X-CSRFToken"] = await csrf();
   const token = extractAuthToken();
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;

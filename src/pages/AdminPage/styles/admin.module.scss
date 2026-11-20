@@ -10,6 +10,9 @@
   @media (max-width: 992px) {
     padding: 20px 16px;
   }
+  @media (max-width: 640px) {
+    padding: 16px 12px;
+  }
 }
 
 .adminHeader {
@@ -37,6 +40,19 @@
     color: #94a3b8;
     margin: 8px 0 0 0;
     font-size: 16px;
+  }
+
+  @media (max-width: 640px) {
+    padding: 18px 16px;
+
+    h1 {
+      font-size: 22px;
+      overflow-wrap: anywhere;
+    }
+
+    p {
+      font-size: 14px;
+    }
   }
 }
 
@@ -93,6 +109,10 @@
     justify-content: center;
     font-size: 28px;
   }
+
+  @media (max-width: 640px) {
+    padding: 16px;
+  }
 }
 
 .mainWorkspace {
@@ -102,6 +122,10 @@
   padding: 28px 32px;
   min-height: 680px;
   box-shadow: 0 10px 35px rgba(0, 0, 0, 0.25);
+
+  @media (max-width: 640px) {
+    padding: 18px 16px;
+  }
 
   :global(.ant-tabs-nav) {
     margin-bottom: 28px !important;

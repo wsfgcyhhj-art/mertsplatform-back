@@ -172,8 +172,14 @@ class User(AtomicModel):
         self.updated_at = timezone.now()
         if self.telegram_chat_id:
             self.telegram_chat_id = self.telegram_chat_id.strip() or None
-        if self.study_group:
-            self.group_number = self.study_group.name
+        study_group = None
+        if self.study_group_id:
+            try:
+                study_group = self.study_group
+            except StudyGroup.DoesNotExist:
+                self.study_group_id = None
+        if study_group:
+            self.group_number = study_group.name
         elif self.group_number:
             self.group_number = self.group_number.strip()
             self.study_group = StudyGroup.objects.filter(name=self.group_number).first()
@@ -387,7 +393,7 @@ class Achievement(models.Model):
     description = models.TextField('Описание')
     icon_url = models.TextField(
         'Иконка (URL / Data URI)',
-        default='/api/v1/achievements/icons/trophy.svg',
+        default='/api/v1/media/presets/icons/trophy.svg',
     )
     category = models.CharField(
         'Категория',

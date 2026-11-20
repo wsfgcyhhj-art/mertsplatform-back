@@ -16,7 +16,7 @@ from .curriculum_views import (
     SubmissionsView,
     SubmissionDetailView,
 )
-from .gamification_views import AchievementsCatalogView, LeaderboardView
+from .gamification_views import AchievementsCatalogView, AchievementDetailView, LeaderboardView
 from .admin_views import (
     AdminUsersListView,
     AdminUserRoleView,

@@ -4,12 +4,11 @@ import cls from "../styles/profile.module.scss";
 import { useFindUser } from "../../../store/userStore.js";
 import { MdEdit, MdLockReset, MdRefresh, MdLinkOff } from "react-icons/md";
 import { Modal, Input, message, Row, Col, Spin } from 'antd';
-import { toast } from "react-toastify";
 import { FaUser, FaTrophy } from "react-icons/fa";
 import { RiTelegram2Line } from "react-icons/ri";
 import { FaPeopleGroup } from "react-icons/fa6";
 import { ProfileBanner } from "./ProfileBanner.jsx";
-import { api, API_BASE_URL, extractAuthToken, resolveMediaUrl } from "../../../api/client.js";
+import { api, extractAuthToken, resolveMediaUrl } from "../../../api/client.js";
 import { useNavigate } from "react-router-dom";
 import { AchievementIcon } from "../../../components/AchievementToast.jsx";
 
@@ -52,53 +51,57 @@ export const ProfilePage = () => {
         return extractAuthToken();
     }, []);
 
-    const loadProfileData = useCallback(async () => {
-        try {
-            setLoading(true);
-            const token = getAuthToken();
-            const authHeaders = token
-                ? {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${token}`,
-                  }
-                : undefined;
-
-            const [meRes, achRes] = await Promise.all([
-                api.get('/users/me', { headers: authHeaders }),
-                api.get('/users/me/achievements', { headers: authHeaders }),
-            ]);
-
-            if (meRes.data?.user) {
-                addUser(meRes.data.user, token);
-                setName(meRes.data.user.name || '');
-                setTelegram(meRes.data.user.telegram || '');
-            }
-            const connected = Boolean(meRes.data?.isTelegramConnected ?? meRes.data?.user?.isTelegramConnected);
-            const tgUser = meRes.data?.telegramUsername ?? meRes.data?.user?.telegramUsername ?? null;
-            setIsTelegramConnected(connected);
-            setTelegramUsername(tgUser);
-            if (connected) {
-                setTgPolling(false);
-            }
-            if (meRes.data?.stats) {
-                setStats(meRes.data.stats);
-            }
-            if (achRes.data?.achievements) {
-                setAchievements(achRes.data.achievements);
-            }
-        } catch (err) {
-            console.error('Failed to load profile data', err);
-        } finally {
-            setLoading(false);
+    const applyProfilePayload = useCallback((meData, achData, token) => {
+        if (meData?.user) {
+            addUser(meData.user, token);
+            setName(meData.user.name || '');
+            setTelegram(meData.user.telegram || '');
         }
-    }, [addUser, getAuthToken]);
+        const connected = Boolean(meData?.isTelegramConnected ?? meData?.user?.isTelegramConnected);
+        const tgUser = meData?.telegramUsername ?? meData?.user?.telegramUsername ?? null;
+        setIsTelegramConnected(connected);
+        setTelegramUsername(tgUser);
+        if (connected) {
+            setTgPolling(false);
+        }
+        if (meData?.stats) {
+            setStats(meData.stats);
+        }
+        const rawAchs = Array.isArray(achData) ? achData : (achData?.achievements || []);
+        setAchievements(
+            rawAchs.map((item) =>
+                item?.achievement
+                    ? { ...item.achievement, awardedAt: item.awardedAt, userAchievementId: item.id }
+                    : item
+            )
+        );
+    }, [addUser]);
 
     useEffect(() => {
-        loadProfileData();
-        const onRefresh = () => loadProfileData();
-        window.addEventListener('merts:refresh-achievements', onRefresh);
-        return () => window.removeEventListener('merts:refresh-achievements', onRefresh);
-    }, [loadProfileData]);
+        let active = true;
+        const load = async () => {
+            try {
+                const token = getAuthToken();
+                const [meRes, achRes] = await Promise.all([
+                    api.get('/users/me'),
+                    api.get('/users/me/achievements'),
+                ]);
+                if (active) {
+                    applyProfilePayload(meRes.data, achRes.data, token);
+                }
+            } catch (err) {
+                console.error('Failed to load profile data', err);
+            } finally {
+                if (active) setLoading(false);
+            }
+        };
+        load();
+        window.addEventListener('merts:refresh-achievements', load);
+        return () => {
+            active = false;
+            window.removeEventListener('merts:refresh-achievements', load);
+        };
+    }, [applyProfilePayload, getAuthToken]);
 
     // Поллинг статуса привязки Telegram после перехода в бота
     useEffect(() => {
@@ -107,11 +110,7 @@ export const ProfilePage = () => {
         let attempts = 0;
         const intervalId = setInterval(async () => {
             attempts += 1;
-            const token =
-                extractAuthToken() ||
-                null ||
-                null ||
-                extractAuthToken();
+            const token = extractAuthToken();
 
             if (!token) {
                 setTgPolling(false);
@@ -119,34 +118,21 @@ export const ProfilePage = () => {
             }
 
             try {
-                const response = await fetch(`${API_BASE_URL}/me`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`,
-                    },
-                    credentials: 'include',
-                });
-
-                if (response.status === 401) {
+                const { data } = await api.get('/users/me');
+                const connected = Boolean(data?.isTelegramConnected ?? data?.user?.isTelegramConnected);
+                const tgUser = data?.telegramUsername ?? data?.user?.telegramUsername ?? null;
+                if (connected) {
+                    setIsTelegramConnected(true);
+                    setTelegramUsername(tgUser);
+                    setTgPolling(false);
+                    if (data?.user) addUser(data.user, token);
+                    message.success('Telegram успешно подключен!');
+                }
+            } catch (err) {
+                if (err.response?.status === 401) {
                     setTgPolling(false);
                     return;
                 }
-
-                if (response.ok) {
-                    const data = await response.json();
-                    const connected = Boolean(data?.isTelegramConnected ?? data?.user?.isTelegramConnected);
-                    const tgUser = data?.telegramUsername ?? data?.user?.telegramUsername ?? null;
-                    if (connected) {
-                        setIsTelegramConnected(true);
-                        setTelegramUsername(tgUser);
-                        setTgPolling(false);
-                        if (data?.user) addUser(data.user, token);
-                        message.success('Telegram успешно подключен!');
-                    }
-                }
-            } catch {
-                // Игнорируем сетевые ошибки при фоновом поллинге
             }
             if (attempts >= 30) {
                 setTgPolling(false);
@@ -157,14 +143,8 @@ export const ProfilePage = () => {
     }, [tgPolling, isTelegramConnected, addUser]);
 
     const handleConnectTelegram = async () => {
-        const token =
-            extractAuthToken() ||
-            null ||
-            null ||
-            extractAuthToken();
-
+        const token = extractAuthToken();
         if (!token) {
-            toast.error('Сессия истекла, пожалуйста, войдите снова');
             message.error('Сессия истекла, пожалуйста, войдите снова');
             navigate('/login');
             return;
@@ -172,47 +152,26 @@ export const ProfilePage = () => {
 
         try {
             setTgConnecting(true);
-            const response = await fetch(`${API_BASE_URL}/me/telegram/connect`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                },
-                credentials: 'include',
-            });
-
-            if (response.status === 401) {
-                toast.error('Необходима повторная авторизация');
-                message.error('Необходима повторная авторизация');
-                return;
-            }
-
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data?.message || data?.error || 'Не удалось сгенерировать ссылку для Telegram');
-            }
-
+            const { data } = await api.post('/users/me/telegram/connect');
             if (data?.link) {
                 window.open(safeUrl(data.link), '_blank', 'noopener,noreferrer');
                 setTgPolling(true);
                 message.info('Перейдите в открывшийся Telegram-бот и нажмите «Запустить» (/start)');
             }
         } catch (err) {
-            message.error(err.message || 'Не удалось сгенерировать ссылку для Telegram');
+            if (err.response?.status === 401) {
+                message.error('Необходима повторная авторизация');
+            } else {
+                message.error(err.response?.data?.message || err.message || 'Не удалось сгенерировать ссылку для Telegram');
+            }
         } finally {
             setTgConnecting(false);
         }
     };
 
     const handleDisconnectTelegram = async () => {
-        const token =
-            extractAuthToken() ||
-            null ||
-            null ||
-            extractAuthToken();
-
+        const token = extractAuthToken();
         if (!token) {
-            toast.error('Сессия истекла, пожалуйста, войдите снова');
             message.error('Сессия истекла, пожалуйста, войдите снова');
             navigate('/login');
             return;
@@ -220,25 +179,7 @@ export const ProfilePage = () => {
 
         try {
             setTgDisconnecting(true);
-            const response = await fetch(`${API_BASE_URL}/me/telegram/disconnect`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                },
-                credentials: 'include',
-            });
-
-            if (response.status === 401) {
-                toast.error('Необходима повторная авторизация');
-                message.error('Необходима повторная авторизация');
-                return;
-            }
-
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data?.message || data?.error || 'Не удалось отвязать Telegram');
-            }
+            await api.delete('/users/me/telegram/disconnect');
 
             setIsTelegramConnected(false);
             setTelegramUsername(null);
@@ -248,21 +189,19 @@ export const ProfilePage = () => {
             }
             message.success('Telegram-уведомления отключены');
         } catch (err) {
-            message.error(err.message || 'Не удалось отвязать Telegram');
+            if (err.response?.status === 401) {
+                message.error('Необходима повторная авторизация');
+            } else {
+                message.error(err.response?.data?.message || err.message || 'Не удалось отвязать Telegram');
+            }
         } finally {
             setTgDisconnecting(false);
         }
     };
 
     const handleCheckTelegramStatus = async () => {
-        const token =
-            extractAuthToken() ||
-            null ||
-            null ||
-            extractAuthToken();
-
+        const token = extractAuthToken();
         if (!token) {
-            toast.error('Сессия истекла, пожалуйста, войдите снова');
             message.error('Сессия истекла, пожалуйста, войдите снова');
             navigate('/login');
             return;
@@ -270,25 +209,7 @@ export const ProfilePage = () => {
 
         try {
             setRefreshingTgStatus(true);
-            const response = await fetch(`${API_BASE_URL}/me`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`,
-                },
-                credentials: 'include',
-            });
-
-            if (response.status === 401) {
-                toast.error('Необходима повторная авторизация');
-                message.error('Необходима повторная авторизация');
-                return;
-            }
-
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data?.message || data?.error || 'Не удалось проверить статус подключения');
-            }
+            const { data } = await api.get('/users/me');
 
             const connected = Boolean(data?.isTelegramConnected ?? data?.user?.isTelegramConnected);
             const tgUser = data?.telegramUsername ?? data?.user?.telegramUsername ?? null;
@@ -304,7 +225,11 @@ export const ProfilePage = () => {
                 message.info('Привязка пока не завершена. Нажмите /start в боте и проверьте снова.');
             }
         } catch (err) {
-            message.error(err.message || 'Не удалось проверить статус подключения');
+            if (err.response?.status === 401) {
+                message.error('Необходима повторная авторизация');
+            } else {
+                message.error(err.response?.data?.message || err.message || 'Не удалось проверить статус подключения');
+            }
         } finally {
             setRefreshingTgStatus(false);
         }
@@ -350,6 +275,9 @@ export const ProfilePage = () => {
 
             if (res.data?.user) {
                 addUser(res.data.user, token);
+                message.success('Аватар обновлен!');
+            } else if (res.data?.avatarUrl) {
+                addUser({ ...(userInfo || {}), avatarUrl: res.data.avatarUrl }, token);
                 message.success('Аватар обновлен!');
             }
         } catch (err) {
@@ -419,7 +347,12 @@ export const ProfilePage = () => {
     };
 
     const openAchievementDetail = async (ach) => {
+        setSelectedAch(ach);
         setAchDetailModal(true);
+        if (ach.title && ach.description && ach.criteria) {
+            setLoadingDetail(false);
+            return;
+        }
         setLoadingDetail(true);
         try {
             const res = await api.get(`/achievements/${ach.id}`);

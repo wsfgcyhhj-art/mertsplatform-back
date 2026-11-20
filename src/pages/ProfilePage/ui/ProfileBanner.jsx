@@ -55,9 +55,14 @@ export const ProfileBanner = () => {
                 },
             });
 
+            const nextBanner = res.data?.user?.bannerUrl ?? res.data?.bannerUrl;
             if (res.data?.user) {
                 addUser(res.data.user, token);
-                addBannerUrlImg(res.data.user.bannerUrl || '');
+            } else if (nextBanner && userInfo) {
+                addUser({ ...userInfo, bannerUrl: nextBanner }, token);
+            }
+            if (nextBanner) {
+                addBannerUrlImg(nextBanner);
                 message.success('Обложка профиля обновлена!');
             }
         } catch (err) {

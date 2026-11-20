@@ -12,6 +12,7 @@ def validate_new_password(value):
 
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
+from admin_panel.achievement_icons import normalize_icon_url
 from admin_panel.models import (
     User,
     Lesson,
@@ -20,6 +21,7 @@ from admin_panel.models import (
     ScoreAdjustment,
     Achievement,
     UserAchievement,
+    StudyGroup,
     RoleChoices,
     SubmissionStatusChoices,
 )
@@ -46,7 +48,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     avatarUrl = serializers.CharField(source='avatar_url', read_only=True)
     bannerUrl = serializers.CharField(source='banner_url', read_only=True)
     groupNumber = serializers.CharField(source='group_number', read_only=True)
-    groupId = serializers.CharField(source='group_id', read_only=True)
+    groupId = serializers.SerializerMethodField()
     currentMonth = serializers.IntegerField(source='current_month', read_only=True)
     streakCount = serializers.IntegerField(source='streak_count', read_only=True)
     totalScore = serializers.SerializerMethodField()
@@ -77,6 +79,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.BooleanField)
     def get_isTelegramConnected(self, obj) -> bool:
         return bool(obj.telegram_chat_id)
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_groupId(self, obj):
+        if not obj.study_group_id:
+            return None
+        try:
+            return obj.study_group.id
+        except StudyGroup.DoesNotExist:
+            return None
 
     @extend_schema_field(serializers.IntegerField)
     def get_totalScore(self, obj) -> int:
@@ -258,6 +269,11 @@ class AchievementSerializer(serializers.ModelSerializer):
             'isActive',
             'createdAt',
         )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['iconUrl'] = normalize_icon_url(instance.icon_url)
+        return data
 
 
 class UserAchievementSerializer(serializers.ModelSerializer):

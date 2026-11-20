@@ -1,15 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FaLock, FaTimes } from 'react-icons/fa';
-import { API_BASE_URL } from '../api/client.js';
-
-export const CATEGORY_LABELS = {
-  ALL: 'Все',
-  START: 'Старт',
-  TASKS: 'Домашки',
-  SCORES: 'Баллы',
-  SECRET: 'Секретные',
-  SPECIAL: 'Особые',
-};
+import { resolveBackendIconSrc, TOAST_EVENT } from '../utils/achievements.js';
 
 const FALLBACK_TROPHY_SVG =
   'data:image/svg+xml;utf8,' +
@@ -17,32 +8,11 @@ const FALLBACK_TROPHY_SVG =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>'
   );
 
-export function resolveBackendIconSrc(rawUrl) {
-  const val = String(rawUrl || '').trim();
-  if (!val) {
-    return `${API_BASE_URL.replace(/\/$/, '')}/achievements/icons/trophy.svg`;
-  }
-  if (val.startsWith('data:image/') || val.startsWith('http://') || val.startsWith('https://')) {
-    return val;
-  }
-  if (val.startsWith('/api/v1/')) {
-    const serverOrigin = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
-    return `${serverOrigin}${val}`;
-  }
-  if (val.startsWith('/')) {
-    return `${API_BASE_URL.replace(/\/$/, '')}${val}`;
-  }
-  return `${API_BASE_URL.replace(/\/$/, '')}/achievements/icons/${encodeURIComponent(val)}.svg`;
-}
-
 export const AchievementIcon = ({ iconUrl, name, locked = false, size = 24 }) => {
   const raw = iconUrl || name;
   const resolvedSrc = resolveBackendIconSrc(raw);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [resolvedSrc]);
+  const [failedSrc, setFailedSrc] = useState(null);
+  const hasError = failedSrc === resolvedSrc;
 
   return (
     <div
@@ -59,7 +29,7 @@ export const AchievementIcon = ({ iconUrl, name, locked = false, size = 24 }) =>
         src={hasError ? FALLBACK_TROPHY_SVG : resolvedSrc}
         alt=""
         onError={() => {
-          if (!hasError) setHasError(true);
+          if (!hasError) setFailedSrc(resolvedSrc);
         }}
         style={{
           width: size,
@@ -95,11 +65,6 @@ export const AchievementIcon = ({ iconUrl, name, locked = false, size = 24 }) =>
 };
 
 // Глобальная шина событий для показа кастомного темного Toast
-const TOAST_EVENT = 'merts:achievement-unlocked';
-
-export function showAchievementToast(payload) {
-  window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: payload }));
-}
 
 export const AchievementToastHost = () => {
   const [toasts, setToasts] = useState([]);

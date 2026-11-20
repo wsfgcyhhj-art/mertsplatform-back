@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { Table, Tag, Avatar, Card, Row, Col, Select, Input, Spin, Badge } from "antd";
-import { TrophyOutlined, UserOutlined, CrownOutlined, CheckCircleOutlined, FireOutlined } from "@ant-design/icons";
+import { Table, Tag, Avatar, Card, Row, Col, Select, Input, Badge } from "antd";
+import { TrophyOutlined, UserOutlined, CrownOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import { api, resolveMediaUrl } from "../../../api/client.js";
 import { useFindUser } from "../../../store/userStore.js";
 
@@ -11,25 +11,27 @@ export const LeaderboardPage = () => {
     const [month, setMonth] = useState(userInfo?.currentMonth || 1);
     const [groupFilter, setGroupFilter] = useState('');
 
-    const fetchLeaderboard = async () => {
-        try {
-            setLoading(true);
-            const params = {};
-            if (month) params.month = month;
-            if (groupFilter.trim()) params.groupNumber = groupFilter.trim();
-
-            const res = await api.get('/leaderboard', { params });
-            // res.data — плоский массив студентов
-            setLeaderboard(Array.isArray(res.data) ? res.data : []);
-        } catch (err) {
-            console.error('Failed to load leaderboard', err);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     useEffect(() => {
-        fetchLeaderboard();
+        let active = true;
+        const load = async () => {
+            try {
+                const params = {};
+                if (month) params.month = month;
+                if (groupFilter.trim()) params.groupNumber = groupFilter.trim();
+
+                const res = await api.get('/leaderboard', { params });
+                if (active) {
+                    const rows = Array.isArray(res.data) ? res.data : (res.data?.leaderboard || []);
+                    setLeaderboard(rows);
+                }
+            } catch (err) {
+                console.error('Failed to load leaderboard', err);
+            } finally {
+                if (active) setLoading(false);
+            }
+        };
+        load();
+        return () => { active = false; };
     }, [month, groupFilter]);
 
     const top5 = leaderboard.slice(0, 5);
@@ -129,10 +131,10 @@ export const LeaderboardPage = () => {
     ];
 
     return (
-        <div style={{ maxWidth: '1420px', margin: '20px auto', padding: '0 20px' }}>
+        <div style={{ maxWidth: '1420px', width: '100%', boxSizing: 'border-box', margin: '20px auto', padding: '0 clamp(12px, 3vw, 20px)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
-                <div>
-                    <h1 style={{ fontSize: '30px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '12px', margin: 0 }}>
+                <div style={{ minWidth: 0, maxWidth: '100%' }}>
+                    <h1 style={{ fontSize: 'clamp(22px, 4vw, 30px)', fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px', margin: 0 }}>
                         <TrophyOutlined style={{ color: '#f59e0b' }} /> Рейтинг студентов
                     </h1>
                     <p style={{ color: '#9ca3af', margin: '6px 0 0 0' }}>
@@ -140,11 +142,11 @@ export const LeaderboardPage = () => {
                     </p>
                 </div>
 
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
                     <Select
                         value={month}
                         onChange={setMonth}
-                        style={{ width: 140 }}
+                        style={{ width: 140, maxWidth: '100%' }}
                         options={[
                             { value: 1, label: 'Месяц 1' },
                             { value: 2, label: 'Месяц 2' },
@@ -160,7 +162,7 @@ export const LeaderboardPage = () => {
                         value={groupFilter}
                         onChange={(e) => setGroupFilter(e.target.value)}
                         allowClear
-                        style={{ width: 180 }}
+                        style={{ width: '100%', maxWidth: 180, flex: '1 1 140px' }}
                     />
                 </div>
             </div>
@@ -173,7 +175,7 @@ export const LeaderboardPage = () => {
                     </h3>
                     <Row gutter={[16, 16]}>
                         {top5.map((student, idx) => (
-                            <Col xs={24} sm={12} md={8} lg={4} key={student.id} style={{ flex: '1 0 180px' }}>
+                            <Col xs={24} sm={12} md={8} lg={4} key={student.id} style={{ flex: '1 1 180px', minWidth: 0 }}>
                                 <Card
                                     style={{
                                         background: idx === 0 ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.1))' : 'var(--card, #131935)',
@@ -182,7 +184,7 @@ export const LeaderboardPage = () => {
                                         textAlign: 'center',
                                         padding: '12px 6px',
                                     }}
-                                    bodyStyle={{ padding: '8px' }}
+                                    styles={{ body: { padding: '8px' } }}
                                 >
                                     <Badge
                                         count={idx === 0 ? '👑 1' : `#${idx + 1}`}
@@ -217,16 +219,19 @@ export const LeaderboardPage = () => {
 
             {/* Таблица лидерборда */}
             <Card
-                style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px' }}
-                bodyStyle={{ padding: 0 }}
+                style={{ background: 'var(--card, #131935)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', overflow: 'hidden' }}
+                styles={{ body: { padding: 0 } }}
             >
-                <Table
-                    columns={columns}
-                    dataSource={leaderboard}
-                    rowKey="id"
-                    loading={loading}
-                    pagination={{ pageSize: 20, showTotal: (total) => `Всего студентов: ${total}` }}
-                />
+                <div style={{ width: '100%', overflowX: 'auto' }}>
+                    <Table
+                        columns={columns}
+                        dataSource={leaderboard}
+                        rowKey="id"
+                        loading={loading}
+                        scroll={{ x: 'max-content' }}
+                        pagination={{ pageSize: 20, showTotal: (total) => `Всего студентов: ${total}` }}
+                    />
+                </div>
             </Card>
         </div>
     );

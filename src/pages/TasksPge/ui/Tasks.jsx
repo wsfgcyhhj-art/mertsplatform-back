@@ -1,11 +1,11 @@
 import { safeUrl } from '../../../utils/safeUrl.js';
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import cls from "../styles/task.module.scss";
 import { IoCheckmarkDoneCircleOutline, IoEyeSharp } from "react-icons/io5";
 import { FaGithub, FaHtml5, FaClock, FaExclamationTriangle, FaMicrophone } from "react-icons/fa";
 import { IoLogoCss3, IoLogoJavascript } from "react-icons/io";
 import { Modal, Input, Button, Tag, Spin, message, Alert } from "antd";
-import { api, API_BASE_URL, extractAuthToken } from "../../../api/client.js";
+import { api, resolveMediaUrl } from "../../../api/client.js";
 import { useFindUser } from "../../../store/userStore.js";
 
 export const TaskS = () => {
@@ -26,25 +26,43 @@ export const TaskS = () => {
     const [taskHistory, setTaskHistory] = useState(null);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
-    const fetchTasks = async () => {
+    const applyTasksResponse = useCallback((data, requestedMonth) => {
+        setTasks(data?.tasks || []);
+        setMonth(data?.month || Number(requestedMonth) || userInfo?.currentMonth || 1);
+    }, [userInfo?.currentMonth]);
+
+    const fetchTasks = useCallback(async () => {
         try {
-            setLoading(true);
             const requestedMonth = new URLSearchParams(window.location.search).get('month');
             const params = /^[1-9]\d*$/.test(requestedMonth || '') ? { month: requestedMonth } : {};
             const res = await api.get('/tasks', { params });
-            setTasks(res.data?.tasks || []);
-            setMonth(res.data?.month || Number(params.month) || userInfo?.currentMonth || 1);
+            applyTasksResponse(res.data, params.month);
         } catch (err) {
             console.error('Failed to load tasks', err);
             message.error('Не удалось загрузить задания');
         } finally {
             setLoading(false);
         }
-    };
+    }, [applyTasksResponse]);
 
     useEffect(() => {
-        fetchTasks();
-    }, []);
+        let active = true;
+        const load = async () => {
+            try {
+                const requestedMonth = new URLSearchParams(window.location.search).get('month');
+                const params = /^[1-9]\d*$/.test(requestedMonth || '') ? { month: requestedMonth } : {};
+                const res = await api.get('/tasks', { params });
+                if (active) applyTasksResponse(res.data, params.month);
+            } catch (err) {
+                console.error('Failed to load tasks', err);
+                if (active) message.error('Не удалось загрузить задания');
+            } finally {
+                if (active) setLoading(false);
+            }
+        };
+        load();
+        return () => { active = false; };
+    }, [applyTasksResponse]);
 
     useEffect(() => {
         const task = tasks.find(({ id }) => window.location.hash === `#task-${encodeURIComponent(id)}`);
@@ -76,7 +94,8 @@ export const TaskS = () => {
 
         try {
             setSubmitting(true);
-            const res = await api.post(`/tasks/${selectedTask.id}/submissions`, {
+            const res = await api.post('/submissions', {
+                taskId: selectedTask.id,
                 solutionLink: trimmedLink,
                 comment: comment.trim() || undefined,
             });
@@ -99,9 +118,14 @@ export const TaskS = () => {
         setHistoryModalOpen(true);
         setLoadingHistory(true);
         try {
-            const res = await api.get(`/tasks/${task.id}`);
-            setTaskHistory(res.data?.task || null);
-        } catch (err) {
+            const [taskRes, subsRes] = await Promise.all([
+                api.get(`/tasks/${task.id}`),
+                api.get('/submissions', { params: { taskId: task.id } }),
+            ]);
+            const taskObj = taskRes.data?.task || taskRes.data || task;
+            const submissions = subsRes.data?.submissions || taskObj.submissions || [];
+            setTaskHistory({ ...taskObj, submissions });
+        } catch {
             message.error('Не удалось загрузить историю сдачи');
         } finally {
             setLoadingHistory(false);
@@ -172,9 +196,8 @@ export const TaskS = () => {
                     </div>
                 ) : (
                     tasks.map((t) => {
-                        const sub = t.latestSubmission;
+                        const sub = t.mySubmission ?? t.latestSubmission;
                         const isAccepted = sub?.status === 'ACCEPTED';
-                        const isSent = sub?.status === 'SENT';
                         const isRevision = sub?.status === 'REVISION';
                         const canSubmit = !sub || isRevision;
 
@@ -191,7 +214,7 @@ export const TaskS = () => {
                                         {renderTopicIcon(t.topic)}
                                     </div>
 
-                                    <div className={cls.info} style={{ width: '480px' }}>
+                                    <div className={cls.info} style={{ flex: '1 1 320px', minWidth: 0, width: '100%' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                             <h3>{t.title}</h3>
                                             {t.isBonus && <Tag color="gold">БОНУС</Tag>}
@@ -225,7 +248,7 @@ export const TaskS = () => {
 
                                 <div className={cls.hr} style={{ height: 'auto', alignSelf: 'stretch' }}></div>
 
-                                <div className={cls.task_right} style={{ position: 'static', width: '480px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                                <div className={cls.task_right} style={{ position: 'static', flex: '1 1 320px', minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                                     <div className={cls.right_infos}>
                                         <div style={{ marginBottom: '12px' }}>
                                             {renderStatusBadge(sub)}
@@ -422,7 +445,7 @@ export const TaskS = () => {
                                                     controls
                                                     preload="none"
                                                     style={{ width: '100%', height: '36px', outline: 'none' }}
-                                                    src={`${API_BASE_URL}/submissions/${subItem.id}/voice?token=${extractAuthToken() || ''}`}
+                                                    src={resolveMediaUrl(subItem.voiceFeedbackUrl)}
                                                 >
                                                     Ваш браузер не поддерживает воспроизведение аудио.
                                                 </audio>

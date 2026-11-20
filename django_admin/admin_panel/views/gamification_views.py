@@ -31,14 +31,64 @@ class AchievementsCatalogView(APIView):
             UserAchievement.objects.filter(user_id=request.user.id)
             .values_list('achievement_id', flat=True)
         )
+        counts_map = dict(
+            UserAchievement.objects.values('achievement_id')
+            .annotate(c=Count('id'))
+            .values_list('achievement_id', 'c')
+        )
 
         catalog = []
         for a in achievements:
             item = AchievementSerializer(a).data
             item['isUnlocked'] = a.id in unlocked_ids
+            item['unlockedCount'] = counts_map.get(a.id, 0)
             catalog.append(item)
 
         return Response({"achievements": catalog})
+
+
+class AchievementDetailView(APIView):
+    serializer_class = AchievementSerializer
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        operation_id="achievements_retrieve",
+        summary="Детальная информация о достижении",
+        responses={200: AchievementSerializer, 404: dict},
+    )
+    def get(self, request, id: str):
+        ach = Achievement.objects.filter(
+            Q(id=id) | Q(code=id.upper()),
+            is_active=True,
+        ).first()
+        if not ach:
+            return Response(
+                {"statusCode": 404, "error": "Not Found", "message": "Achievement not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        item = AchievementSerializer(ach).data
+        item['isUnlocked'] = UserAchievement.objects.filter(
+            user_id=request.user.id,
+            achievement_id=ach.id,
+        ).exists()
+        item['unlockedCount'] = UserAchievement.objects.filter(achievement_id=ach.id).count()
+        recent_qs = (
+            UserAchievement.objects.filter(achievement_id=ach.id)
+            .select_related('user')
+            .order_by('-awarded_at')[:5]
+        )
+        item['recentAchievers'] = [
+            {
+                'id': ua.user.id,
+                'name': ua.user.name,
+                'login': ua.user.login,
+                'avatarUrl': ua.user.avatar_url,
+                'awardedAt': ua.awarded_at,
+            }
+            for ua in recent_qs
+        ]
+        return Response({"achievement": item})
 
 
 class LeaderboardView(APIView):

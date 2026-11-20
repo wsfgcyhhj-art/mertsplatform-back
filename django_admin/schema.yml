@@ -22,6 +22,34 @@ paths:
                 items:
                   $ref: '#/components/schemas/Achievement'
           description: ''
+  /api/v1/achievements/{id}:
+    get:
+      operationId: achievements_retrieve
+      summary: Детальная информация о достижении
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Achievement'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
   /api/v1/admin/score-adjustments:
     post:
       operationId: admin_score_adjustment
@@ -1911,6 +1939,7 @@ components:
           readOnly: true
         groupId:
           type: string
+          nullable: true
           readOnly: true
         currentMonth:
           type: integer

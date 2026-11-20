@@ -1,15 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { FaTrophy, FaCheckCircle, FaLock, FaTimes, FaUser } from 'react-icons/fa';
-import { api } from '../../../api/client.js';
-import { AchievementIcon, CATEGORY_LABELS } from '../../../components/AchievementToast.jsx';
+import { api, resolveMediaUrl } from '../../../api/client.js';
+import { AchievementIcon } from '../../../components/AchievementToast.jsx';
+import { CATEGORY_LABELS } from '../../../utils/achievements.js';
 
 const FILTER_TABS = [
-  { key: 'ALL', label: 'Все' },
-  { key: 'START', label: 'Старт' },
-  { key: 'TASKS', label: 'Домашки' },
-  { key: 'SCORES', label: 'Баллы' },
-  { key: 'SECRET', label: 'Секретные' },
-  { key: 'SPECIAL', label: 'Особые' },
+  { key: 'ALL', label: 'Все', match: () => true },
+  { key: 'GENERAL', label: 'Старт', match: (cat) => cat === 'GENERAL' || cat === 'START' },
+  { key: 'TASKS', label: 'Домашки', match: (cat) => cat === 'TASKS' },
+  { key: 'POINTS', label: 'Баллы', match: (cat) => cat === 'POINTS' || cat === 'SCORES' },
+  { key: 'STREAK', label: 'Стрик', match: (cat) => cat === 'STREAK' },
+  { key: 'SPECIAL', label: 'Особые', match: (cat) => cat === 'SPECIAL' || cat === 'SECRET' },
 ];
 
 export const AchievementsPage = () => {
@@ -21,27 +22,31 @@ export const AchievementsPage = () => {
   const [selectedAch, setSelectedAch] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const fetchAchievements = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await api.get('/achievements');
-      setAchievements(res.data?.achievements || []);
-    } catch (err) {
-      console.error('Failed to load achievements', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchAchievements();
-    const onRefresh = () => fetchAchievements();
-    window.addEventListener('merts:refresh-achievements', onRefresh);
-    return () => window.removeEventListener('merts:refresh-achievements', onRefresh);
-  }, [fetchAchievements]);
+    let active = true;
+    const loadAchievements = async () => {
+      try {
+        const res = await api.get('/achievements');
+        if (active) setAchievements(res.data?.achievements || []);
+      } catch (err) {
+        console.error('Failed to load achievements', err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    loadAchievements();
+    window.addEventListener('merts:refresh-achievements', loadAchievements);
+    return () => {
+      active = false;
+      window.removeEventListener('merts:refresh-achievements', loadAchievements);
+    };
+  }, []);
 
   const openDetail = async (ach) => {
     setSelectedAch(ach);
+    if (ach.title && ach.description && ach.criteria) {
+      return;
+    }
     setDetailLoading(true);
     try {
       const res = await api.get(`/achievements/${ach.id}`);
@@ -55,17 +60,16 @@ export const AchievementsPage = () => {
     }
   };
 
-  const unlockedList = achievements.filter((a) => a.isUnlockedByMe);
+  const isAchUnlocked = (a) => Boolean(a?.isUnlocked ?? a?.isUnlockedByMe);
+  const unlockedList = achievements.filter(isAchUnlocked);
   const unlockedCount = unlockedList.length;
   const earnedBonusPoints = unlockedList.reduce((sum, a) => sum + (a.points || 0), 0);
   const totalPossiblePoints = achievements.reduce((sum, a) => sum + (a.points || 0), 0);
 
-  const filteredAchievements =
-    activeCategory === 'ALL'
-      ? achievements
-      : achievements.filter(
-          (a) => String(a.category || '').toUpperCase() === activeCategory
-        );
+  const activeTab = FILTER_TABS.find((t) => t.key === activeCategory) || FILTER_TABS[0];
+  const filteredAchievements = achievements.filter((a) =>
+    activeTab.match(String(a.category || '').toUpperCase())
+  );
 
   return (
     <div
@@ -73,7 +77,7 @@ export const AchievementsPage = () => {
         minHeight: '100vh',
         background: '#09090b', // bg-zinc-950
         color: '#f4f4f5', // text-zinc-100
-        padding: '36px 32px 64px 32px',
+        padding: 'clamp(16px, 3vw, 36px) clamp(12px, 3vw, 32px) 64px',
         boxSizing: 'border-box',
       }}
     >
@@ -90,6 +94,8 @@ export const AchievementsPage = () => {
             flex-direction: column;
             justify-content: space-between;
             min-height: 220px;
+            min-width: 0;
+            box-sizing: border-box;
           }
           .merts-ach-card:hover {
             transform: translateY(-4px);
@@ -115,7 +121,7 @@ export const AchievementsPage = () => {
             background: '#18181b', // bg-zinc-900
             border: '1px solid #27272a', // border-zinc-800
             borderRadius: 16,
-            padding: '28px 32px',
+            padding: 'clamp(16px, 3vw, 28px) clamp(14px, 3vw, 32px)',
             marginBottom: 28,
             display: 'flex',
             flexWrap: 'wrap',
@@ -124,12 +130,13 @@ export const AchievementsPage = () => {
             gap: 24,
           }}
         >
-          <div>
+          <div style={{ minWidth: 0, maxWidth: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div
                 style={{
                   width: 44,
                   height: 44,
+                  flexShrink: 0,
                   borderRadius: 12,
                   background: 'rgba(245, 158, 11, 0.1)',
                   border: '1px solid rgba(245, 158, 11, 0.3)',
@@ -141,8 +148,8 @@ export const AchievementsPage = () => {
               >
                 <FaTrophy size={20} />
               </div>
-              <div>
-                <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, color: '#f4f4f5' }}>
+              <div style={{ minWidth: 0 }}>
+                <h1 style={{ fontSize: 'clamp(20px, 4vw, 28px)', fontWeight: 800, margin: 0, color: '#f4f4f5', overflowWrap: 'anywhere' }}>
                   Каталог достижений
                 </h1>
                 <p style={{ fontSize: 14, color: '#a1a1aa', margin: '4px 0 0 0' }}>
@@ -152,7 +159,7 @@ export const AchievementsPage = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', width: '100%', maxWidth: '100%', flex: '1 1 260px', minWidth: 0 }}>
             {/* Сводка: открыто ачивок */}
             <div
               style={{
@@ -160,7 +167,8 @@ export const AchievementsPage = () => {
                 border: '1px solid #27272a',
                 borderRadius: 14,
                 padding: '14px 22px',
-                minWidth: 170,
+                minWidth: 0,
+                flex: '1 1 150px',
               }}
             >
               <div style={{ fontSize: 12, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -181,7 +189,8 @@ export const AchievementsPage = () => {
                 border: '1px solid rgba(245, 158, 11, 0.3)',
                 borderRadius: 14,
                 padding: '14px 22px',
-                minWidth: 190,
+                minWidth: 0,
+                flex: '1 1 150px',
               }}
             >
               <div style={{ fontSize: 12, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -249,12 +258,12 @@ export const AchievementsPage = () => {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(min(310px, 100%), 1fr))',
               gap: 20,
             }}
           >
             {filteredAchievements.map((ach) => {
-              const isUnlocked = Boolean(ach.isUnlockedByMe);
+              const isUnlocked = isAchUnlocked(ach);
               const catKey = String(ach.category || 'SPECIAL').toUpperCase();
               const catLabel = CATEGORY_LABELS[catKey] || catKey;
 
@@ -462,6 +471,7 @@ export const AchievementsPage = () => {
             <button
               type="button"
               onClick={() => setSelectedAch(null)}
+              aria-label="Закрыть"
               style={{
                 position: 'absolute',
                 top: 20,
@@ -487,10 +497,10 @@ export const AchievementsPage = () => {
                   width: 64,
                   height: 64,
                   borderRadius: 16,
-                  background: selectedAch.isUnlockedByMe
+                  background: isAchUnlocked(selectedAch)
                     ? 'rgba(245, 158, 11, 0.12)'
                     : '#27272a',
-                  border: selectedAch.isUnlockedByMe
+                  border: isAchUnlocked(selectedAch)
                     ? '1px solid rgba(245, 158, 11, 0.35)'
                     : '1px solid #3f3f46',
                   display: 'flex',
@@ -500,7 +510,7 @@ export const AchievementsPage = () => {
               >
                 <AchievementIcon
                   iconUrl={selectedAch.iconUrl}
-                  locked={!selectedAch.isUnlockedByMe}
+                  locked={!isAchUnlocked(selectedAch)}
                   size={30}
                 />
               </div>
@@ -520,7 +530,7 @@ export const AchievementsPage = () => {
                   >
                     +{selectedAch.points || 10} очков
                   </span>
-                  {selectedAch.isUnlockedByMe ? (
+                  {isAchUnlocked(selectedAch) ? (
                     <span
                       style={{
                         fontSize: 12,
@@ -604,7 +614,7 @@ export const AchievementsPage = () => {
                       >
                         {u.avatarUrl ? (
                           <img
-                            src={u.avatarUrl}
+                            src={resolveMediaUrl(u.avatarUrl)}
                             alt={u.name || u.login}
                             style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }}
                           />

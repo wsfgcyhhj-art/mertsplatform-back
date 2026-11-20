@@ -1,12 +1,23 @@
-import cls from '../../src/pages/ProfilePage/styles/profile.module.scss'
-import {useProfile} from "../store/useProfile.js";
-export const ProfileImgMobile = () => {
+import { FaUser } from "react-icons/fa";
+import cls from "../pages/ProfilePage/styles/profile.module.scss";
+import { useProfile } from "../store/useProfile.js";
+import { useFindUser } from "../store/userStore.js";
+import { resolveMediaUrl } from "../api/client.js";
 
-    const { profileUrlImg } = useProfile()
+export const ProfileImgMobile = () => {
+    const { profileUrlImg } = useProfile();
+    const { userInfo } = useFindUser();
+    const avatarSrc = resolveMediaUrl(userInfo?.avatarUrl || profileUrlImg);
+
+    if (!avatarSrc) {
+        return <FaUser size={18} aria-hidden="true" />;
+    }
 
     return (
-        <div className={cls.profile_mobile}    style={{ backgroundImage: `url(${profileUrlImg})`                        }}>
-
-        </div>
-    )
-}
+        <span
+            className={cls.profile_mobile}
+            style={{ width: '24px', height: '24px', display: 'inline-block', backgroundImage: `url("${avatarSrc}")` }}
+            aria-hidden="true"
+        />
+    );
+};

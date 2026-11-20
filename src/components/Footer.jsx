@@ -1,7 +1,6 @@
 import { useRef } from 'react';
 import cls from '../components/footer.module.scss';
-import { api } from '../api/client.js';
-import { showAchievementToast } from './AchievementToast.jsx';
+import { claimEasterEgg } from '../utils/achievements.js';
 
 export const Footer = () => {
     const clickCountRef = useRef(0);
@@ -22,23 +21,7 @@ export const Footer = () => {
             clickCountRef.current = 0;
             claimingRef.current = true;
             try {
-                const res = await api.post('/users/me/easter-egg');
-                if (res.data?.achievement) {
-                    showAchievementToast({
-                        title: 'Любопытный хакер',
-                        customMessage: '🎉 Вы нашли секретную пасхалку! Получена ачивка "Любопытный хакер" (+20 очков)',
-                        description: res.data.achievement.description,
-                        points: 20,
-                        iconUrl: 'Terminal',
-                    });
-                    window.dispatchEvent(new CustomEvent('merts:refresh-achievements'));
-                } else if (res.data?.alreadyUnlocked) {
-                    showAchievementToast({
-                        title: 'Любопытный хакер',
-                        customMessage: 'Пасхалка уже открыта вами ранее — ачивка «Любопытный хакер» в вашей коллекции!',
-                        iconUrl: 'Terminal',
-                    });
-                }
+                await claimEasterEgg();
             } catch (err) {
                 console.error('Easter egg claim error', err);
             } finally {

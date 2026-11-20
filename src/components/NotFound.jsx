@@ -8,7 +8,7 @@ export const NotFound = () => {
     const navigate = useNavigate();
 
     const pasxolkoClick = () => {
-        const noty = toast.success('ПАСХОЛКОООО')
+        toast.success('ПАСХОЛКОООО')
         setTimeout(() => {
             window.location.href = 'https://help.reg.ru/support/hosting/sayt-ne-rabotayet/oshibka-404#:~:text=%D0%9E%D1%88%D0%B8%D0%B1%D0%BA%D0%B0%20404%20page%20not%20found,%D0%B1%D1%80%D0%B0%D1%83%D0%B7%D0%B5%D1%80%D1%83%20%D1%81%20%D0%BF%D0%BE%D0%BC%D0%BE%D1%89%D1%8C%D1%8E%20%D0%BA%D0%BE%D0%B4%D0%B0%20404.'
         },1000)

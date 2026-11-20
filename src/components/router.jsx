@@ -14,7 +14,6 @@ import {TasksList} from "../pages/TasksPge/ui/TasksList.jsx";
 import {ShopPage} from "../pages/ShopPage/ShopPage.jsx";
 import {LeaderboardPage} from "../pages/LeaderboardPage/ui/LeaderboardPage.jsx";
 import {AboutMeList} from "../pages/AboutMePage/ui/AboutMeList.jsx";
-import {Nothing} from "./Nothing.jsx";
 
 export const router = createBrowserRouter([
     {

@@ -6,7 +6,7 @@ import { useFindUser } from '../../../store/userStore.js';
 import { IoEyeSharp } from 'react-icons/io5';
 import { FaEyeSlash } from 'react-icons/fa';
 import { api } from '../../../api/client.js';
-import { showAchievementToast } from '../../../components/AchievementToast.jsx';
+import { showAchievementToast } from '../../../utils/achievements.js';
 import { AuthBackground } from '../../../components/AuthBackground/AuthBackground.jsx';
 
 export const Register = () => {

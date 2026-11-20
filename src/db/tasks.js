@@ -1,5 +1,3 @@
-import {FaHtml5} from "react-icons/fa";
-
 export const Tasks = {
     Task: {
         mou_1: [
