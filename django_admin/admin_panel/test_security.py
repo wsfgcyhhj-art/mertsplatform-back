@@ -223,6 +223,7 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(client.post('/api/v1/auth/refresh', {'refreshToken': login.json()['refreshToken']},
                                      format='json').status_code, 200)
 
+    @override_settings(CSRF_COOKIE_SECURE=True, CSRF_COOKIE_SAMESITE='None')
     def test_cors_preflight_and_cookie_refresh_from_local_origin(self):
         client = APIClient(enforce_csrf_checks=True)
         for origin in ('http://localhost:5173', 'http://127.0.0.1:8080', 'https://merts-preview.vercel.app'):

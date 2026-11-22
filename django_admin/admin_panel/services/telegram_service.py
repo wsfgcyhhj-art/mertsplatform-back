@@ -7,11 +7,15 @@ import logging
 from contextvars import ContextVar
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
-from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
-from admin_panel.services.settings_service import get_setting, render_telegram_template
+from admin_panel.services.settings_service import (
+    cache_get_safe,
+    cache_set_safe,
+    get_setting,
+    render_telegram_template,
+)
 import httpx
 from django.conf import settings
 from admin_panel.models import (
@@ -69,7 +73,7 @@ def get_bot_username() -> str:
         return fallback
 
     key = 'telegram-username:' + hashlib.sha256(token.encode()).hexdigest()
-    saved = cache.get(key)
+    saved = cache_get_safe(key)
     if saved is not None:
         return saved
     try:
@@ -77,11 +81,11 @@ def get_bot_username() -> str:
         response.raise_for_status()
         username = response.json().get('result', {}).get('username')
         if username and re.fullmatch(r'[A-Za-z0-9_]{5,32}', username):
-            cache.set(key, username, 3600)
+            cache_set_safe(key, username, 3600)
             return username
     except (httpx.HTTPError, ValueError):
         logger.warning('Telegram getMe failed. Using configured bot username.')
-    cache.set(key, fallback, 30)
+    cache_set_safe(key, fallback, 30)
     return fallback
 
 
@@ -507,17 +511,17 @@ def process_telegram_update(update: Dict[str, Any]) -> bool:
     if not isinstance(update_id, int):
         return False
     dedupe_cache_key = f'tg_update:{update_id}'
-    if cache.get(dedupe_cache_key):
+    if cache_get_safe(dedupe_cache_key):
         return False
     with transaction.atomic():
         _, created = TelegramUpdate.objects.get_or_create(update_id=update_id)
         if not created:
-            cache.set(dedupe_cache_key, 1, 3600)
+            cache_set_safe(dedupe_cache_key, 1, 3600)
             return False
         context = event_context.set(str(update_id))
         try:
             _process_telegram_update(update)
-            transaction.on_commit(lambda: cache.set(dedupe_cache_key, 1, 3600))
+            transaction.on_commit(lambda: cache_set_safe(dedupe_cache_key, 1, 3600))
         finally:
             event_context.reset(context)
     return True

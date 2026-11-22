@@ -257,17 +257,23 @@ class StudyGroupAdmin(ModelAdmin):
 
     @admin.display(description='Студентов', ordering='_students_count')
     def students_count_badge(self, obj):
-        cnt = getattr(obj, '_students_count', obj.students_count)
+        cnt = getattr(obj, '_students_count', None)
+        if cnt is None:
+            cnt = obj.students_count
         return format_html('<span class="merts-positive">{} студ.</span>', cnt)
 
     @admin.display(description='Видеоуроков', ordering='_lessons_count')
     def lessons_count_badge(self, obj):
-        cnt = getattr(obj, '_lessons_count', obj.lessons_count)
+        cnt = getattr(obj, '_lessons_count', None)
+        if cnt is None:
+            cnt = obj.lessons_count
         return format_html('<span class="merts-link">{} ур.</span>', cnt)
 
     @admin.display(description='Заданий', ordering='_tasks_count')
     def tasks_count_badge(self, obj):
-        cnt = getattr(obj, '_tasks_count', obj.tasks_count)
+        cnt = getattr(obj, '_tasks_count', None)
+        if cnt is None:
+            cnt = obj.tasks_count
         return format_html('<span class="merts-warning">{} ДЗ</span>', cnt)
 
 
