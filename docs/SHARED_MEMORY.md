@@ -29,6 +29,7 @@
    - Совместимость со старыми хешами `bcrypt(raw)` и `bcrypt(sha256(raw))` с прозрачным апгрейдом на Django password hashers при входе.
    - Двойное расширение ключей `DualCaseJSONParser` (`camelCase` ↔ `snake_case`) с защитой от глубины (`max_depth=16`, `max_nodes=10000` → `400`).
    - Разделённые лимиты запросов (`AuthThrottle` для login/register/reset, `RefreshAuthThrottle` для refresh/logout) и `AUTH_TRUSTED_PROXY_HOPS=1` за Nginx.
+   - Безопасный `POST /api/v1/auth/refresh` и `/logout`: `_extract_refresh_token` защищён от не-объектного/битого JSON и не-строковых токенов; `rotate_refresh`/`refresh_digest` защищены от осиротевших `Session`, naive `expires_at` и не-строк; `update_user_streak` изолирован вне транзакции ротации; при невалидном токене возвращается `401` JSON. (Профиль текущего пользователя — `GET /api/v1/users/me`).
 3. **Настройки платформы (`PlatformSetting`) и медиа (`MediaAsset`):**
    - `PlatformSetting.is_public` по умолчанию `False`; чувствительные ключи (`secret`, `token`, `password`, `api_key`, `webhook`, ...) запрещены к публикации в `/api/v1/system/config` на уровне валидации и выборки.
    - Аватарки (256×256 WebP), баннеры (1600×400 WebP), иконки и фото товаров хранятся в PostgreSQL `MediaAsset` (`GET /api/v1/media/{id}`); превью в админке грузятся по URL (`loading="lazy"`), без inline base64.
@@ -80,10 +81,12 @@ cd .. && python3 -m unittest deploy/test_migrate_from_neon.py
 
 ## 5. Текущий статус и открытые вопросы
 
-- **Завершено:** фиксы аудита `AUD-001`–`AUD-018` зафиксированы и отправлены в `origin/main` (`3ff8a6c`); установлен CLI/скилл `graphify` (`0.9.113`), синхронизированы симлинки скиллов в `.agents/skills/` и `~/.codex/skills/`, настроена единая память проекта.
+- **Завершено:**
+  - Фиксы аудита `AUD-001`–`AUD-018` зафиксированы и отправлены в `origin/main` (`3ff8a6c`); установлен CLI/скилл `graphify` (`0.9.113`), синхронизированы симлинки скиллов в `.agents/skills/` и `~/.codex/skills/`, настроена единая память проекта.
+  - Написан блок регрессионных тестов `django_admin/admin_panel/test_audit_regressions.py` (`6d0b946`: 19 тестов поверх 74) и добавлен регрессионный тест `test_refresh_returns_401_json_and_never_500_on_invalid_inputs` в `test_security.py` (итого **94 теста** в `admin_panel` + 7 deploy-тестов); устранены баги в `StudyGroupAdmin` (ленивый fallback аннотаций), `telegram_service.py` (`cache_get_safe`/`cache_set_safe`), и `auth/refresh` (`401` JSON вместо `500` на битых/не-строковых/осиротевших токенах, `REMOTE_ADDR=None` и сбое стрика).
+  - Собран локальный граф знаний `graphify-out/` (`1077 nodes`, `3066 edges`, `66 communities`; исключён из Git через `.git/info/exclude`).
 - **Открыто:**
-  1. Ручное применение коммита `3ff8a6c` на боевом VPS `166.0.28.165` (`/opt/mertsplatform`): неинтерактивный `ssh -o BatchMode=yes` возвращает `Permission denied (publickey,password)`.
-  2. Опционально: добавить специализированный блок регрессионных тестов для новых кейсов `AUD-001..018` поверх существующих 74 тестов и при необходимости собрать локальный граф `graphify .` (`graphify-out/` уже добавлен в `.git/info/exclude`).
+  1. Ручное применение правок на боевом VPS `166.0.28.165` (`/opt/mertsplatform`): неинтерактивный `ssh -o BatchMode=yes` возвращает `Permission denied (publickey,password)`.
 
 ---
 
@@ -91,4 +94,6 @@ cd .. && python3 -m unittest deploy/test_migrate_from_neon.py
 
 > После завершения любой нетривиальной задачи допиши 3–5 строк ниже (дата, что сделано, статус проверок, коммит, открытые вопросы — **без секретов**).
 
+- **2026-11-22 (auth refresh):** Исправлен `500 Internal Server Error` на `POST /api/v1/auth/refresh` (`authentication.py`, `auth_views.py`, `throttles.py`): добавлена защита от не-объектного/битого JSON, не-строкового токена, осиротевших `Session`, naive `expires_at`, `REMOTE_ADDR=None` и сбоев `update_user_streak`; добавлен тест в `test_security.py`. Проверки: `manage.py check` / `check --deploy` (HTTPS-env) / `makemigrations --check` / `spectacular --validate --fail-on-warn` — чисто; `test admin_panel` — 94 OK (`skipped=3`), `deploy/test_migrate_from_neon.py` — 7 OK. Коммиты: `6d0b946` + фикс refresh, пуш в `origin/main`; открыт ручной деплой на VPS.
+- **2026-11-22:** Добавлены 19 регрессионных тестов для `AUD-001..018` (`test_audit_regressions.py`, `6d0b946`), починен env-зависимый `test_security.py` и исправлены 2 бага в коде (`StudyGroupAdmin` N+1 из-за eager `getattr` и `cache_get_safe`/`cache_set_safe` в `telegram_service.py`). Проверки: `test admin_panel` — 93 OK (`skipped=3`), `deploy/test_migrate_from_neon.py` — 7 OK, `makemigrations --check` и `spectacular --validate --fail-on-warn` — чисто; `check --deploy` — 0 проблем с HTTPS-env. Собран граф `graphify-out/` (1077 узлов, 3066 рёбер, 66 сообществ).
 - **2026-11-20:** Применены и запушены правки аудита `AUD-001..018` (`3ff8a6c`); установлен `graphifyy==0.9.113`, синхронизированы 18 плагин-скиллов + `graphify` между `.agents/skills/`, `~/.gemini/config/plugins/` и `~/.codex/skills/`; создана `docs/SHARED_MEMORY.md` и обновлена инструкция в `AGENTS.md`. VPS требует ручного `git pull && docker compose up -d --build`.

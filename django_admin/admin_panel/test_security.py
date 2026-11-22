@@ -1,3 +1,4 @@
+import json
 from django.test import SimpleTestCase, override_settings
 from django.contrib import admin
 from admin_panel.models import Lesson, User
@@ -461,3 +462,96 @@ class SecurityIntegrationTests(TransactionTestCase):
             call_command('install_security', stdout=StringIO())
         self.assertEqual(Session.objects.count(), 1)
         TelegramIdentity.objects.create(telegram_user_id='legacy', username=None)
+
+    @override_settings(AUTH_REFRESH_RATE_LIMIT=100)
+    def test_refresh_returns_401_json_and_never_500_on_invalid_inputs(self):
+        from django.test import Client
+        from rest_framework_simplejwt.tokens import AccessToken
+
+        client = Client(raise_request_exception=False)
+
+        for label, payload, ct in (
+            ('empty no ct', b'', ''),
+            ('empty json ct', b'', 'application/json'),
+            ('empty dict', '{}', 'application/json'),
+            ('json null', 'null', 'application/json'),
+            ('json list', '[]', 'application/json'),
+            ('json str', '"abc"', 'application/json'),
+            ('json num', '123', 'application/json'),
+            ('non-str int', '{"refreshToken": 123}', 'application/json'),
+            ('non-str bool', '{"refreshToken": true}', 'application/json'),
+            ('non-str list', '{"refreshToken": ["a"]}', 'application/json'),
+            ('non-str dict', '{"refreshToken": {"a": 1}}', 'application/json'),
+            ('unknown str', '{"refreshToken": "not-in-db"}', 'application/json'),
+        ):
+            res = client.post('/api/v1/auth/refresh', data=payload, content_type=ct)
+            self.assertEqual(res.status_code, 401, f'{label}: got {res.status_code} {res.content[:200]!r}')
+            self.assertEqual(res['Content-Type'], 'application/json')
+
+        bad_json = client.post('/api/v1/auth/refresh', data='{broken', content_type='application/json')
+        self.assertIn(bad_json.status_code, (400, 401))
+        self.assertEqual(bad_json['Content-Type'], 'application/json')
+
+        cookie_client = Client(raise_request_exception=False)
+        cookie_client.cookies['refreshToken'] = 'expired-or-unknown-cookie'
+        res_cookie = cookie_client.post(
+            '/api/v1/auth/refresh',
+            data=b'',
+            content_type='',
+            HTTP_ORIGIN='https://mertsplatform.vercel.app',
+        )
+        self.assertEqual(res_cookie.status_code, 401)
+        self.assertEqual(res_cookie['Content-Type'], 'application/json')
+
+        expired_user = create_user(login='expired_user', group_number='js-01')
+        _, expired_refresh, expired_session = generate_tokens_for_user(expired_user)
+        Session.objects.filter(pk=expired_session.pk).update(expires_at=timezone.now() - timedelta(minutes=5))
+        res_exp = client.post(
+            '/api/v1/auth/refresh',
+            data=json.dumps({'refreshToken': expired_refresh}),
+            content_type='application/json',
+        )
+        self.assertEqual(res_exp.status_code, 401)
+        self.assertEqual(res_exp['Content-Type'], 'application/json')
+
+        orphan_user = create_user(login='orphan_user', group_number='js-01')
+        _, orphan_refresh, _ = generate_tokens_for_user(orphan_user)
+        with connection.constraint_checks_disabled():
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM "User" WHERE id = %s', [orphan_user.id])
+        res_orphan = client.post(
+            '/api/v1/auth/refresh',
+            data=json.dumps({'refreshToken': orphan_refresh}),
+            content_type='application/json',
+        )
+        self.assertEqual(res_orphan.status_code, 401)
+        self.assertEqual(res_orphan['Content-Type'], 'application/json')
+
+        res_no_ip = client.post('/api/v1/auth/refresh', data='{}', content_type='application/json', REMOTE_ADDR=None)
+        self.assertEqual(res_no_ip.status_code, 401)
+        self.assertEqual(res_no_ip['Content-Type'], 'application/json')
+
+        self.user.last_active_date = timezone.now() - timedelta(days=1)
+        self.user.save(update_fields=['last_active_date'])
+        with patch('admin_panel.views.auth_views.evaluate_user_achievements', side_effect=RuntimeError('boom')):
+            res_streak = client.post(
+                '/api/v1/auth/refresh',
+                data=json.dumps({'refreshToken': self.refresh}),
+                content_type='application/json',
+            )
+        self.assertEqual(res_streak.status_code, 200)
+        self.assertIn('accessToken', res_streak.json())
+
+        self.assertEqual(client.post('/api/v1/auth/logout', data='null', content_type='application/json').status_code, 200)
+        self.assertEqual(
+            client.post('/api/v1/auth/logout', data='{"refreshToken": 123}', content_type='application/json').status_code,
+            200,
+        )
+
+        self.assertEqual(client.get('/api/v1/users/me').status_code, 401)
+        no_sid = AccessToken()
+        no_sid['user_id'] = self.user.pk
+        self.assertEqual(
+            client.get('/api/v1/users/me', HTTP_AUTHORIZATION='Bearer ' + str(no_sid)).status_code,
+            401,
+        )

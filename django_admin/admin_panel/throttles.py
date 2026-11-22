@@ -1,6 +1,7 @@
+from datetime import timezone as dt_timezone
 import hashlib
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.throttling import BaseThrottle
 from .models import AuthRateBucket
@@ -23,7 +24,7 @@ def client_ip(request):
                 return str(ip_address(chain[-hops].strip()))
             except ValueError:
                 pass
-    return request.META.get('REMOTE_ADDR', '')
+    return str(request.META.get('REMOTE_ADDR') or '')
 
 
 @transaction.atomic
@@ -37,9 +38,19 @@ def consume_auth_attempt(ip, login='', *, scope='auth', ip_limit=None, account_l
         keys.append((acc_prefix + str(login).strip().lower()[:255], resolved_account_limit))
     for value, limit in keys:
         key = hashlib.sha256(value.encode()).hexdigest()
-        bucket, _ = AuthRateBucket.objects.select_for_update().get_or_create(key=key)
-        if (timezone.now() - bucket.started_at).total_seconds() >= 300:
+        try:
+            with transaction.atomic():
+                bucket, _ = AuthRateBucket.objects.select_for_update().get_or_create(key=key)
+        except IntegrityError:
+            bucket = AuthRateBucket.objects.select_for_update().get(key=key)
+        started_at = bucket.started_at
+        if started_at is None:
             bucket.started_at, bucket.attempts = timezone.now(), 0
+        else:
+            if timezone.is_naive(started_at):
+                started_at = timezone.make_aware(started_at, dt_timezone.utc)
+            if (timezone.now() - started_at).total_seconds() >= 300:
+                bucket.started_at, bucket.attempts = timezone.now(), 0
         bucket.attempts += 1
         bucket.save()
         if bucket.attempts > limit:

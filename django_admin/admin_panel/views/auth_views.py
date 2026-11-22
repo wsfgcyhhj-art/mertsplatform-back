@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+import logging
 from django.conf import settings
 from django.db import transaction, IntegrityError
 from django.http import JsonResponse
@@ -11,6 +13,7 @@ from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
+from rest_framework.exceptions import ParseError, UnsupportedMediaType
 from rest_framework.views import APIView
 from rest_framework import serializers
 from rest_framework.response import Response
@@ -32,6 +35,25 @@ from admin_panel.services.group_service import parse_month_from_group_name
 from admin_panel.services.settings_service import get_setting
 
 SIMPLE_FORM_CONTENT_TYPES = ('application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain')
+logger = logging.getLogger(__name__)
+
+
+def _extract_refresh_token(request):
+    cookie_token = request.COOKIES.get('refreshToken')
+    if isinstance(cookie_token, str) and cookie_token.strip():
+        return cookie_token.strip()
+    try:
+        data = request.data
+    except (ParseError, UnsupportedMediaType):
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    body_token = data.get('refreshToken')
+    if body_token is None:
+        body_token = data.get('refresh_token')
+    if isinstance(body_token, str) and body_token.strip():
+        return body_token.strip()
+    return None
 
 
 class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
@@ -295,10 +317,7 @@ class RefreshTokenView(APIView):
         },
     )
     def post(self, request):
-        incoming_token = (
-            request.COOKIES.get('refreshToken')
-            or request.data.get('refreshToken')
-        )
+        incoming_token = _extract_refresh_token(request)
         if not incoming_token:
             return Response(
                 {"statusCode": 401, "error": "Unauthorized", "message": "Refresh token not found"},
@@ -308,9 +327,19 @@ class RefreshTokenView(APIView):
         with transaction.atomic():
             rotated = rotate_refresh(incoming_token)
             if not rotated:
-                return Response({'message': 'Invalid or expired refresh token'}, status=401)
+                return Response(
+                    {"statusCode": 401, "error": "Unauthorized", "message": "Invalid or expired refresh token"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
             access_token, new_refresh_token, new_session = rotated
+        try:
             update_user_streak(new_session.user)
+        except Exception as exc:
+            logger.warning(
+                'Failed to update streak on token refresh for user %s: %s',
+                new_session.user_id,
+                type(exc).__name__,
+            )
         response = Response({
             "accessToken": access_token,
             "refreshToken": new_refresh_token,
@@ -333,10 +362,7 @@ class LogoutView(APIView):
         responses={200: MessageResponseSerializer, 403: ErrorResponseSerializer},
     )
     def post(self, request):
-        incoming_token = (
-            request.COOKIES.get('refreshToken')
-            or request.data.get('refreshToken')
-        )
+        incoming_token = _extract_refresh_token(request)
         authorization = request.headers.get('Authorization', '')
         access = authorization[7:] if authorization.startswith('Bearer ') else None
         revoke_session(incoming_token, access)
