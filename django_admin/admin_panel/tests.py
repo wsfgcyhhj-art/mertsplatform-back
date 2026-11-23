@@ -1436,3 +1436,208 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
             preview_html = str(ma_admin.asset_preview(new_asset))
         self.assertIn('PDF', preview_html)
         self.assertNotIn('<img', preview_html)
+
+    def test_achievement_admin_creation_validation_recalculate_and_api(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+
+        self.client.force_login(self.owner)
+        add_url = '/admin/admin_panel/achievement/add/'
+        list_url = '/admin/admin_panel/achievement/'
+
+        # 0. Add form page loads cleanly
+        self.assertEqual(self.client.get(add_url).status_code, 200)
+
+        # 1. Auto-generate UPPER_SNAKE_CASE code from Russian title + preset icon
+        r1 = self.client.post(
+            add_url,
+            {
+                'title': 'Мастер Кода!',
+                'code': '',
+                'description': 'За высокие баллы',
+                'category': 'SCORES',
+                'is_active': 'on',
+                'preset_icon': '/api/v1/media/presets/icons/crown.svg',
+                'trigger_type': 'TOTAL_SCORE',
+                'threshold': '20',
+                'points': '15',
+            },
+        )
+        self.assertEqual(r1.status_code, 302)
+        auto_ach = Achievement.objects.get(code='MASTER_KODA')
+        self.assertEqual(auto_ach.icon_url, '/api/v1/media/presets/icons/crown.svg')
+        self.assertEqual(auto_ach.threshold, 20)
+        self.assertTrue(bool(auto_ach.criteria))
+
+        # 2. Duplicate title generates _2 suffix
+        r2 = self.client.post(
+            add_url,
+            {
+                'title': 'Мастер Кода!',
+                'code': '',
+                'description': 'Вторая версия',
+                'category': 'SCORES',
+                'is_active': 'on',
+                'preset_icon': '/api/v1/media/presets/icons/star.svg',
+                'trigger_type': 'TOTAL_SCORE',
+                'threshold': '30',
+                'points': '20',
+            },
+        )
+        self.assertEqual(r2.status_code, 302)
+        self.assertTrue(Achievement.objects.filter(code='MASTER_KODA_2').exists())
+
+        # 3. Missing preset_icon and custom_icon_file fails validation
+        r3 = self.client.post(
+            add_url,
+            {
+                'title': 'Без иконки',
+                'code': '',
+                'description': 'Нет картинки',
+                'category': 'TASKS',
+                'is_active': 'on',
+                'trigger_type': 'MANUAL',
+                'points': '5',
+            },
+        )
+        self.assertEqual(r3.status_code, 200)
+        self.assertIn('preset_icon', r3.context['adminform'].form.errors)
+        self.assertFalse(Achievement.objects.filter(title='Без иконки').exists())
+
+        # 4. Numeric trigger with invalid threshold + valid PNG creates NO orphan MediaAsset
+        png_buf = io.BytesIO()
+        Image.new('RGB', (24, 24), color=(245, 158, 11)).save(png_buf, format='PNG')
+        png_bytes = png_buf.getvalue()
+
+        r4 = self.client.post(
+            add_url,
+            {
+                'title': 'Без порога',
+                'code': '',
+                'description': 'Ошибка порога',
+                'category': 'TASKS',
+                'is_active': 'on',
+                'trigger_type': 'ACCEPTED_TASKS',
+                'threshold': '0',
+                'points': '10',
+                'custom_icon_file': SimpleUploadedFile('badge.png', png_bytes, content_type='image/png'),
+            },
+        )
+        self.assertEqual(r4.status_code, 200)
+        self.assertIn('threshold', r4.context['adminform'].form.errors)
+        self.assertEqual(MediaAsset.objects.filter(kind='ACHIEVEMENT_ICON').count(), 0)
+        self.assertFalse(Achievement.objects.filter(title='Без порога').exists())
+
+        # SVG custom upload is rejected with validation error
+        r_svg = self.client.post(
+            add_url,
+            {
+                'title': 'Плохой SVG',
+                'code': '',
+                'description': 'SVG тест',
+                'category': 'SPECIAL',
+                'is_active': 'on',
+                'trigger_type': 'MANUAL',
+                'points': '10',
+                'custom_icon_file': SimpleUploadedFile('bad.svg', b'<svg><script/></svg>', content_type='image/svg+xml'),
+            },
+        )
+        self.assertEqual(r_svg.status_code, 200)
+        self.assertIn('custom_icon_file', r_svg.context['adminform'].form.errors)
+        self.assertEqual(MediaAsset.objects.filter(kind='ACHIEVEMENT_ICON').count(), 0)
+
+        # 5. MANUAL clears threshold=99 -> None and saves custom PNG -> WebP MediaAsset
+        r5 = self.client.post(
+            add_url,
+            {
+                'title': 'Особая Награда',
+                'code': '',
+                'description': 'Ручная награда',
+                'category': 'SPECIAL',
+                'is_active': 'on',
+                'trigger_type': 'MANUAL',
+                'threshold': '99',
+                'points': '50',
+                'custom_icon_file': SimpleUploadedFile('custom.png', png_bytes, content_type='image/png'),
+            },
+        )
+        self.assertEqual(r5.status_code, 302)
+        manual_ach = Achievement.objects.get(code='OSOBAYA_NAGRADA')
+        self.assertIsNone(manual_ach.threshold)
+        self.assertTrue(manual_ach.icon_url.startswith('/api/v1/media/'))
+        asset_id = manual_ach.icon_url.rsplit('/', 1)[-1]
+        self.assertEqual(MediaAsset.objects.get(pk=asset_id).mime_type, 'image/webp')
+
+        # 6. Editing system achievement preserves its code even if tampered in POST
+        ensure_default_achievements()
+        welcome_ach = Achievement.objects.get(code='WELCOME')
+        r6 = self.client.post(
+            f'/admin/admin_panel/achievement/{welcome_ach.pk}/change/',
+            {
+                'title': welcome_ach.title,
+                'code': 'TAMPERED_CODE',
+                'description': welcome_ach.description,
+                'category': welcome_ach.category,
+                'is_active': 'on',
+                'preset_icon': welcome_ach.icon_url,
+                'trigger_type': welcome_ach.trigger_type,
+                'points': str(welcome_ach.points),
+            },
+        )
+        self.assertEqual(r6.status_code, 302)
+        welcome_ach.refresh_from_db()
+        self.assertEqual(welcome_ach.code, 'WELCOME')
+
+        # 7. Changelist renders with annotated awarded count and no N+1 across rows
+        mentor = create_user(login='ach_adm_mentor', role=RoleChoices.ADMIN)
+        s1 = create_user(login='ach_adm_stud1', role=RoleChoices.STUDENT)
+        s2 = create_user(login='ach_adm_stud2', role=RoleChoices.STUDENT)
+        with CaptureQueriesContext(connection) as q_before:
+            changelist_1 = self.client.get(list_url)
+        self.assertEqual(changelist_1.status_code, 200)
+
+        UserAchievement.objects.create(user=s1, achievement=welcome_ach)
+        UserAchievement.objects.create(user=s2, achievement=welcome_ach)
+        UserAchievement.objects.create(user=s1, achievement=manual_ach)
+        with CaptureQueriesContext(connection) as q_after:
+            changelist_2 = self.client.get(list_url)
+        self.assertEqual(changelist_2.status_code, 200)
+        self.assertLessEqual(len(q_after), len(q_before) + 1)
+
+        # 8. Admin action recalculates selected auto achievements (skips MANUAL)
+        ScoreAdjustment.objects.create(user=s1, admin=mentor, amount=25, reason='Bonus', month=1)
+        act_resp = self.client.post(
+            list_url,
+            {
+                'action': 'recalculate_and_award_students',
+                '_selected_action': [auto_ach.pk, manual_ach.pk],
+            },
+            follow=True,
+        )
+        self.assertEqual(act_resp.status_code, 200)
+        self.assertTrue(UserAchievement.objects.filter(user=s1, achievement=auto_ach).exists())
+        self.assertFalse(UserAchievement.objects.filter(user=s2, achievement=auto_ach).exists())
+        self.assertFalse(UserAchievement.objects.filter(user=s2, achievement=manual_ach).exists())
+
+        # 9. GET /api/v1/achievements returns created items with absolute iconUrl and unlocked state
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(s1)
+        api.credentials(HTTP_AUTHORIZATION='Bearer ' + tok)
+        api_resp = api.get('/api/v1/achievements', {'limit': 50})
+        self.assertEqual(api_resp.status_code, 200)
+        by_code = {item['code']: item for item in api_resp.json()['achievements']}
+        self.assertIn('MASTER_KODA', by_code)
+        self.assertIn('OSOBAYA_NAGRADA', by_code)
+        self.assertEqual(
+            by_code['MASTER_KODA']['iconUrl'],
+            'http://testserver/api/v1/media/presets/icons/crown.svg',
+        )
+        self.assertTrue(by_code['MASTER_KODA']['isUnlocked'])
+        self.assertTrue(by_code['MASTER_KODA']['isUnlockedByMe'])
+        self.assertEqual(
+            by_code['OSOBAYA_NAGRADA']['iconUrl'],
+            f'http://testserver{manual_ach.icon_url}',
+        )

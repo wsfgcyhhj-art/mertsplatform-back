@@ -147,6 +147,8 @@ DEFAULT_ACHIEVEMENTS_DATA = [
     },
 ]
 
+SYSTEM_ACHIEVEMENT_CODES = frozenset(item['code'] for item in DEFAULT_ACHIEVEMENTS_DATA)
+
 _LEGACY_CATEGORY_MAP = {
     'general': 'START',
     'tasks': 'TASKS',
@@ -236,16 +238,27 @@ def award_achievement(user_id: str, code: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> List[Dict[str, Any]]:
+def evaluate_user_achievements(
+    user_id: str,
+    trigger_filter: str = 'ALL',
+    achievement_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Evaluates 10 gamification triggers:
     MANUAL, ON_REGISTER, TOTAL_SCORE, ACCEPTED_TASKS, BONUS_TASKS,
     FIRST_TRY_ACCEPTED, PERFECT_SCORE, REVISION_ACCEPTED, STREAK_DAYS, EASTER_EGG.
     """
-    active_achievements = list(Achievement.objects.filter(is_active=True).order_by('created_at'))
-    if not active_achievements:
-        ensure_default_achievements()
+    if achievement_ids is not None:
+        if not achievement_ids:
+            return []
+        active_achievements = list(
+            Achievement.objects.filter(is_active=True, id__in=achievement_ids).order_by('created_at')
+        )
+    else:
         active_achievements = list(Achievement.objects.filter(is_active=True).order_by('created_at'))
+        if not active_achievements:
+            ensure_default_achievements()
+            active_achievements = list(Achievement.objects.filter(is_active=True).order_by('created_at'))
 
     unlocked_ids = set(UserAchievement.objects.filter(user_id=user_id).values_list('achievement_id', flat=True))
     candidates = [a for a in active_achievements if a.id not in unlocked_ids and a.trigger_type != TriggerTypeChoices.MANUAL]

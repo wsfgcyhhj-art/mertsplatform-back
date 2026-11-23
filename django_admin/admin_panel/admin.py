@@ -44,6 +44,7 @@ from .models import (
     PlatformSetting,
     RoleChoices,
     SubmissionStatusChoices,
+    TriggerTypeChoices,
 )
 from admin_panel.services.telegram_service import (
     async_broadcast_message,
@@ -51,7 +52,10 @@ from admin_panel.services.telegram_service import (
     notify_task_published,
     send_test_telegram_message,
 )
-from admin_panel.services.achievement_service import evaluate_user_achievements
+from admin_panel.services.achievement_service import (
+    SYSTEM_ACHIEVEMENT_CODES,
+    evaluate_user_achievements,
+)
 from admin_panel.services.settings_service import (
     ensure_default_settings,
     invalidate_settings_cache,
@@ -1052,89 +1056,166 @@ class PresetIconGalleryWidget(forms.Widget):
         return mark_safe(html)
 
 
+_CYRILLIC_TO_LATIN = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
+    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+}
+
+
+def normalize_achievement_code(raw: str) -> str:
+    translit = ''.join(_CYRILLIC_TO_LATIN.get(ch, ch) for ch in (raw or '').strip().lower())
+    code = re.sub(r'[^a-z0-9]+', '_', translit).strip('_').upper()[:115]
+    return code or 'ACHIEVEMENT'
+
+
+def generate_unique_achievement_code(source: str, *, exclude_pk=None) -> str:
+    base = normalize_achievement_code(source)
+    qs = Achievement.objects.filter(code__startswith=base)
+    if exclude_pk:
+        qs = qs.exclude(pk=exclude_pk)
+    existing = set(qs.values_list('code', flat=True))
+    if base not in existing:
+        return base
+    suffix = 2
+    while f'{base}_{suffix}' in existing:
+        suffix += 1
+    return f'{base}_{suffix}'
+
+
 class AchievementAdminForm(forms.ModelForm):
-    preset_selector = forms.CharField(
-        label='Галерея системных иконок (кликните для выбора)',
+    NUMERIC_TRIGGER_TYPES = {
+        TriggerTypeChoices.TOTAL_SCORE,
+        TriggerTypeChoices.ACCEPTED_TASKS,
+        TriggerTypeChoices.BONUS_TASKS,
+        TriggerTypeChoices.FIRST_TRY_ACCEPTED,
+        TriggerTypeChoices.PERFECT_SCORE,
+        TriggerTypeChoices.REVISION_ACCEPTED,
+        TriggerTypeChoices.STREAK_DAYS,
+    }
+    PRESET_ICON_CHOICES = [('', '— Выберите готовую иконку —')] + [
+        (item['url'], f"{item['label']} ({item['slug']})")
+        for item in PRESET_ACHIEVEMENT_ICONS
+    ]
+
+    preset_icon = forms.ChoiceField(
+        label='Готовая иконка (пресет)',
         required=False,
-        widget=PresetIconGalleryWidget(),
+        choices=PRESET_ICON_CHOICES,
+        help_text='Выберите встроенную SVG-иконку из каталога платформы.',
     )
     custom_icon_file = forms.FileField(
-        label='Загрузить свою кастомную иконку (PNG / WebP)',
+        label='Загрузить свою иконку (PNG / WebP / JPG / GIF)',
         required=False,
-        help_text='Максимальный размер: 512 КБ. При загрузке файла он автоматически сжимается и надёжно сохраняется в таблице MediaAsset (PostgreSQL).',
-        widget=forms.ClearableFileInput(attrs={'accept': '.png,.jpg,.webp,image/png,image/jpeg,image/webp'}),
+        help_text='До 512 КБ; сжимается в WebP и сохраняется в PostgreSQL (SVG доступен только через готовые пресеты).',
+        widget=forms.ClearableFileInput(
+            attrs={'accept': '.png,.webp,.jpg,.jpeg,.gif,image/png,image/webp,image/jpeg,image/gif'}
+        ),
     )
 
     class Meta:
         model = Achievement
         fields = (
-            'code',
             'title',
-            'category',
-            'points',
-            'is_active',
+            'code',
             'description',
-            'trigger_type',
-            'threshold',
-            'criteria',
-            'preset_selector',
+            'category',
+            'is_active',
+            'preset_icon',
             'custom_icon_file',
             'icon_url',
+            'trigger_type',
+            'threshold',
+            'points',
+            'criteria',
         )
         widgets = {
-            'icon_url': forms.TextInput(
-                attrs={
-                    'placeholder': '/api/v1/media/presets/icons/trophy.svg или https://... или data:image/...',
-                }
-            ),
+            'icon_url': forms.HiddenInput(),
+            'description': forms.Textarea(attrs={'rows': 3}),
             'criteria': forms.Textarea(
                 attrs={
                     'rows': 2,
-                    'placeholder': 'Оставьте пустым для авто-генерации по выбранному правилу или укажите свой текст условия...',
+                    'placeholder': 'Оставьте пустым для авто-генерации по выбранному правилу...',
                 }
             ),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        current_icon = normalize_icon_url(self.instance.icon_url if self.instance and self.instance.pk else '')
-        self.fields['preset_selector'].initial = current_icon
-        if self.instance and self.instance.pk:
-            self.initial['icon_url'] = current_icon
-        self.fields['icon_url'].required = False
-        self.fields['icon_url'].help_text = (
-            'Заполняется автоматически при выборе пресета или загрузке файла. Также можно указать прямой URL.'
-        )
+        help_texts = {
+            'title': 'Короткое и понятное название ачивки для студентов.',
+            'code': 'Оставьте пустым — код сгенерируется автоматически из названия в UPPER_SNAKE_CASE.',
+            'description': 'Описание ачивки, которое отображается в карточке студента.',
+            'category': 'Раздел каталога ачивок на фронтенде.',
+            'is_active': 'Если выключено, ачивка скрыта из каталога и не выдаётся автоматически.',
+            'trigger_type': 'Правило автоматической выдачи. Для MANUAL ачивка выдаётся только вручную.',
+            'threshold': 'Минимальное значение для числовых правил (≥ 1). Для MANUAL / ON_REGISTER / EASTER_EGG очищается автоматически.',
+            'points': 'Бонусные очки (+pts), начисляемые студенту за получение ачивки (≥ 0).',
+        }
+        for field_name, text in help_texts.items():
+            if field_name in self.fields:
+                self.fields[field_name].help_text = text
+
+        is_existing = bool(self.instance and self.instance.pk and not self.instance._state.adding)
+        is_system = is_existing and self.instance.code in SYSTEM_ACHIEVEMENT_CODES
+        if 'code' in self.fields:
+            self.fields['code'].required = False
+            if is_system:
+                self.fields['code'].disabled = True
+                self.fields['code'].help_text = 'Системный код ачивки защищён от изменения.'
+        if 'icon_url' in self.fields:
+            self.fields['icon_url'].required = False
+        if 'criteria' in self.fields:
+            self.fields['criteria'].required = False
+        if 'preset_icon' in self.fields:
+            preset = find_preset_icon(self.instance.icon_url) if is_existing else None
+            self.fields['preset_icon'].initial = preset['url'] if preset else ''
 
     def clean(self):
         cleaned_data = super().clean()
-        uploaded = cleaned_data.get('custom_icon_file')
-        preset_val = (cleaned_data.get('preset_selector') or '').strip()
-        raw_icon_url = (cleaned_data.get('icon_url') or '').strip()
+        self._pending_icon = None
+        self._resolved_icon_url = ''
+        self._resolved_criteria = ''
 
-        trigger_type = cleaned_data.get('trigger_type') or 'MANUAL'
+        is_existing = bool(self.instance and self.instance.pk and not self.instance._state.adding)
+        is_system = is_existing and self.instance.code in SYSTEM_ACHIEVEMENT_CODES
+        title = (cleaned_data.get('title') or '').strip()
+
+        if is_system:
+            cleaned_data['code'] = self.instance.code
+        else:
+            raw_code = (cleaned_data.get('code') or '').strip()
+            if not raw_code:
+                if is_existing:
+                    cleaned_data['code'] = self.instance.code
+                elif title:
+                    cleaned_data['code'] = generate_unique_achievement_code(title)
+            else:
+                normalized_code = normalize_achievement_code(raw_code)
+                dup_qs = Achievement.objects.filter(code=normalized_code)
+                if is_existing:
+                    dup_qs = dup_qs.exclude(pk=self.instance.pk)
+                if dup_qs.exists():
+                    self.add_error('code', f'Код «{normalized_code}» уже используется другой ачивкой.')
+                else:
+                    cleaned_data['code'] = normalized_code
+
+        trigger_type = cleaned_data.get('trigger_type') or TriggerTypeChoices.MANUAL
         threshold = cleaned_data.get('threshold')
-        numeric_triggers = {
-            'TOTAL_SCORE',
-            'ACCEPTED_TASKS',
-            'BONUS_TASKS',
-            'FIRST_TRY_ACCEPTED',
-            'PERFECT_SCORE',
-            'REVISION_ACCEPTED',
-            'STREAK_DAYS',
-        }
-
-        if trigger_type in numeric_triggers:
+        if trigger_type in self.NUMERIC_TRIGGER_TYPES:
             if threshold is None or threshold < 1:
-                self.add_error(
-                    'threshold',
-                    'Для выбранного типа триггера необходимо указать положительное числовое значение порога (>= 1).',
-                )
+                self.add_error('threshold', 'Для выбранного правила укажите порог не меньше 1.')
         else:
             cleaned_data['threshold'] = None
             threshold = None
 
-        criteria = (cleaned_data.get('criteria') or '').strip()
+        pts = cleaned_data.get('points')
+        if pts is not None and pts < 0:
+            self.add_error('points', 'Награда не может быть отрицательной.')
+
+        criteria = (cleaned_data.get('criteria') or (self.instance.criteria if is_existing else '') or '').strip()
         if not criteria:
             auto_criteria_map = {
                 'MANUAL': 'Выдается ментором или администратором вручную',
@@ -1148,32 +1229,55 @@ class AchievementAdminForm(forms.ModelForm):
                 'STREAK_DAYS': f'Проявлять активность на платформе {threshold or 1} дней подряд (стрик)',
                 'EASTER_EGG': 'Найти секретную пасхалку на платформе',
             }
-            cleaned_data['criteria'] = auto_criteria_map.get(trigger_type, '')
+            criteria = auto_criteria_map.get(trigger_type, '')
+        self._resolved_criteria = criteria
+        if 'criteria' in self.fields:
+            cleaned_data['criteria'] = criteria
+        self.instance.criteria = criteria
+
+        uploaded = cleaned_data.get('custom_icon_file')
+        preset_val = (cleaned_data.get('preset_icon') or self.data.get('preset_selector') or '').strip()
+        raw_icon_url = (cleaned_data.get('icon_url') or '').strip()
+        existing_icon_url = (self.instance.icon_url or '').strip() if is_existing else ''
+        resolved_icon = ''
 
         if uploaded:
-            max_bytes = 512 * 1024
-            if uploaded.size > max_bytes:
-                raise forms.ValidationError('Размер файла иконки не должен превышать 512 КБ.')
-
             ext = os.path.splitext(uploaded.name or '')[1].lower()
             allowed_map = {
                 '.png': 'image/png',
                 '.webp': 'image/webp',
                 '.jpg': 'image/jpeg',
                 '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
             }
-            if ext not in allowed_map:
-                raise forms.ValidationError('Разрешены только файлы форматов .png, .webp или .jpg.')
-
-            from admin_panel.services.media_service import read_upload, validate_image_buffer
-            try:
-                raw_bytes = read_upload(uploaded, 'ACHIEVEMENT_ICON')
-                mime_type = allowed_map[ext]
-                validate_image_buffer(raw_bytes, mime_type, kind='ACHIEVEMENT_ICON')
-                self._pending_icon = (raw_bytes, mime_type)
-                cleaned_data['icon_url'] = (self.instance.icon_url if self.instance and self.instance.pk else '') or '/api/v1/media/presets/icons/trophy.svg'
-            except Exception as e:
-                raise forms.ValidationError(f'Ошибка проверки иконки: {str(e)}')
+            if ext == '.svg':
+                self.add_error(
+                    'custom_icon_file',
+                    'Загрузка SVG запрещена из соображений безопасности. Выберите готовую SVG-иконку из списка пресетов или загрузите PNG/WebP.',
+                )
+            elif ext not in allowed_map:
+                self.add_error('custom_icon_file', 'Разрешены только файлы форматов .png, .webp, .jpg или .gif.')
+            else:
+                from admin_panel.services.media_service import read_upload, validate_image_buffer
+                try:
+                    raw_bytes = read_upload(uploaded, 'ACHIEVEMENT_ICON')
+                    mime_type = allowed_map[ext]
+                    validate_image_buffer(raw_bytes, mime_type, kind='ACHIEVEMENT_ICON')
+                    self._pending_icon = (raw_bytes, mime_type)
+                    resolved_icon = existing_icon_url or '/api/v1/media/presets/icons/trophy.svg'
+                except (ValueError, OSError) as exc:
+                    self.add_error('custom_icon_file', f'Ошибка проверки иконки: {exc}')
+                finally:
+                    uploaded.seek(0)
+        elif preset_val:
+            normalized_preset = normalize_icon_url(preset_val)
+            if not find_preset_icon(normalized_preset):
+                try:
+                    normalized_preset = validate_safe_url(normalized_preset, allow_media_path=True, max_length=2048)
+                except ValidationError as exc:
+                    self.add_error('preset_icon', exc.message)
+                    return cleaned_data
+            resolved_icon = normalized_preset
         elif raw_icon_url:
             normalized = normalize_icon_url(raw_icon_url)
             if not find_preset_icon(normalized):
@@ -1182,24 +1286,28 @@ class AchievementAdminForm(forms.ModelForm):
                 except ValidationError as exc:
                     self.add_error('icon_url', exc.message)
                     return cleaned_data
-            cleaned_data['icon_url'] = normalized
-        elif preset_val:
-            normalized_preset = normalize_icon_url(preset_val)
-            if not find_preset_icon(normalized_preset):
-                try:
-                    normalized_preset = validate_safe_url(normalized_preset, allow_media_path=True, max_length=2048)
-                except ValidationError as exc:
-                    self.add_error('preset_selector', exc.message)
-                    return cleaned_data
-            cleaned_data['icon_url'] = normalized_preset
+            resolved_icon = normalized
+        elif existing_icon_url:
+            resolved_icon = existing_icon_url
         else:
-            cleaned_data['icon_url'] = '/api/v1/media/presets/icons/trophy.svg'
+            self.add_error('preset_icon', 'Выберите готовую иконку из списка или загрузите свой файл.')
 
-        pts = cleaned_data.get('points')
-        if pts is not None and pts < 0:
-            self.add_error('points', 'Баллы достижения не могут быть отрицательными.')
+        if resolved_icon:
+            self._resolved_icon_url = resolved_icon
+            cleaned_data['icon_url'] = resolved_icon
+            self.instance.icon_url = resolved_icon
 
         return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        if getattr(self, '_resolved_icon_url', None):
+            instance.icon_url = self._resolved_icon_url
+        if not (instance.criteria or '').strip() and getattr(self, '_resolved_criteria', None):
+            instance.criteria = self._resolved_criteria
+        if commit:
+            instance.save()
+        return instance
 
 
 @admin.register(Achievement)
@@ -1207,20 +1315,42 @@ class AchievementAdmin(ModelAdmin):
     form = AchievementAdminForm
     list_fullwidth = True
     list_display = (
-        'icon_preview',
-        'title',
+        'list_icon',
+        'title_with_code',
         'category',
         'rule_badge',
-        'points',
+        'points_badge',
+        'awarded_count',
         'is_active',
-        'icon_source_badge',
     )
-    list_display_links = ('title',)
-    list_editable = ('points', 'is_active')
+    list_display_links = ('title_with_code',)
+    list_editable = ('is_active',)
     list_filter = ('category', 'trigger_type', 'is_active')
     search_fields = ('title', 'code', 'description', 'criteria')
+    readonly_fields = ('icon_preview',)
     ordering = ('created_at',)
-    actions = ['reevaluate_all_students']
+    actions = ['recalculate_and_award_students']
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('title', 'code', 'description', 'category', 'is_active'),
+        }),
+        ('Иконка ачивки', {
+            'fields': ('icon_preview', 'preset_icon', 'custom_icon_file'),
+        }),
+        ('Правило выдачи и баллы', {
+            'fields': ('trigger_type', 'threshold', 'points'),
+            'description': (
+                'Настройте правило автоматического награждения студентов. '
+                'Бэкенд проверяет все активные правила при проверке ДЗ, изменении баллов и регистрации.'
+            ),
+        }),
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            awarded_students_count=Count('user_achievements', distinct=True)
+        )
 
     def save_model(self, request, obj, form, change):
         pending = getattr(form, '_pending_icon', None)
@@ -1232,6 +1362,8 @@ class AchievementAdmin(ModelAdmin):
                 kind='ACHIEVEMENT_ICON',
             )
             obj.icon_url = asset['url']
+        elif getattr(form, '_resolved_icon_url', None):
+            obj.icon_url = form._resolved_icon_url
         super().save_model(request, obj, form, change)
 
     def has_delete_permission(self, request, obj=None):
@@ -1261,50 +1393,66 @@ class AchievementAdmin(ModelAdmin):
         if deletable.exists():
             super().delete_queryset(request, deletable)
 
-    @admin.action(description='🏆 Перепроверить все ачивки для всех студентов', permissions=['change'])
-    def reevaluate_all_students(self, request, queryset):
+    @admin.action(description='🏆 Пересчитать и выдать студентам', permissions=['change'])
+    def recalculate_and_award_students(self, request, queryset):
+        selected_ids = list(
+            queryset.filter(is_active=True)
+            .exclude(trigger_type__in=[TriggerTypeChoices.MANUAL, TriggerTypeChoices.EASTER_EGG])
+            .values_list('id', flat=True)
+        )
+        if not selected_ids:
+            self.message_user(
+                request,
+                'Нет выбранных активных автоматических ачивок для пересчёта (MANUAL и EASTER_EGG пропускаются).',
+                level=messages.WARNING,
+            )
+            return
         total = 0
         checked = 0
-        for student in User.objects.filter(role=RoleChoices.STUDENT).iterator(chunk_size=100):
-            total += len(evaluate_user_achievements(student.pk, trigger_filter='ALL'))
+        for student_id in User.objects.filter(role=RoleChoices.STUDENT).values_list('id', flat=True).iterator(chunk_size=100):
+            total += len(evaluate_user_achievements(student_id, trigger_filter='ALL', achievement_ids=selected_ids))
             checked += 1
         self.message_user(
             request,
-            f'Проверено студентов: {checked}. Выдано новых ачивок: {total}.',
+            f'Проверено студентов: {checked}. Выдано новых наград: {total}.',
             level=messages.SUCCESS,
         )
 
-    fieldsets = (
-        ('Основная информация', {
-            'fields': ('code', 'title', 'category', 'points', 'is_active', 'description'),
-        }),
-        ('Конструктор правил авто-выдачи (Rule Engine)', {
-            'fields': ('trigger_type', 'threshold', 'criteria'),
-            'description': (
-                'Настройте правило автоматического награждения студентов. '
-                'Бэкенд проверяет все активные правила при проверке ДЗ, изменении баллов и регистрации.'
-            ),
-        }),
-        ('Иконка достижения (Бэкенд-каталог или кастомный файл)', {
-            'fields': ('preset_selector', 'custom_icon_file', 'icon_url'),
-        }),
-    )
+    @admin.display(description='Иконка')
+    def list_icon(self, obj):
+        src = resolve_icon_preview_src(obj.icon_url)
+        return format_html(
+            '<div style="width:36px;height:36px;border-radius:9px;background:rgba(245,158,11,0.12);'
+            'border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">'
+            '<img src="{}" alt="{}" loading="lazy" style="width:24px;height:24px;object-fit:contain;" />'
+            '</div>',
+            src,
+            obj.code,
+        )
 
-    @admin.display(description='Правило выдачи')
+    @admin.display(description='Ачивка', ordering='title')
+    def title_with_code(self, obj):
+        return format_html(
+            '<strong>{}</strong><br><code style="font-size:11px;color:#a1a1aa;">{}</code>',
+            obj.title,
+            obj.code,
+        )
+
+    @admin.display(description='Условие', ordering='trigger_type')
     def rule_badge(self, obj):
         t = obj.trigger_type or 'MANUAL'
         th = obj.threshold
         labels = {
-            'MANUAL': ('Ручная выдача', '#a1a1aa'),
+            'MANUAL': ('Вручную ментором', '#a1a1aa'),
             'ON_REGISTER': ('При регистрации', '#34d399'),
             'TOTAL_SCORE': (f'Баллы ≥ {th or 0}', '#fbbf24'),
-            'ACCEPTED_TASKS': (f'Принято ДЗ ≥ {th or 0}', '#34d399'),
-            'BONUS_TASKS': (f'Бонусные ДЗ ≥ {th or 0}', '#f59e0b'),
+            'ACCEPTED_TASKS': (f'Принятых ДЗ ≥ {th or 0}', '#34d399'),
+            'BONUS_TASKS': (f'Бонусных ДЗ ≥ {th or 0}', '#f59e0b'),
             'FIRST_TRY_ACCEPTED': (f'С 1-й попытки ≥ {th or 0}', '#38bdf8'),
             'PERFECT_SCORE': (f'Макс. балл ≥ {th or 0}', '#fbbf24'),
-            'REVISION_ACCEPTED': (f'После ревью ≥ {th or 0}', '#c084fc'),
+            'REVISION_ACCEPTED': (f'После доработки ≥ {th or 0}', '#c084fc'),
             'STREAK_DAYS': (f'Стрик ≥ {th or 0} дн.', '#fb923c'),
-            'EASTER_EGG': ('Пасхалка (клик)', '#f472b6'),
+            'EASTER_EGG': ('Пасхалка', '#f472b6'),
         }
         text, color = labels.get(t, (t, '#a1a1aa'))
         return format_html(
@@ -1314,16 +1462,63 @@ class AchievementAdmin(ModelAdmin):
             text,
         )
 
-    @admin.display(description='Иконка')
+    @admin.display(description='Награда', ordering='points')
+    def points_badge(self, obj):
+        return format_html('<span style="font-weight:700;color:#fbbf24;">+{} pts</span>', obj.points)
+
+    @admin.display(description='Получили', ordering='awarded_students_count')
+    def awarded_count(self, obj):
+        count = getattr(obj, 'awarded_students_count', None)
+        if count is None:
+            count = obj.user_achievements.count()
+        return count
+
+    @admin.display(description='Предпросмотр иконки')
     def icon_preview(self, obj):
-        src = resolve_icon_preview_src(obj.icon_url)
-        return format_html(
-            '<div style="width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,0.12);'
+        raw_url = (obj.icon_url or '').strip() if obj else ''
+        src = resolve_icon_preview_src(raw_url)
+        preset = find_preset_icon(raw_url)
+        if preset:
+            caption = f"Пресет: {preset['label']} ({preset['slug']})"
+        elif raw_url.startswith('/api/v1/media/'):
+            caption = f"Загруженный файл: {raw_url}"
+        elif obj and obj.pk and not obj._state.adding and raw_url:
+            caption = raw_url
+        else:
+            caption = 'Выберите пресет ниже или загрузите свой файл'
+        preset_map_json = json.dumps({
+            item['url']: {'src': item['data_uri'], 'label': item['label']}
+            for item in PRESET_ACHIEVEMENT_ICONS
+        })
+        return mark_safe(
+            '<div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:14px;'
+            'background:#09090b;border:1px solid #27272a;max-width:480px;">'
+            '<div style="width:72px;height:72px;min-width:72px;border-radius:14px;background:rgba(245,158,11,0.12);'
             'border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">'
-            '<img src="{}" alt="{}" style="width:22px;height:22px;object-fit:contain;" />'
-            '</div>',
-            src,
-            obj.code,
+            f'<img id="merts_ach_icon_preview" src="{escape(src)}" alt="{escape(getattr(obj, "code", "") or "preview")}" '
+            'style="width:44px;height:44px;object-fit:contain;" />'
+            '</div>'
+            '<div id="merts_ach_icon_caption" style="font-size:13px;color:#a1a1aa;word-break:break-word;">'
+            f'{escape(caption)}'
+            '</div></div>'
+            '<script>(function(){'
+            f'var presets={preset_map_json};'
+            f'var initSrc={json.dumps(src)},initCap={json.dumps(caption)};'
+            'function bind(){'
+            'var sel=document.getElementById("id_preset_icon"),file=document.getElementById("id_custom_icon_file"),'
+            'img=document.getElementById("merts_ach_icon_preview"),cap=document.getElementById("merts_ach_icon_caption");'
+            'if(!img||!cap)return;'
+            'if(sel){sel.addEventListener("change",function(){'
+            'var p=presets[sel.value];'
+            'if(p){img.src=p.src;cap.textContent="Выбран пресет: "+p.label;if(file)file.value="";}'
+            'else if(!file||!file.files||!file.files.length){img.src=initSrc;cap.textContent=initCap;}'
+            '});if(presets[sel.value]){img.src=presets[sel.value].src;cap.textContent="Выбран пресет: "+presets[sel.value].label;}}'
+            'if(file){file.addEventListener("change",function(e){'
+            'var f=e.target.files&&e.target.files[0];if(!f)return;'
+            'var r=new FileReader();r.onload=function(ev){img.src=ev.target.result;cap.textContent="Новый файл: "+f.name;if(sel)sel.value="";};r.readAsDataURL(f);'
+            '});}'
+            '}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",bind);}else{bind();}'
+            '})();</script>'
         )
 
     @admin.display(description='Тип иконки')
