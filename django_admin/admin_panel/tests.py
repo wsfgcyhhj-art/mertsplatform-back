@@ -807,15 +807,42 @@ class AdminSchemaRegressionTests(TransactionTestCase):
 
         self.assertEqual(self.client.get('/api/v1/achievements/nonexistent-id', **auth).status_code, 404)
 
+        catalog_resp = self.client.get('/api/v1/achievements', **auth)
+        self.assertEqual(catalog_resp.status_code, 200)
+        catalog = catalog_resp.json()['achievements']
+        self.assertTrue(catalog)
+        for item in catalog:
+            self.assertIn('isUnlocked', item)
+            self.assertIn('isUnlockedByMe', item)
+            self.assertEqual(item['isUnlockedByMe'], item['isUnlocked'])
+
+        unlocked_item = next(item for item in catalog if item['id'] == ach.id)
+        self.assertTrue(unlocked_item['isUnlocked'])
+        self.assertTrue(unlocked_item['isUnlockedByMe'])
+
+        locked_item = next((item for item in catalog if not item['isUnlocked']), None)
+        self.assertIsNotNone(locked_item)
+        self.assertFalse(locked_item['isUnlocked'])
+        self.assertFalse(locked_item['isUnlockedByMe'])
+
         detail_resp = self.client.get(f'/api/v1/achievements/{ach.id}', **auth)
         self.assertEqual(detail_resp.status_code, 200)
         payload = detail_resp.json()['achievement']
         self.assertEqual(payload['id'], ach.id)
         self.assertEqual(payload['iconUrl'], '/api/v1/media/presets/icons/star.svg')
         self.assertTrue(payload['isUnlocked'])
+        self.assertTrue(payload['isUnlockedByMe'])
+        self.assertEqual(payload['isUnlockedByMe'], payload['isUnlocked'])
         self.assertEqual(payload['unlockedCount'], 1)
         self.assertEqual(len(payload['recentAchievers']), 1)
         self.assertEqual(payload['recentAchievers'][0]['login'], 'ach_detail_user')
+
+        locked_detail_resp = self.client.get(f"/api/v1/achievements/{locked_item['id']}", **auth)
+        self.assertEqual(locked_detail_resp.status_code, 200)
+        locked_payload = locked_detail_resp.json()['achievement']
+        self.assertFalse(locked_payload['isUnlocked'])
+        self.assertFalse(locked_payload['isUnlockedByMe'])
+        self.assertEqual(locked_payload['isUnlockedByMe'], locked_payload['isUnlocked'])
 
     def test_dangling_study_group_does_not_break_login_or_profile(self):
         group = StudyGroup.objects.create(name='js-09', month=2)

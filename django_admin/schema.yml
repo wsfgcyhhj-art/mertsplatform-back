@@ -1687,6 +1687,8 @@ components:
           readOnly: true
         isUnlocked:
           type: boolean
+        isUnlockedByMe:
+          type: boolean
         unlockedCount:
           type: integer
       required:
@@ -1697,6 +1699,7 @@ components:
       - id
       - isActive
       - isUnlocked
+      - isUnlockedByMe
       - title
       - triggerType
       - unlockedCount
@@ -1751,6 +1754,8 @@ components:
           readOnly: true
         isUnlocked:
           type: boolean
+        isUnlockedByMe:
+          type: boolean
         unlockedCount:
           type: integer
         recentAchievers:
@@ -1765,6 +1770,7 @@ components:
       - id
       - isActive
       - isUnlocked
+      - isUnlockedByMe
       - recentAchievers
       - title
       - triggerType

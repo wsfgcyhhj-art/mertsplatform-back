@@ -27,10 +27,11 @@ from admin_panel.services.achievement_service import ensure_default_achievements
 
 class AchievementCatalogItemSerializer(AchievementSerializer):
     isUnlocked = serializers.BooleanField()
+    isUnlockedByMe = serializers.BooleanField()
     unlockedCount = serializers.IntegerField()
 
     class Meta(AchievementSerializer.Meta):
-        fields = AchievementSerializer.Meta.fields + ('isUnlocked', 'unlockedCount')
+        fields = AchievementSerializer.Meta.fields + ('isUnlocked', 'isUnlockedByMe', 'unlockedCount')
 
 
 class AchievementsListResponseSerializer(PaginatedMetaMixin):
@@ -143,7 +144,9 @@ class AchievementsCatalogView(APIView):
         catalog = []
         for a in items:
             item = AchievementSerializer(a).data
-            item['isUnlocked'] = a.id in unlocked_ids
+            unlocked = a.id in unlocked_ids
+            item['isUnlocked'] = unlocked
+            item['isUnlockedByMe'] = unlocked
             item['unlockedCount'] = counts_map.get(a.id, 0)
             catalog.append(item)
 
@@ -174,10 +177,12 @@ class AchievementDetailView(APIView):
             )
 
         item = AchievementSerializer(ach).data
-        item['isUnlocked'] = UserAchievement.objects.filter(
+        unlocked = UserAchievement.objects.filter(
             user_id=request.user.id,
             achievement_id=ach.id,
         ).exists()
+        item['isUnlocked'] = unlocked
+        item['isUnlockedByMe'] = unlocked
         item['unlockedCount'] = UserAchievement.objects.filter(achievement_id=ach.id).count()
         recent_qs = (
             UserAchievement.objects.filter(achievement_id=ach.id)
