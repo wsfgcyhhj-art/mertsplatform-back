@@ -34,6 +34,7 @@ class ShortUserSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        data['name'] = (data.get('name') or '').strip() or data.get('login')
         data['avatar_url'] = to_absolute_media_url(data.get('avatar_url'), request=self.context.get('request'))
         return data
 
@@ -111,6 +112,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get('request')
+        data['name'] = (data.get('name') or '').strip() or data.get('login')
         data['avatarUrl'] = to_absolute_media_url(data.get('avatarUrl'), request=request)
         data['bannerUrl'] = to_absolute_media_url(data.get('bannerUrl'), request=request)
         return data

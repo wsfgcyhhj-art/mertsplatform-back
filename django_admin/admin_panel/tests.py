@@ -114,6 +114,54 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(refresh_resp.status_code, 200)
         self.assertIn('accessToken', refresh_resp.json())
 
+    def test_03b_register_and_serializer_name_fallback_to_login(self):
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.serializers import ShortUserSerializer, UserProfileSerializer
+
+        # 3-field registration without name falls back to stripped login
+        resp_no_name = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps({
+                'login': '  student_3field  ',
+                'password': 'Password123!',
+                'groupNumber': 'GRP-101',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp_no_name.status_code, 201)
+        self.assertEqual(resp_no_name.json()['user']['name'], 'student_3field')
+        self.assertEqual(User.objects.get(login='student_3field').name, 'student_3field')
+
+        # Registration with whitespace-only name falls back to stripped login
+        resp_blank_name = self.client.post(
+            '/api/v1/auth/register',
+            data=json.dumps({
+                'login': '  student_blank  ',
+                'password': 'Password123!',
+                'groupNumber': 'GRP-101',
+                'name': '   ',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(resp_blank_name.status_code, 201)
+        self.assertEqual(resp_blank_name.json()['user']['name'], 'student_blank')
+        self.assertEqual(User.objects.get(login='student_blank').name, 'student_blank')
+
+        # Legacy users with name=None or whitespace still serialize with login; padded names get stripped
+        legacy_null = create_user(login='legacy_null', name=None, group_number='GRP-101')
+        legacy_blank = create_user(login='legacy_blank', name='   ', group_number='GRP-101')
+        named_user = create_user(login='named_user', name='  Иван  ', group_number='GRP-101')
+
+        for serializer_cls in (UserProfileSerializer, ShortUserSerializer):
+            self.assertEqual(serializer_cls(legacy_null).data['name'], 'legacy_null')
+            self.assertEqual(serializer_cls(legacy_blank).data['name'], 'legacy_blank')
+            self.assertEqual(serializer_cls(named_user).data['name'], 'Иван')
+
+        access_token, _, _ = generate_tokens_for_user(legacy_null)
+        me_resp = self.client.get('/api/v1/users/me', HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        self.assertEqual(me_resp.status_code, 200)
+        self.assertEqual(me_resp.json()['user']['name'], 'legacy_null')
+
     def test_04_user_profile_and_password_update(self):
         # Create user
         user = create_user(has_subscription=True,

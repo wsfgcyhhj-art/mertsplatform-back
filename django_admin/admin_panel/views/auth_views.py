@@ -241,7 +241,7 @@ class RegisterView(APIView):
             login=login,
             role=assigned_role,
             has_subscription=True,
-            name=(data.get('name') or '').strip() or None,
+            name=(data.get('name') or '').strip() or login,
             telegram=(data.get('telegram') or '').strip() or None,
             group_number=group_num,
             study_group=matched_group,
