@@ -76,6 +76,22 @@ DEFAULT_SETTINGS = [
         'is_public': True,
         'description': 'Приветственный текст платформы',
     },
+    {
+        'key': 'instruction_pdf_url',
+        'value': 'https://166.0.28.165.sslip.io/api/v1/media/instruction',
+        'value_type': 'string',
+        'category': 'branding',
+        'is_public': True,
+        'description': 'URL для скачивания PDF-инструкции платформы (отдаётся в /api/v1/system/config)',
+    },
+    {
+        'key': 'instruction_pdf_asset_id',
+        'value': '',
+        'value_type': 'string',
+        'category': 'branding',
+        'is_public': False,
+        'description': 'ID активного MediaAsset (DOCUMENT) с PDF-инструкцией',
+    },
     # --- Геймификация и обучение ---
     {
         'key': 'default_task_points',
@@ -471,7 +487,7 @@ def validate_setting_value(key: str, raw: str, value_type: str, *, is_public: bo
         raise ValidationError(f'Значение "{key}" должно быть целым числом от 0 до 10000.')
     elif key in ('bonus_task_multiplier', 'streak_threshold_days') and (type(parsed) is not int or not (1 <= parsed <= 365)):
         raise ValidationError(f'Значение "{key}" должно быть целым числом от 1 до 365.')
-    elif key in ('frontend_url', 'support_url') and stripped:
+    elif key in ('frontend_url', 'support_url', 'instruction_pdf_url') and stripped:
         URLValidator(schemes=['http', 'https'])(stripped)
     elif key.startswith('tg_template_') and stripped:
         validate_telegram_html(text)

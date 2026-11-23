@@ -1,10 +1,18 @@
 import io
 import warnings
+from pathlib import Path
 from PIL import Image, ImageOps
 from django.db import transaction
-from admin_panel.models import MediaAsset, User
+from admin_panel.models import MediaAsset, PlatformSetting, User
 
-LIMITS = {'AVATAR': 2 * 1024**2, 'BANNER': 5 * 1024**2, 'ACHIEVEMENT_ICON': 512 * 1024, 'GENERAL': 5 * 1024**2}
+DEFAULT_INSTRUCTION_PDF_PATH = Path(__file__).resolve().parent.parent / 'assets' / 'MertsPlatform_Instruction.pdf'
+LIMITS = {
+    'AVATAR': 2 * 1024**2,
+    'BANNER': 5 * 1024**2,
+    'ACHIEVEMENT_ICON': 512 * 1024,
+    'GENERAL': 5 * 1024**2,
+    'DOCUMENT': 15 * 1024**2,
+}
 FORMATS = {'JPEG', 'PNG', 'WEBP', 'GIF'}
 MAX_PIXELS = 16_000_000
 
@@ -56,13 +64,63 @@ def validate_image_buffer(buffer, mime_type, kind='GENERAL'):
         raise ValueError('Не удалось прочитать безопасное растровое изображение.') from exc
 
 
+def validate_pdf_buffer(buffer, mime_type='application/pdf') -> bytes:
+    clean_mime = (mime_type or '').split(';', 1)[0].strip().lower()
+    if clean_mime not in {'application/pdf', 'application/x-pdf'}:
+        raise ValueError('Разрешены только PDF-файлы (application/pdf).')
+    data = bytes(buffer or b'')
+    if not data:
+        raise ValueError('PDF-файл пуст.')
+    if len(data) > get_media_limit('DOCUMENT'):
+        raise ValueError('Файл превышает допустимый размер.')
+    if not data.startswith(b'%PDF-'):
+        raise ValueError('Некорректный PDF-файл: отсутствует заголовок %PDF-.')
+    return data
+
+
 @transaction.atomic
 def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None):
-    webp_bytes = validate_image_buffer(buffer, mime_type, kind=kind)
+    if kind == 'DOCUMENT':
+        payload = validate_pdf_buffer(buffer, mime_type)
+        stored_mime = 'application/pdf'
+    else:
+        payload = validate_image_buffer(buffer, mime_type, kind=kind)
+        stored_mime = 'image/webp'
     user = User.objects.select_for_update().get(pk=owner_id) if owner_id else None
-    asset = MediaAsset.objects.create(kind=kind, mime_type='image/webp', data=webp_bytes, size_bytes=len(webp_bytes), owner_id=owner_id)
+    asset = MediaAsset.objects.create(kind=kind, mime_type=stored_mime, data=payload, size_bytes=len(payload), owner_id=owner_id)
     if user and kind in ('AVATAR', 'BANNER'):
         field = 'avatar_url' if kind == 'AVATAR' else 'banner_url'
         User.objects.filter(pk=user.pk).update(**{field: f'/api/v1/media/{asset.pk}'})
         MediaAsset.objects.filter(owner_id=owner_id, kind=kind).exclude(pk=asset.pk).delete()
-    return {'id': asset.pk, 'url': f'/api/v1/media/{asset.pk}', 'mimeType': 'image/webp', 'sizeBytes': asset.size_bytes}
+    return {'id': asset.pk, 'url': f'/api/v1/media/{asset.pk}', 'mimeType': stored_mime, 'sizeBytes': asset.size_bytes}
+
+
+def get_active_instruction_pdf_asset(*, defer_data: bool = False):
+    from admin_panel.services.settings_service import get_setting
+    qs = MediaAsset.objects.filter(kind='DOCUMENT', mime_type='application/pdf')
+    if defer_data:
+        qs = qs.defer('data')
+    asset_id = str(get_setting('instruction_pdf_asset_id', '') or '').strip()
+    if asset_id:
+        asset = qs.filter(pk=asset_id).first()
+        if asset is not None:
+            return asset
+    return qs.order_by('-created_at').first()
+
+
+@transaction.atomic
+def save_instruction_pdf_asset(buffer, mime_type='application/pdf', owner_id=None):
+    from admin_panel.services.settings_service import invalidate_settings_cache
+    asset = save_optimized_media_asset(buffer, mime_type, kind='DOCUMENT', owner_id=owner_id)
+    PlatformSetting.objects.update_or_create(
+        key='instruction_pdf_asset_id',
+        defaults={
+            'value': str(asset['id']),
+            'value_type': 'string',
+            'category': 'branding',
+            'description': 'ID активного MediaAsset (DOCUMENT) с PDF-инструкцией',
+            'is_public': False,
+        },
+    )
+    transaction.on_commit(invalidate_settings_cache)
+    return asset

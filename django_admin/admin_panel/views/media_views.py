@@ -6,11 +6,16 @@ from admin_panel.serializers import (
 import re
 from django.http import HttpResponse
 from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from admin_panel.models import MediaAsset
+from admin_panel.services.media_service import (
+    DEFAULT_INSTRUCTION_PDF_PATH,
+    get_active_instruction_pdf_asset,
+)
 from admin_panel.services.media_presets import (
     find_preset_banner,
     find_preset_avatar,
@@ -152,4 +157,38 @@ class PresetIconDetailView(APIView):
         response['Cache-Control'] = 'public, max-age=86400'
         response['Cross-Origin-Resource-Policy'] = 'cross-origin'
         response['Content-Security-Policy'] = "default-src 'none'; sandbox"
+        return response
+
+
+class InstructionPdfView(APIView):
+    serializer_class = EmptyRequestSerializer
+    authentication_classes = ()
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Скачать PDF-инструкцию платформы (MertsPlatform_Instruction.pdf)",
+        description="Отдаёт активный PDF-файл инструкции из MediaAsset (instruction_pdf_asset_id или последний DOCUMENT) либо встроенный дефолтный PDF.",
+        responses={
+            200: OpenApiResponse(response=OpenApiTypes.BINARY, description="PDF-файл инструкции"),
+            404: ErrorResponseSerializer,
+        },
+    )
+    def get(self, request):
+        asset = get_active_instruction_pdf_asset()
+        if asset is not None:
+            data_bytes = bytes(asset.data)
+        elif DEFAULT_INSTRUCTION_PDF_PATH.is_file():
+            data_bytes = DEFAULT_INSTRUCTION_PDF_PATH.read_bytes()
+        else:
+            return Response(
+                {"statusCode": 404, "error": "Not Found", "message": "PDF-инструкция ещё не загружена"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        response = HttpResponse(data_bytes, content_type='application/pdf')
+        response['Content-Length'] = len(data_bytes)
+        response['Content-Disposition'] = 'attachment; filename="MertsPlatform_Instruction.pdf"'
+        response['Cache-Control'] = 'no-cache'
+        response['X-Content-Type-Options'] = 'nosniff'
+        response['Cross-Origin-Resource-Policy'] = 'cross-origin'
         return response

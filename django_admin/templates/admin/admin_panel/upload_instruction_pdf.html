@@ -1,0 +1,61 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div style="max-width: 720px; margin: 24px auto; padding: 24px; border-radius: 14px; border: 1px solid #27272a; background: #18181b; color: #f4f4f5;">
+  <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 12px;">{{ title }}</h2>
+
+  <div style="margin-bottom: 18px; padding: 14px; border-radius: 10px; border: 1px solid #3f3f46; background: #09090b;">
+    {% if active_asset %}
+      <p style="margin: 0 0 6px 0; color: #e4e4e7;">
+        Активный файл в БД: <code>{{ active_asset.id }}</code> ({{ active_asset.size_bytes|filesizeformat }})
+      </p>
+    {% elif has_default_pdf %}
+      <p style="margin: 0 0 6px 0; color: #fbbf24;">
+        Используется встроенный дефолтный файл <code>MertsPlatform_Instruction.pdf</code>.
+      </p>
+    {% else %}
+      <p style="margin: 0 0 6px 0; color: #f87171;">
+        PDF-инструкция ещё не загружена.
+      </p>
+    {% endif %}
+    <a href="{{ download_url }}" target="_blank" rel="noopener" style="color: #fbbf24; text-decoration: underline;">
+      Скачать текущую инструкцию ({{ download_url }})
+    </a>
+  </div>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+      <div style="margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: rgba(239,68,68,0.15); color: #fca5a5;">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    <div style="margin-bottom: 18px;">
+      <label for="{{ form.pdf_file.id_for_label }}" style="display: block; font-weight: 600; margin-bottom: 8px;">
+        {{ form.pdf_file.label }}
+      </label>
+      {{ form.pdf_file }}
+      {% if form.pdf_file.help_text %}
+        <p style="margin-top: 6px; font-size: 12px; color: #a1a1aa;">{{ form.pdf_file.help_text }}</p>
+      {% endif %}
+      {% if form.pdf_file.errors %}
+        <div style="margin-top: 6px; color: #f87171; font-size: 13px;">
+          {{ form.pdf_file.errors }}
+        </div>
+      {% endif %}
+    </div>
+
+    <div style="display: flex; gap: 12px;">
+      <button type="submit" style="padding: 10px 20px; border-radius: 10px; border: none; background: #f59e0b; color: #09090b; font-weight: 700; cursor: pointer;">
+        Загрузить PDF
+      </button>
+      <a href="{{ changelist_url }}" style="padding: 10px 20px; border-radius: 10px; border: 1px solid #3f3f46; color: #f4f4f5; text-decoration: none;">
+        Назад
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

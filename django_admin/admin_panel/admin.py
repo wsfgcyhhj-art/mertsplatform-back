@@ -4,7 +4,8 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
-from django.shortcuts import render
+from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils.html import format_html_join, escape
 from admin_panel.api_utils import validate_safe_url
 from admin_panel.permissions import is_admin_owner
@@ -18,6 +19,7 @@ from django.utils.safestring import mark_safe
 from django.utils import timezone
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.contrib.filters.admin import DropdownFilter
+from unfold.decorators import action as unfold_action
 from .achievement_icons import (
     PRESET_ACHIEVEMENT_ICONS,
     find_preset_icon,
@@ -1355,6 +1357,28 @@ class MonthlyScoreArchiveAdmin(ModelAdmin):
     ordering = ('-month', 'final_rank')
 
 
+class InstructionPdfUploadForm(forms.Form):
+    pdf_file = forms.FileField(
+        label='PDF-инструкция (MertsPlatform_Instruction.pdf)',
+        help_text='Только PDF (%PDF-), размер до 15 МБ.',
+        widget=forms.ClearableFileInput(attrs={'accept': 'application/pdf,.pdf'}),
+    )
+
+    def clean_pdf_file(self):
+        from .services.media_service import read_upload, validate_pdf_buffer
+        uploaded = self.cleaned_data.get('pdf_file')
+        if not uploaded:
+            return uploaded
+        try:
+            raw_bytes = read_upload(uploaded, 'DOCUMENT')
+            validate_pdf_buffer(raw_bytes, uploaded.content_type or 'application/pdf')
+        except (ValueError, OSError) as error:
+            raise forms.ValidationError(str(error)) from error
+        finally:
+            uploaded.seek(0)
+        return uploaded
+
+
 @admin.register(MediaAsset)
 class MediaAssetAdmin(ModelAdmin):
     list_fullwidth = True
@@ -1363,9 +1387,57 @@ class MediaAssetAdmin(ModelAdmin):
     search_fields = ('id', 'owner_id', 'kind')
     readonly_fields = ('id', 'kind', 'mime_type', 'size_bytes', 'owner_id', 'created_at', 'asset_preview')
     ordering = ('-created_at',)
+    actions_list = ['upload_instruction_pdf']
 
     def has_add_permission(self, request):
         return False
+
+    def has_upload_instruction_pdf_permission(self, request):
+        return is_admin_owner(request.user)
+
+    @unfold_action(
+        description='📄 Загрузить PDF-инструкцию',
+        url_path='upload-instruction-pdf',
+        permissions=['upload_instruction_pdf'],
+    )
+    def upload_instruction_pdf(self, request):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может загружать PDF-инструкцию.')
+        from .services.media_service import (
+            DEFAULT_INSTRUCTION_PDF_PATH,
+            get_active_instruction_pdf_asset,
+            read_upload,
+            save_instruction_pdf_asset,
+        )
+
+        form = InstructionPdfUploadForm(request.POST, request.FILES) if request.method == 'POST' else InstructionPdfUploadForm()
+        if request.method == 'POST' and form.is_valid():
+            uploaded = form.cleaned_data['pdf_file']
+            asset = save_instruction_pdf_asset(
+                read_upload(uploaded, 'DOCUMENT'),
+                uploaded.content_type or 'application/pdf',
+            )
+            size_kb = round(asset['sizeBytes'] / 1024, 1)
+            self.message_user(
+                request,
+                f"PDF-инструкция обновлена (MediaAsset {asset['id']}, {size_kb} КБ).",
+                level=messages.SUCCESS,
+            )
+            return redirect('admin:admin_panel_mediaasset_changelist')
+
+        return render(
+            request,
+            'admin/admin_panel/upload_instruction_pdf.html',
+            {
+                **self.admin_site.each_context(request),
+                'title': 'Загрузка / замена PDF-инструкции (MertsPlatform_Instruction.pdf)',
+                'form': form,
+                'active_asset': get_active_instruction_pdf_asset(defer_data=True),
+                'has_default_pdf': DEFAULT_INSTRUCTION_PDF_PATH.is_file(),
+                'download_url': '/api/v1/media/instruction',
+                'changelist_url': reverse('admin:admin_panel_mediaasset_changelist'),
+            },
+        )
 
     def get_queryset(self, request):
         return super().get_queryset(request).defer('data')
@@ -1374,6 +1446,13 @@ class MediaAssetAdmin(ModelAdmin):
     def asset_preview(self, obj):
         if not obj or not obj.pk:
             return '—'
+        if obj.kind == 'DOCUMENT' or obj.mime_type == 'application/pdf':
+            return format_html(
+                '<div style="width:48px;height:48px;border-radius:10px;background:#09090b;'
+                'border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;'
+                'justify-content:center;color:#fbbf24;font-weight:700;font-size:12px;">{}</div>',
+                'PDF',
+            )
         return format_html(
             '<div style="width:48px;height:48px;border-radius:10px;background:#09090b;'
             'border:1px solid #27272a;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
@@ -1389,7 +1468,7 @@ class MediaAssetAdmin(ModelAdmin):
 
     @admin.display(description='API URL')
     def api_endpoint(self, obj):
-        path = f"/api/v1/media/{obj.id}"
+        path = '/api/v1/media/instruction' if obj.kind == 'DOCUMENT' else f"/api/v1/media/{obj.id}"
         return format_html('<code style="font-size:12px;color:#fbbf24;">{}</code>', path)
 
 

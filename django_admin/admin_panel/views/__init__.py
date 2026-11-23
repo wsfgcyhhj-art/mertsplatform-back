@@ -26,6 +26,7 @@ from .admin_views import (
 )
 from .system_views import SystemConfigView, HealthCheckView
 from .media_views import (
+    InstructionPdfView,
     MediaAssetDetailView,
     MediaPresetsCatalogView,
     PresetBannerDetailView,

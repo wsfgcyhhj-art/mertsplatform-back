@@ -691,6 +691,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /api/v1/media/instruction:
+    get:
+      operationId: v1_media_instruction_retrieve
+      description: Отдаёт активный PDF-файл инструкции из MediaAsset (instruction_pdf_asset_id
+        или последний DOCUMENT) либо встроенный дефолтный PDF.
+      summary: Скачать PDF-инструкцию платформы (MertsPlatform_Instruction.pdf)
+      tags:
+      - v1
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+          description: PDF-файл инструкции
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/media/presets:
     get:
       operationId: v1_media_presets_retrieve
@@ -3096,6 +3120,8 @@ components:
           type: string
         supportUrl:
           type: string
+        instructionPdfUrl:
+          type: string
         welcomeTitle:
           type: string
         welcomeText:
@@ -3103,6 +3129,7 @@ components:
       required:
       - apiVersion
       - frontendUrl
+      - instructionPdfUrl
       - name
       - supportUrl
       - welcomeText

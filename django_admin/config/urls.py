@@ -38,6 +38,7 @@ from admin_panel.views import (
     AdminStatsView,
     SystemConfigView,
     HealthCheckView,
+    InstructionPdfView,
     MediaAssetDetailView,
     MediaPresetsCatalogView,
     PresetBannerDetailView,
@@ -89,6 +90,7 @@ urlpatterns = [
     path('api/v1/media/presets/banners/<str:slug>', PresetBannerDetailView.as_view(), name='media-preset-banner'),
     path('api/v1/media/presets/avatars/<str:slug>', PresetAvatarDetailView.as_view(), name='media-preset-avatar'),
     path('api/v1/media/presets/icons/<str:slug>', PresetIconDetailView.as_view(), name='media-preset-icon'),
+    path('api/v1/media/instruction', InstructionPdfView.as_view(), name='media-instruction'),
     path('api/v1/media/<str:id>', MediaAssetDetailView.as_view(), name='media-detail'),
 
     # Curriculum: Lessons & Tasks

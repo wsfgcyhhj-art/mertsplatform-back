@@ -10,6 +10,7 @@ from admin_panel.serializers import (
 )
 from admin_panel.services.media_presets import get_all_media_presets_catalog
 from admin_panel.services.settings_service import (
+    DEFAULT_SETTINGS_MAP,
     SETTINGS_CACHE_TTL,
     SYSTEM_CONFIG_CACHE_KEY,
     cache_get_safe,
@@ -48,6 +49,7 @@ class SystemPlatformInfoSerializer(serializers.Serializer):
     apiVersion = serializers.CharField()
     frontendUrl = serializers.CharField()
     supportUrl = serializers.CharField()
+    instructionPdfUrl = serializers.CharField()
     welcomeTitle = serializers.CharField()
     welcomeText = serializers.CharField()
 
@@ -152,6 +154,7 @@ class SystemConfigView(APIView):
                 "apiVersion": "3.0.0 (Django Unfold Edition)",
                 "frontendUrl": get_frontend_url(),
                 "supportUrl": cfg.get('support_url') or f"https://t.me/{bot_username}",
+                "instructionPdfUrl": cfg.get('instruction_pdf_url') or DEFAULT_SETTINGS_MAP['instruction_pdf_url']['value'],
                 "welcomeTitle": cfg.get('welcome_title') or "",
                 "welcomeText": cfg.get('welcome_text') or "",
             },

@@ -1322,3 +1322,117 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
             })
             self.assertEqual(broadcast_resp.status_code, 302)
             self.assertEqual(TelegramOutbox.objects.filter(chat_id='998877').count(), 1)
+
+    def test_instruction_pdf_upload_serving_and_admin_replacement(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from django.contrib import admin
+        from django.contrib.auth import get_user_model
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from admin_panel.admin import MediaAssetAdmin
+        from admin_panel.models import PlatformSetting
+        from admin_panel.services.media_service import (
+            DEFAULT_INSTRUCTION_PDF_PATH,
+            get_media_limit,
+            save_optimized_media_asset,
+        )
+
+        # 1. system/config exposes instructionPdfUrl and keeps instruction_pdf_asset_id private
+        cfg = self.client.get('/api/v1/system/config').json()
+        expected_url = 'https://166.0.28.165.sslip.io/api/v1/media/instruction'
+        self.assertEqual(cfg['platform']['instructionPdfUrl'], expected_url)
+        self.assertEqual(cfg['settings']['instruction_pdf_url'], expected_url)
+        self.assertNotIn('instruction_pdf_asset_id', cfg['settings'])
+
+        # 2. Default bundled PDF is served when DB has no DOCUMENT asset
+        default_resp = self.client.get('/api/v1/media/instruction')
+        self.assertEqual(default_resp.status_code, 200)
+        self.assertEqual(default_resp['Content-Type'], 'application/pdf')
+        self.assertEqual(
+            default_resp['Content-Disposition'],
+            'attachment; filename="MertsPlatform_Instruction.pdf"',
+        )
+        self.assertTrue(default_resp.content.startswith(b'%PDF-'))
+        self.assertEqual(default_resp.content, DEFAULT_INSTRUCTION_PDF_PATH.read_bytes())
+
+        # 3. Missing both DB asset and default file returns 404 JSON
+        with patch('admin_panel.views.media_views.DEFAULT_INSTRUCTION_PDF_PATH', Path('/nonexistent/instruction.pdf')):
+            missing_resp = self.client.get('/api/v1/media/instruction')
+        self.assertEqual(missing_resp.status_code, 404)
+        self.assertEqual(missing_resp.json()['statusCode'], 404)
+
+        # 4. Media service DOCUMENT validation & storage without Pillow
+        sample_pdf = b'%PDF-1.4\n%sample instruction v1\n%%EOF\n'
+        with self.assertRaises(ValueError):
+            save_optimized_media_asset(sample_pdf, 'text/html', kind='DOCUMENT')
+        with self.assertRaises(ValueError):
+            save_optimized_media_asset(b'not-a-pdf', 'application/pdf', kind='DOCUMENT')
+        with self.assertRaises(ValueError):
+            save_optimized_media_asset(b'%PDF-' + b'0' * get_media_limit('DOCUMENT'), 'application/pdf', kind='DOCUMENT')
+
+        with patch('admin_panel.services.media_service.Image.open', side_effect=AssertionError('Pillow must not run for PDF')):
+            saved = save_optimized_media_asset(sample_pdf, 'application/pdf', kind='DOCUMENT')
+        self.assertEqual(saved['mimeType'], 'application/pdf')
+        db_resp = self.client.get('/api/v1/media/instruction')
+        self.assertEqual(db_resp.status_code, 200)
+        self.assertEqual(db_resp.content, sample_pdf)
+
+        # 5. Admin upload/replacement workflow and permissions
+        upload_url = '/admin/admin_panel/mediaasset/upload-instruction-pdf/'
+        staff_user = get_user_model().objects.create_user(
+            username='pdf_staff', password='Staff-Password-2026!', is_staff=True
+        )
+        updated_pdf = b'%PDF-1.7\n%updated instruction v2\n%%EOF\n'
+
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(self.owner.pk)):
+            self.client.force_login(staff_user)
+            self.assertEqual(self.client.get(upload_url).status_code, 403)
+            self.assertEqual(
+                self.client.post(
+                    upload_url,
+                    {'pdf_file': SimpleUploadedFile('inst.pdf', updated_pdf, content_type='application/pdf')},
+                ).status_code,
+                403,
+            )
+
+            self.client.force_login(self.owner)
+            self.assertEqual(self.client.get(upload_url).status_code, 200)
+
+            bad_post = self.client.post(
+                upload_url,
+                {'pdf_file': SimpleUploadedFile('bad.pdf', b'not-pdf', content_type='application/pdf')},
+            )
+            self.assertEqual(bad_post.status_code, 200)
+            self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 1)
+
+            good_post = self.client.post(
+                upload_url,
+                {'pdf_file': SimpleUploadedFile('MertsPlatform_Instruction.pdf', updated_pdf, content_type='application/pdf')},
+            )
+            self.assertEqual(good_post.status_code, 302)
+            changelist_resp = self.client.get('/admin/admin_panel/mediaasset/')
+            self.assertEqual(changelist_resp.status_code, 200)
+            self.assertContains(changelist_resp, 'upload-instruction-pdf')
+
+        self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 2)
+        active_id = PlatformSetting.objects.get(key='instruction_pdf_asset_id').value
+        new_asset = MediaAsset.objects.get(pk=active_id)
+        self.assertEqual(new_asset.kind, 'DOCUMENT')
+        self.assertEqual(new_asset.mime_type, 'application/pdf')
+
+        self.client.logout()
+        final_resp = self.client.get('/api/v1/media/instruction')
+        self.assertEqual(final_resp.status_code, 200)
+        self.assertEqual(final_resp['Content-Type'], 'application/pdf')
+        self.assertEqual(
+            final_resp['Content-Disposition'],
+            'attachment; filename="MertsPlatform_Instruction.pdf"',
+        )
+        self.assertEqual(final_resp.content, updated_pdf)
+
+        # 6. MediaAssetAdmin renders PDF badge with 0 extra queries
+        ma_admin = MediaAssetAdmin(MediaAsset, admin.site)
+        with self.assertNumQueries(0):
+            preview_html = str(ma_admin.asset_preview(new_asset))
+        self.assertIn('PDF', preview_html)
+        self.assertNotIn('<img', preview_html)
