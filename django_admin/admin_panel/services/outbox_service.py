@@ -2,10 +2,11 @@
 import base64
 import hashlib
 import json
+import time
 import uuid
 from contextvars import ContextVar
 from datetime import timedelta
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.db import connection, transaction
 from django.utils import timezone
@@ -36,6 +37,7 @@ def enqueue(chat_id, text, reply_markup=None, dedupe_key=None, *, voice=None):
 def deliver(pk):
     from .telegram_service import (
         get_last_telegram_error,
+        get_last_telegram_retry_after,
         is_last_telegram_error_permanent,
         reset_last_telegram_error,
         send_telegram_message,
@@ -58,20 +60,29 @@ def deliver(pk):
         item.available_at = now + timedelta(minutes=2)
         item.save()
     permanent = False
+    retry_after = None
     try:
         reset_last_telegram_error()
         payload = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
         ok = send_telegram_message(item.chat_id, **payload)
         error = '' if ok else (get_last_telegram_error() or 'Telegram rejected message or network unavailable')
         permanent = False if ok else is_last_telegram_error_permanent()
+        retry_after = None if ok else get_last_telegram_retry_after()
+    except (InvalidToken, KeyError, json.JSONDecodeError, TypeError) as exc:
+        ok, permanent, error = False, True, f'{type(exc).__name__}: {str(exc)[:180]}'
     except Exception as exc:
         ok, error = False, f'{type(exc).__name__}: {str(exc)[:180]}'
     error = (error or '')[:255]
     with transaction.atomic():
         item = TelegramOutbox.objects.select_for_update().get(pk=pk)
-        item.status = 'sent' if ok else ('failed' if (permanent or item.attempts >= 10) else 'pending')
+        if not ok and retry_after:
+            item.attempts = max(0, item.attempts - 1)
+            item.status = 'pending'
+            item.available_at = timezone.now() + timedelta(seconds=retry_after)
+        else:
+            item.status = 'sent' if ok else ('failed' if (permanent or item.attempts >= 10) else 'pending')
+            item.available_at = timezone.now() + timedelta(seconds=min(3600, 2 ** item.attempts * 5))
         item.last_error = error
-        item.available_at = timezone.now() + timedelta(seconds=min(3600, 2 ** item.attempts * 5))
         if ok:
             item.payload = {}  # Do not retain credentials after successful delivery.
         item.save()
@@ -80,11 +91,17 @@ def deliver(pk):
 
 def drain(limit=100):
     ids = list(TelegramOutbox.objects.filter(status__in=['pending', 'sending'], available_at__lte=timezone.now()).order_by('created_at').values_list('pk', flat=True)[:limit])
-    return sum(deliver(pk) for pk in ids)
+    sent = 0
+    throttle = len(ids) > 1 and not getattr(settings, 'TESTING', False)
+    for idx, pk in enumerate(ids):
+        if idx and throttle:
+            time.sleep(0.04)
+        sent += int(bool(deliver(pk)))
+    return sent
 
 
-def retry_outbox_queryset(queryset, drain_now: bool = True) -> dict:
-    updated = queryset.exclude(status='sent').update(
+def retry_outbox_queryset(queryset, drain_now: bool = False) -> dict:
+    updated = queryset.exclude(status__in=('sent', 'sending')).update(
         status='pending',
         attempts=0,
         available_at=timezone.now(),

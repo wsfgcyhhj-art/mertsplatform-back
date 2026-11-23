@@ -37,6 +37,7 @@ class BcryptJWTAuthentication(JWTAuthentication):
 
 
 def generate_tokens_for_user(user, session=None):
+    Session.objects.filter(user=user, expires_at__lte=timezone.now()).delete()
     refresh = secrets.token_urlsafe(48)
     if session is None:
         session = Session.objects.create(user=user, refresh_token=refresh_digest(refresh), expires_at=timezone.now() + timedelta(days=30))

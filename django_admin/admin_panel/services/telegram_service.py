@@ -3,14 +3,18 @@ import re
 import html
 import hashlib
 import logging
+import signal
+from datetime import timedelta
 
 from contextvars import ContextVar
 from typing import Optional, Dict, Any, List
 from urllib.parse import quote
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, close_old_connections, transaction
 from django.db.models import Q
+from django.utils import timezone
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 from admin_panel.services.settings_service import (
+    cache_delete_safe,
     cache_get_safe,
     cache_set_safe,
     get_setting,
@@ -31,6 +35,7 @@ from admin_panel.models import (
 logger = logging.getLogger('telegram_service')
 _last_telegram_error: ContextVar[str] = ContextVar('last_telegram_error', default='')
 _last_telegram_permanent: ContextVar[bool] = ContextVar('last_telegram_permanent', default=False)
+_last_telegram_retry_after: ContextVar[Optional[int]] = ContextVar('last_telegram_retry_after', default=None)
 
 
 def get_last_telegram_error() -> str:
@@ -41,9 +46,14 @@ def is_last_telegram_error_permanent() -> bool:
     return _last_telegram_permanent.get()
 
 
+def get_last_telegram_retry_after() -> Optional[int]:
+    return _last_telegram_retry_after.get()
+
+
 def reset_last_telegram_error() -> None:
     _last_telegram_error.set('')
     _last_telegram_permanent.set(False)
+    _last_telegram_retry_after.set(None)
 
 TELEGRAM_CONNECTED = (
     "🎉 <b>Telegram успешно подключён к MertsPlatform!</b> Теперь сюда будут мгновенно "
@@ -100,14 +110,32 @@ def escape_html(text: Any) -> str:
     return html.escape(str(text)[:1500])
 
 
+def _truncate_telegram_message(text: str, limit: int = 4096) -> str:
+    if not text or len(text) <= limit:
+        return text
+    plain = html.unescape(re.sub(r'<[^>]+>', '', text)).strip()
+    suffix = '...'
+    cut = max(1, limit - len(suffix))
+    candidate = plain[:cut]
+    while len(html.escape(candidate) + suffix) > limit and candidate:
+        excess = len(html.escape(candidate) + suffix) - limit
+        candidate = candidate[:-max(1, (excess + 1) // 2)]
+    return html.escape(candidate) + suffix
+
+
 def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] = None, *, voice: str | None = None) -> bool:
     reset_last_telegram_error()
     token = get_bot_token()
     if not token or not chat_id:
         reason = 'missing_token' if not token else 'missing_chat_id'
         _last_telegram_error.set(reason)
+        if reason == 'missing_chat_id':
+            _last_telegram_permanent.set(True)
         logger.warning('Telegram skipped chat_id=%s reason=%s', chat_id, reason)
         return False
+
+    if not voice and text:
+        text = _truncate_telegram_message(text, 4096)
 
     method = "sendVoice" if voice else "sendMessage"
     url = f"https://api.telegram.org/bot{token}/{method}"
@@ -146,7 +174,11 @@ def send_telegram_message(chat_id: str, text: str, reply_markup: Optional[dict] 
                 desc = (data.get('description') or resp.text or '')[:180]
 
             err_code = data.get('error_code') if isinstance(data, dict) else None
-            if resp.status_code in (400, 403) or err_code in (400, 403):
+            if resp.status_code == 429 or err_code == 429:
+                params = data.get('parameters') if isinstance(data, dict) else None
+                retry_after = params.get('retry_after') if isinstance(params, dict) else None
+                _last_telegram_retry_after.set(min(3600, retry_after) if isinstance(retry_after, int) and retry_after > 0 else 5)
+            elif resp.status_code in (400, 401, 403, 404) or err_code in (400, 401, 403, 404):
                 _last_telegram_permanent.set(True)
             _last_telegram_error.set(f'HTTP {resp.status_code}: {desc}'[:250])
             # Handle 403 Forbidden (bot blocked by user) gracefully
@@ -425,7 +457,7 @@ def notify_month_advanced(user: User, new_month: int):
         return
 
     frontend_url = get_frontend_url()
-    lessons_link = f"{frontend_url}/lessons?month={new_month}"
+    lessons_link = escape_html(f"{frontend_url}/lessons?month={new_month}")
 
     msg = (
         f"🚀 <b>Открыт новый этап обучения!</b>\n\n"
@@ -447,7 +479,7 @@ def handle_start_command(chat_id: str, code: str, username: Optional[str] = None
             return TELEGRAM_CONNECTED
         return (
             "👋 Привет! Для привязки Telegram перейдите в профиль на платформе "
-            f"({get_frontend_url()}/profile) и нажмите «Подключить Telegram»."
+            f"({escape_html(get_frontend_url())}/profile) и нажмите «Подключить Telegram»."
         )
     try:
         with transaction.atomic():
@@ -462,6 +494,12 @@ def _bind_start_code(chat_id, code, username):
     user = User.objects.select_for_update().filter(telegram_auth_code=code).first()
     if not user:
         return "❌ Неверный или устаревший код привязки. Сгенерируйте новую ссылку в профиле."
+    ttl_meta = cache_get_safe(f'tg_auth_code_ttl:{code}')
+    if isinstance(ttl_meta, dict) and timezone.now().timestamp() > float(ttl_meta.get('exp', 0)):
+        user.telegram_auth_code = None
+        user.save(update_fields=['telegram_auth_code', 'updated_at'])
+        cache_delete_safe(f'tg_auth_code_ttl:{code}')
+        return "❌ Срок действия кода привязки истёк (15 минут). Сгенерируйте новую ссылку в профиле."
     if User.objects.filter(telegram_chat_id=chat_id).exclude(pk=user.pk).exists():
         return "Этот Telegram уже привязан к другому аккаунту."
 
@@ -469,15 +507,19 @@ def _bind_start_code(chat_id, code, username):
     user.telegram_username = username.lower() if username else None
     user.telegram_auth_code = None
     user.save(update_fields=['telegram_chat_id', 'telegram_username', 'telegram_auth_code', 'updated_at'])
+    cache_delete_safe(f'tg_auth_code_ttl:{code}')
     return TELEGRAM_CONNECTED
 
 
 def _student_status(user: User) -> str:
     recent = user.submissions.select_related('task').order_by('-created_at', '-pk')[:5]
-    rows = [
-        f"• {escape_html(item.task.title)} — {REVIEW_STATUS.get(item.status, 'На проверке')}"
-        for item in recent
-    ]
+    rows = []
+    for item in recent:
+        try:
+            task_title = item.task.title
+        except Task.DoesNotExist:
+            task_title = 'Удалённое задание'
+        rows.append(f"• {escape_html(task_title)} — {REVIEW_STATUS.get(item.status, 'На проверке')}")
     return (
         f"👤 <b>{escape_html(user.name or user.login)}</b>\n"
         f"Учебная группа: {escape_html(user.group_number or 'Не назначена')}\n"
@@ -529,17 +571,22 @@ def process_telegram_update(update: Dict[str, Any]) -> bool:
 
 def _process_telegram_update(update):
     from .outbox_service import enqueue
+    if not isinstance(update, dict):
+        return
+    is_edited = bool(update.get('edited_message') and not update.get('message'))
     message = update.get('message') or update.get('edited_message')
-    if not message:
+    if not isinstance(message, dict):
         return
 
-    chat = message.get('chat', {})
-    sender = message.get('from', {})
+    chat = message.get('chat')
+    sender = message.get('from')
+    if not isinstance(chat, dict) or not isinstance(sender, dict):
+        return
     chat_number = chat.get('id')
     if chat.get('type') != 'private' or not isinstance(chat_number, int) or chat_number <= 0 or chat_number != sender.get('id'):
         return
     chat_id = str(chat_number)
-    text = (message.get('text') or '').strip()
+    text = (message.get('text') or '').strip() if isinstance(message.get('text'), str) else ''
     if not text:
         return
     parts = text.split(maxsplit=1)
@@ -547,6 +594,8 @@ def _process_telegram_update(update):
     argument = parts[1] if len(parts) > 1 else ''
     command, _, mention = command.lower().partition('@')
     if mention and mention != get_bot_username().lower():
+        return
+    if is_edited and command in ('/start', '/reset'):
         return
 
     if command == '/start':
@@ -574,8 +623,31 @@ def _process_telegram_update(update):
             enqueue(chat_id, _student_tasks(user))
 
 
+def _delete_telegram_webhook(client: httpx.Client, token: str) -> None:
+    try:
+        wh_resp = client.post(
+            f"https://api.telegram.org/bot{token}/deleteWebhook",
+            json={'drop_pending_updates': False},
+        )
+        try:
+            wh_data = wh_resp.json()
+        except Exception:
+            wh_data = {}
+        if wh_resp.status_code == 200 and isinstance(wh_data, dict) and wh_data.get('ok'):
+            logger.info("Telegram webhook deleted before polling (drop_pending_updates=False).")
+        elif wh_resp.status_code != 200:
+            logger.warning(
+                "Telegram deleteWebhook returned HTTP %s: %s",
+                wh_resp.status_code,
+                str(getattr(wh_resp, 'text', ''))[:200],
+            )
+    except Exception as exc:
+        logger.warning("Telegram deleteWebhook request failed: %s", type(exc).__name__)
+
+
 def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
     import time
+    from admin_panel.models import TelegramUpdate
 
     mode = getattr(settings, 'TELEGRAM_MODE', 'polling')
     if mode != 'polling':
@@ -587,65 +659,74 @@ def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
         logger.error("TELEGRAM_BOT_TOKEN is not configured. Polling stopped.")
         return 0
 
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            wh_resp = client.post(
-                f"https://api.telegram.org/bot{token}/deleteWebhook",
-                json={'drop_pending_updates': False},
-            )
-            try:
-                wh_data = wh_resp.json()
-            except Exception:
-                wh_data = {}
-            if wh_resp.status_code == 200 and isinstance(wh_data, dict) and wh_data.get('ok'):
-                logger.info("Telegram webhook deleted before polling (drop_pending_updates=False).")
-            elif wh_resp.status_code != 200:
-                logger.warning(
-                    "Telegram deleteWebhook returned HTTP %s: %s",
-                    wh_resp.status_code,
-                    str(getattr(wh_resp, 'text', ''))[:200],
-                )
-    except Exception as exc:
-        logger.warning("Telegram deleteWebhook request failed: %s", type(exc).__name__)
+    running = True
+
+    def _stop(_signum, _frame):
+        nonlocal running
+        running = False
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _stop)
+        except ValueError:
+            pass
 
     logger.info("Starting Telegram Bot Long Polling...")
     offset = 0
     url = f"https://api.telegram.org/bot{token}/getUpdates"
     cycles = 0
+    fail_counts: Dict[int, int] = {}
 
-    while max_cycles is None or cycles < max_cycles:
-        cycles += 1
-        try:
-            with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=30.0) as client:
+        _delete_telegram_webhook(client, token)
+        while running and (max_cycles is None or cycles < max_cycles):
+            cycles += 1
+            close_old_connections()
+            if cycles % 100 == 1:
+                try:
+                    TelegramUpdate.objects.filter(created_at__lt=timezone.now() - timedelta(days=7)).delete()
+                except Exception:
+                    pass
+            try:
                 resp = client.get(url, params={'offset': offset, 'timeout': 20})
                 if resp.status_code == 200:
                     data = resp.json()
                     for upd in data.get('result', []):
+                        uid = upd.get('update_id') if isinstance(upd, dict) else None
                         try:
                             process_telegram_update(upd)
                         except Exception as exc:
                             logger.warning(
                                 "Polling update failed update_id=%s error=%s",
-                                upd.get('update_id'),
+                                uid,
                                 type(exc).__name__,
                             )
-                            # Keep offset before failed update_id so it can be retried cleanly.
+                            if isinstance(uid, int):
+                                fail_counts[uid] = fail_counts.get(uid, 0) + 1
+                                if fail_counts[uid] >= 3:
+                                    logger.error("Skipping poison-pill update_id=%s after 3 failures", uid)
+                                    fail_counts.pop(uid, None)
+                                    offset = max(offset, uid + 1)
+                                    continue
+                            if max_cycles is None or cycles < max_cycles:
+                                time.sleep(2)
                             break
-                        uid = upd.get('update_id')
                         if isinstance(uid, int):
+                            fail_counts.pop(uid, None)
                             offset = max(offset, uid + 1)
                 else:
                     snippet = str(getattr(resp, 'text', ''))[:200]
                     if resp.status_code == 409:
                         logger.error("Telegram getUpdates 409 Conflict (another poller or webhook active): %s", snippet)
+                        _delete_telegram_webhook(client, token)
                     else:
                         logger.warning("Telegram getUpdates HTTP %s: %s", resp.status_code, snippet)
                     if max_cycles is not None and cycles >= max_cycles:
                         break
                     time.sleep(5 if resp.status_code == 409 else 2)
-        except Exception as e:
-            logger.warning("Polling error: %s", type(e).__name__)
-            if max_cycles is not None and cycles >= max_cycles:
-                break
-            time.sleep(2)
+            except Exception as e:
+                logger.warning("Polling error: %s", type(e).__name__)
+                if max_cycles is not None and cycles >= max_cycles:
+                    break
+                time.sleep(2)
     return offset

@@ -26,6 +26,7 @@ class ResetSerializer(serializers.Serializer):
 @method_decorator(csrf_exempt, name='dispatch')
 class PasswordResetView(APIView):
     throttle_classes = (AuthThrottle,)
+    throttle_scope = 'password_reset'
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)
@@ -36,7 +37,7 @@ class PasswordResetView(APIView):
         serializer = ResetSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        digest = hashlib.sha256(data['token'].encode()).hexdigest()
+        digest = hashlib.sha256(data['token'].encode('utf-8', 'surrogatepass')).hexdigest()
         user_id = PasswordResetTicket.objects.filter(token_hash=digest).values_list('user_id', flat=True).first()
         if not user_id:
             return Response({'message': 'Ссылка недействительна или истекла.'}, status=400)
@@ -45,6 +46,10 @@ class PasswordResetView(APIView):
         ticket = PasswordResetTicket.objects.select_for_update().filter(token_hash=digest, expires_at__gt=timezone.now()).first()
         if not ticket:
             return Response({'message': 'Ссылка недействительна или истекла.'}, status=400)
+        try:
+            validate_new_password(data['new_password'], user=user)
+        except serializers.ValidationError as exc:
+            return Response({'message': exc.detail}, status=400)
         user.set_password(data['new_password'])
         user.password_uses_sha256 = False
         user.must_change_password = False

@@ -32,21 +32,25 @@ def on_submission_pre_save(sender, instance: Submission, **kwargs):
     """
     Captures prior state to prevent duplicate notifications if an unchanged submission is saved.
     """
-    if instance.pk:
-        try:
-            old = Submission.objects.select_for_update().get(pk=instance.pk)
-            instance._old_status = old.status
-            instance._old_score = old.score
-            instance._old_comment = old.reviewer_comment
-            instance._old_voice = old.voice_feedback_url
-        except Submission.DoesNotExist:
-            instance._old_status = None
-            instance._old_score = None
-            instance._old_comment = None
-    else:
+    if instance._state.adding or not instance.pk:
         instance._old_status = None
         instance._old_score = None
         instance._old_comment = None
+        instance._old_voice = None
+        return
+    try:
+        old = Submission.objects.select_for_update().get(pk=instance.pk)
+        instance._old_status = old.status
+        instance._old_score = old.score
+        instance._old_comment = old.reviewer_comment
+        instance._old_voice = old.voice_feedback_url
+        if old.status == SubmissionStatusChoices.REVISION or getattr(old, 'was_revised', False):
+            instance.was_revised = True
+    except Submission.DoesNotExist:
+        instance._old_status = None
+        instance._old_score = None
+        instance._old_comment = None
+        instance._old_voice = None
 
 
 @receiver(pre_save, sender=User)
@@ -58,13 +62,13 @@ def on_user_pre_save(sender, instance: User, **kwargs):
     if update_fields is not None and 'current_month' not in update_fields:
         instance._old_current_month = None
         return
-    if instance.pk:
-        try:
-            old = User.objects.select_for_update().get(pk=instance.pk)
-            instance._old_current_month = old.current_month
-        except User.DoesNotExist:
-            instance._old_current_month = None
-    else:
+    if instance._state.adding or not instance.pk:
+        instance._old_current_month = None
+        return
+    try:
+        old = User.objects.select_for_update().get(pk=instance.pk)
+        instance._old_current_month = old.current_month
+    except User.DoesNotExist:
         instance._old_current_month = None
 
 

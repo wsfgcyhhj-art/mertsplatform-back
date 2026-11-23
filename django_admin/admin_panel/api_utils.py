@@ -1,6 +1,32 @@
 import re
+from urllib.parse import urlsplit
+from django.core.exceptions import ValidationError
 from rest_framework.exceptions import ParseError
 from rest_framework.parsers import JSONParser
+
+
+def validate_safe_url(value: str, *, allow_media_path: bool = True, max_length: int = 500) -> str:
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ValidationError('Недопустимый URL.')
+    cleaned = value.strip()
+    if not cleaned:
+        return ''
+    if len(cleaned) > max_length:
+        raise ValidationError(f'URL не должен превышать {max_length} символов.')
+    if '\\' in cleaned or cleaned.startswith('//') or any(ord(ch) < 32 for ch in cleaned):
+        raise ValidationError('Недопустимый URL.')
+    if any(ch in cleaned for ch in (' ', '"', "'", '(', ')', ';', '<', '>')):
+        raise ValidationError('URL содержит недопустимые символы.')
+    if cleaned.startswith('/'):
+        if allow_media_path and cleaned.startswith('/api/v1/media/'):
+            return cleaned
+        raise ValidationError('Относительные пути запрещены.')
+    parsed = urlsplit(cleaned)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValidationError('Укажите корректный HTTP(S) URL.')
+    return cleaned
 
 
 def to_camel_case(name: str) -> str:
@@ -53,14 +79,10 @@ class DualCaseJSONParser(JSONParser):
 
 def qparam(request, *names, default=None):
     for name in names:
-        if name in request.query_params:
-            return request.query_params.get(name)
-        snake = to_snake_case(name)
-        if snake in request.query_params:
-            return request.query_params.get(snake)
-        camel = to_camel_case(name)
-        if camel in request.query_params:
-            return request.query_params.get(camel)
+        for candidate in (name, to_snake_case(name), to_camel_case(name)):
+            if candidate in request.query_params:
+                val = request.query_params.get(candidate)
+                return val.replace('\x00', '') if isinstance(val, str) else val
     return default
 
 
@@ -97,9 +119,11 @@ def paginate_list_or_qs(request, qs_or_list, *, max_unpaginated: int = 200):
     if raw_page is None and raw_limit is None:
         return None, list(qs_or_list[:max_unpaginated])
     try:
-        page = max(1, int(raw_page or 1))
-        limit = min(200, max(1, int(raw_limit or 50)))
-    except ValueError:
+        page = int(raw_page if raw_page not in (None, '') else 1)
+        limit = int(raw_limit if raw_limit not in (None, '') else 50)
+    except (TypeError, ValueError):
+        return {'error': 'Invalid pagination'}, None
+    if not (1 <= page <= 100000) or not (1 <= limit <= 200):
         return {'error': 'Invalid pagination'}, None
     total = qs_or_list.count() if hasattr(qs_or_list, 'count') else len(qs_or_list)
     start = (page - 1) * limit

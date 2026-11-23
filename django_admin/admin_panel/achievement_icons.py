@@ -1,6 +1,7 @@
 import base64
 import os
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 DEFAULT_PUBLIC_BACKEND_URL = 'https://166.0.28.165.sslip.io'
 
@@ -145,23 +146,26 @@ def find_preset_icon(value: Optional[str]) -> Optional[Dict[str, str]]:
     clean = value.strip()
     if not clean:
         return None
-    if clean.lower() in _BY_URL:
-        return _BY_URL[clean.lower()]
+    path = urlsplit(clean).path.lower()
+    if path in _BY_URL:
+        return _BY_URL[path]
     slug_candidate = (
-        clean.replace('/api/v1/achievements/icons/', '')
+        path.replace('/api/v1/achievements/icons/', '')
         .replace('/api/v1/media/presets/icons/', '')
         .replace('.svg', '')
         .strip()
-        .lower()
     )
     return _BY_SLUG.get(slug_candidate) or _BY_LEGACY.get(slug_candidate)
 
 
-def _to_absolute_icon_url(path: str, request=None) -> str:
-    if not path.startswith('/') or path.startswith('//'):
+def to_absolute_media_url(path: Optional[str], request=None) -> Optional[str]:
+    if not path or not isinstance(path, str):
         return path
+    cleaned = path.strip()
+    if not cleaned.startswith('/') or cleaned.startswith('//'):
+        return cleaned
     if request is not None:
-        return request.build_absolute_uri(path)
+        return request.build_absolute_uri(cleaned)
     from django.conf import settings
     configured_base = (
         getattr(settings, 'BACKEND_PUBLIC_URL', None)
@@ -171,10 +175,13 @@ def _to_absolute_icon_url(path: str, request=None) -> str:
         or ''
     ).strip().rstrip('/')
     if configured_base.startswith(('http://', 'https://')):
-        return f'{configured_base}{path}'
+        return f'{configured_base}{cleaned}'
     if os.getenv('TRUST_HTTPS_PROXY', '1') == '1':
-        return f'{DEFAULT_PUBLIC_BACKEND_URL}{path}'
-    return path
+        return f'{DEFAULT_PUBLIC_BACKEND_URL}{cleaned}'
+    return cleaned
+
+
+_to_absolute_icon_url = to_absolute_media_url
 
 
 def normalize_icon_url(value: Optional[str], request=None, *, absolute: bool = False) -> str:
@@ -185,20 +192,23 @@ def normalize_icon_url(value: Optional[str], request=None, *, absolute: bool = F
         preset = find_preset_icon(clean)
         normalized = f"/api/v1/media/presets/icons/{preset['slug']}.svg" if preset else clean
     if request is not None or absolute:
-        return _to_absolute_icon_url(normalized, request=request)
+        return to_absolute_media_url(normalized, request=request) or normalized
     return normalized
 
 
 def resolve_icon_preview_src(value: Optional[str]) -> str:
     """
-    Возвращает гарантированно работающий src для <img> в Django Admin (Data URI, относительный URL /api/v1/media/... или внешний URL).
+    Возвращает гарантированно работающий src для <img> в Django Admin (Data URI, безопасный /api/v1/media/... или HTTPS/HTTP URL).
     """
     preset = find_preset_icon(value)
     if preset:
         return preset['data_uri']
     if not value or not value.strip():
         return _BY_SLUG['trophy']['data_uri']
-    clean = value.strip()
-    if clean.startswith('data:image/') or clean.startswith('http://') or clean.startswith('https://') or clean.startswith('/'):
-        return clean
-    return _BY_SLUG['trophy']['data_uri']
+    from admin_panel.api_utils import validate_safe_url
+    from django.core.exceptions import ValidationError
+    try:
+        safe = validate_safe_url(value, allow_media_path=True, max_length=2048)
+        return safe or _BY_SLUG['trophy']['data_uri']
+    except ValidationError:
+        return _BY_SLUG['trophy']['data_uri']

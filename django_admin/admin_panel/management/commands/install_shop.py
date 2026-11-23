@@ -38,6 +38,10 @@ class Command(BaseCommand):
             for model in (ShopProduct, ShopOrder):
                 if model._meta.db_table not in tables:
                     editor.create_model(model)
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_shop_order_user_status" ON "ShopOrder" ("user_id", "status")')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_shop_order_product_id" ON "ShopOrder" ("product_id")')
 
             for order, (title, price_som, price_coins, description) in enumerate(CATALOG, 1):
                 defaults = {

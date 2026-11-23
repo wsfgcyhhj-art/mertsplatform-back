@@ -6,10 +6,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
+from admin_panel.achievement_icons import to_absolute_media_url
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
-from admin_panel.models import ShopOrder, ShopProduct
+from admin_panel.models import ShopOrder, ShopOrderStatus, ShopProduct
 from admin_panel.serializers import PaginatedMetaMixin
 from admin_panel.services.shop_service import ShopConflict, place_order, shop_balance
+from admin_panel.throttles import ShopOrderThrottle
 
 
 class ShopBalanceSerializer(serializers.Serializer):
@@ -28,9 +30,8 @@ class ShopProductSerializer(serializers.ModelSerializer):
         fields = ('id', 'title', 'description', 'priceSom', 'priceCoins', 'imageUrl', 'stock')
 
     def get_imageUrl(self, obj) -> str:
-        if obj.image_url.startswith('/api/v1/media/') and self.context.get('request'):
-            return self.context['request'].build_absolute_uri(obj.image_url)
-        return obj.image_url
+        url = obj.image_url or ''
+        return to_absolute_media_url(url, request=self.context.get('request')) or ''
 
 
 class ShopOrderSerializer(serializers.ModelSerializer):
@@ -114,6 +115,7 @@ class ShopProductsView(APIView):
 
 class ShopOrdersView(APIView):
     permission_classes = (IsAuthenticated,)
+    throttle_classes = (ShopOrderThrottle,)
 
     @extend_schema(
         request=ShopPurchaseSerializer,
@@ -151,11 +153,13 @@ class MyShopOrdersView(APIView):
         orders = request.user.shop_orders.select_related('product')
         st = (qparam(request, 'status') or '').strip().upper()
         if st:
+            if st not in ShopOrderStatus.values:
+                return Response({'message': 'Invalid status filter'}, status=400)
             orders = orders.filter(status=st)
         ordering = resolve_ordering(
             qparam(request, 'ordering'),
             {'createdAt': 'created_at', 'priceCoins': 'price_coins', 'status': 'status'},
             ['-created_at', '-id'],
         )
-        orders = orders.order_by(*ordering)
+        orders = orders.order_by(*ordering)[:200]
         return Response(ShopOrderSerializer(orders, many=True).data)

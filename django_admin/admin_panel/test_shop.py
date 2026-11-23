@@ -31,6 +31,13 @@ class ShopTests(TransactionTestCase):
         self.api = APIClient()
         self.api.force_authenticate(self.student)
 
+    def _grant_coins(self, user, points=50):
+        ach, _ = Achievement.objects.get_or_create(
+            code=f'SHOP_COIN_{points}',
+            defaults={'title': f'Shop Coin {points}', 'points': points},
+        )
+        UserAchievement.objects.create(user=user, achievement=ach)
+
     @patch('admin_panel.signals.evaluate_user_achievements')
     def test_earned_points_are_separate_from_leaderboard(self, _evaluate):
         task = Task.objects.create(title='ДЗ', topic='Python')
@@ -43,14 +50,15 @@ class ShopTests(TransactionTestCase):
         ScoreAdjustment.objects.create(user=self.student, admin=owner, amount=-2, reason='Штраф', month=1)
         profile = self.api.get('/api/v1/users/me').json()
         self.assertEqual(profile['stats']['totalScore'], 35)
-        self.assertEqual(profile['totalEarnedPoints'], 100)
+        self.assertEqual(profile['totalEarnedPoints'], 50)
         self.assertEqual(self.api.get('/api/v1/shop/balance').json(),
-                         {'totalEarnedPoints': 100, 'spentPoints': 0, 'availableCoins': 100})
+                         {'totalEarnedPoints': 50, 'spentPoints': 0, 'availableCoins': 50})
         self.assertEqual(self.api.post('/api/v1/shop/orders', {'productId': self.product.pk}).status_code, 201)
         profile = self.api.get('/api/v1/users/me').json()
-        self.assertEqual((profile['stats']['totalScore'], profile['availableCoins']), (35, 60))
+        self.assertEqual((profile['stats']['totalScore'], profile['availableCoins']), (35, 10))
 
     def test_order_retry_insufficient_balance_and_cancellation(self):
+        self._grant_coins(self.student, 50)
         payload = {'productId': self.product.pk, 'requestId': str(uuid4())}
         stale = self.api.post('/api/v1/shop/orders', {**payload, 'expectedPriceCoins': 39})
         self.assertEqual(stale.status_code, 409)
@@ -69,9 +77,10 @@ class ShopTests(TransactionTestCase):
 
         admin = Client()
         admin.force_login(self.owner)
-        response = admin.post('/admin/admin_panel/shoporder/', {
-            'action': 'cancel_orders', '_selected_action': order_id, 'index': '0',
-        })
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(self.owner.pk)):
+            response = admin.post('/admin/admin_panel/shoporder/', {
+                'action': 'cancel_orders', '_selected_action': order_id, 'index': '0',
+            })
         self.assertEqual(response.status_code, 302)
         cancelled = ShopOrder.objects.get(pk=order_id)
         self.assertEqual((cancelled.status, cancelled.processed_by), ('CANCELLED', self.owner.username))
@@ -82,6 +91,7 @@ class ShopTests(TransactionTestCase):
 
     @override_settings(TELEGRAM_OUTBOX_EAGER=True)
     def test_order_notifications_and_completed_order_cannot_be_cancelled(self):
+        self._grant_coins(self.student, 50)
         mentor = create_user(login='mentor', role='ADMIN', telegram_chat_id='222')
         self.student.telegram_chat_id = '111'
         self.student.save()
@@ -119,13 +129,16 @@ class ShopTests(TransactionTestCase):
 
     @skipUnlessDBFeature('has_select_for_update')
     def test_concurrent_purchases_cannot_overspend(self):
+        self._grant_coins(self.student, 50)
         self.race_purchases([self.student, self.student])
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 1)
 
     @skipUnlessDBFeature('has_select_for_update')
     def test_two_buyers_cannot_buy_the_last_product(self):
+        self._grant_coins(self.student, 50)
         other = create_user(login='other-buyer', has_subscription=True, streak_count=10)
+        self._grant_coins(other, 50)
         self.product.stock = 1
         self.product.save(update_fields=['stock'])
         self.race_purchases([self.student, other])

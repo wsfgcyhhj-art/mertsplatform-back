@@ -28,9 +28,9 @@ def read_upload(file, kind):
     return data
 
 
-@transaction.atomic
-def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None):
-    if mime_type.lower().strip() not in {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}:
+def validate_image_buffer(buffer, mime_type, kind='GENERAL'):
+    clean_mime = (mime_type or '').split(';', 1)[0].strip().lower()
+    if clean_mime not in {'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'}:
         raise ValueError('Разрешены только JPEG, PNG, WebP и GIF. SVG запрещён.')
     if len(buffer) > get_media_limit(kind):
         raise ValueError('Файл превышает допустимый размер.')
@@ -47,12 +47,20 @@ def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None)
                     image = ImageOps.fit(image, (256, 256) if kind == 'AVATAR' else (1600, 400), method=Image.Resampling.LANCZOS)
                 elif kind == 'ACHIEVEMENT_ICON':
                     image.thumbnail((128, 128))
+                else:
+                    image.thumbnail((1200, 1200))
                 output = io.BytesIO()
                 image.save(output, format='WEBP', quality=85)
+                return output.getvalue()
     except (OSError, SyntaxError, Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
         raise ValueError('Не удалось прочитать безопасное растровое изображение.') from exc
+
+
+@transaction.atomic
+def save_optimized_media_asset(buffer, mime_type, kind='GENERAL', owner_id=None):
+    webp_bytes = validate_image_buffer(buffer, mime_type, kind=kind)
     user = User.objects.select_for_update().get(pk=owner_id) if owner_id else None
-    asset = MediaAsset.objects.create(kind=kind, mime_type='image/webp', data=output.getvalue(), size_bytes=len(output.getvalue()), owner_id=owner_id)
+    asset = MediaAsset.objects.create(kind=kind, mime_type='image/webp', data=webp_bytes, size_bytes=len(webp_bytes), owner_id=owner_id)
     if user and kind in ('AVATAR', 'BANNER'):
         field = 'avatar_url' if kind == 'AVATAR' else 'banner_url'
         User.objects.filter(pk=user.pk).update(**{field: f'/api/v1/media/{asset.pk}'})

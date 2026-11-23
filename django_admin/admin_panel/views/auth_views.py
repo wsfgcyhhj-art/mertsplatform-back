@@ -2,6 +2,7 @@ from collections.abc import Mapping
 import logging
 from django.conf import settings
 from django.db import transaction, IntegrityError
+from django.db.models import Q
 from django.http import JsonResponse
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.utils.decorators import decorator_from_middleware, method_decorator
@@ -75,7 +76,7 @@ class ApiAuthCsrfMiddleware(CsrfViewMiddleware):
     def _origin_verified(self, request):
         origin = request.headers.get('Origin', '').rstrip('/')
         return (
-            bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin))
+            (settings.DEBUG and bool(re.fullmatch(settings.LOCAL_FRONTEND_ORIGIN_RE, origin)))
             or origin in settings.CORS_ALLOWED_ORIGINS
             or super()._origin_verified(request)
         )
@@ -99,26 +100,31 @@ def set_auth_cookies(request, response, refresh_token: str):
 
 def update_user_streak(user: User) -> int:
     now = timezone.now()
-    changed = False
-    if not user.last_active_date:
-        user.streak_count = 1
-        user.last_active_date = now
-        changed = True
-    else:
-        days_diff = (now.date() - user.last_active_date.date()).days
-        if days_diff == 1:
-            user.streak_count = (user.streak_count or 0) + 1
-            user.last_active_date = now
+    with transaction.atomic():
+        locked = User.objects.select_for_update().get(pk=user.pk)
+        changed = False
+        if not locked.last_active_date:
+            locked.streak_count = 1
+            locked.last_active_date = now
             changed = True
-        elif days_diff > 1 or days_diff < 0:
-            user.streak_count = 1
-            user.last_active_date = now
-            changed = True
+        else:
+            days_diff = (now.date() - locked.last_active_date.date()).days
+            if days_diff == 1:
+                locked.streak_count = (locked.streak_count or 0) + 1
+                locked.last_active_date = now
+                changed = True
+            elif days_diff > 1 or days_diff < 0:
+                locked.streak_count = 1
+                locked.last_active_date = now
+                changed = True
 
-    if changed:
-        user.save(update_fields=['streak_count', 'last_active_date', 'updated_at'])
-        evaluate_user_achievements(user.id, trigger_filter=TriggerTypeChoices.STREAK_DAYS)
-    return user.streak_count
+        if changed:
+            locked.save(update_fields=['streak_count', 'last_active_date', 'updated_at'])
+            evaluate_user_achievements(locked.id, trigger_filter=TriggerTypeChoices.STREAK_DAYS)
+        user.streak_count = locked.streak_count
+        user.last_active_date = locked.last_active_date
+        user.updated_at = locked.updated_at
+        return locked.streak_count
 
 
 class TokenPairResponseSerializer(serializers.Serializer):
@@ -142,6 +148,7 @@ class CsrfTokenResponseSerializer(serializers.Serializer):
 class RegisterView(APIView):
     parser_classes = (DualCaseJSONParser,)
     throttle_classes = (AuthThrottle,)
+    throttle_scope = 'register'
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)
@@ -185,23 +192,44 @@ class RegisterView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        group_num = data['groupNumber'].strip()
-        if not group_num:
+        group_id_val = (data.get('groupId') or '').strip()
+        group_num = (data.get('groupNumber') or '').strip()
+        if not group_id_val and not group_num:
             return Response(
-                {"statusCode": 400, "error": "Bad Request", "message": "groupNumber is required"},
+                {"statusCode": 400, "error": "Bad Request", "message": "groupNumber or groupId is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not get_setting('allow_auto_create_groups', True) and group_num.upper() != 'ALL':
-            if not StudyGroup.objects.filter(name__iexact=group_num, is_active=True).exists():
+        matched_group = None
+        if group_id_val:
+            matched_group = StudyGroup.objects.filter(Q(id=group_id_val) | Q(name__iexact=group_id_val)).first()
+            if not matched_group:
                 return Response(
                     {"statusCode": 400, "error": "Bad Request", "message": "Учебная группа не найдена или закрыта"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            group_num = matched_group.name
+        else:
+            matched_group = StudyGroup.objects.filter(name__iexact=group_num).first()
+            if matched_group:
+                group_num = matched_group.name
 
-        default_start_month = max(1, int(get_setting('default_start_month', 1) or 1))
-        month_val = data.get('currentMonth')
-        if not month_val:
+        if not get_setting('allow_auto_create_groups', True):
+            if not matched_group or not matched_group.is_active:
+                return Response(
+                    {"statusCode": 400, "error": "Bad Request", "message": "Учебная группа не найдена или закрыта"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif matched_group and not matched_group.is_active:
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "Учебная группа не найдена или закрыта"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        default_start_month = max(1, min(24, int(get_setting('default_start_month', 1) or 1)))
+        if matched_group:
+            month_val = max(1, min(24, int(matched_group.month or 1)))
+        else:
             parsed_month = parse_month_from_group_name(group_num)
             month_val = parsed_month if parsed_month > 1 else default_start_month
 
@@ -216,6 +244,7 @@ class RegisterView(APIView):
             name=(data.get('name') or '').strip() or None,
             telegram=(data.get('telegram') or '').strip() or None,
             group_number=group_num,
+            study_group=matched_group,
             current_month=month_val,
             streak_count=1,
             last_active_date=timezone.now(),
@@ -250,6 +279,7 @@ class RegisterView(APIView):
 class LoginView(APIView):
     parser_classes = (DualCaseJSONParser,)
     throttle_classes = (AuthThrottle,)
+    throttle_scope = 'api_login'
     serializer_class = EmptyRequestSerializer
     authentication_classes = ()
     permission_classes = (AllowAny,)

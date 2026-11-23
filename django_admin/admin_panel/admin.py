@@ -1,9 +1,14 @@
-from django.db import models, transaction
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import IntegrityError, models, transaction
 from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
 from django.shortcuts import render
 from django.utils.html import format_html_join, escape
+from admin_panel.api_utils import validate_safe_url
 from admin_panel.permissions import is_admin_owner
+import json
 import os
 import re
 from django import forms
@@ -20,6 +25,7 @@ from .achievement_icons import (
     resolve_icon_preview_src,
 )
 from .models import (
+    ALLOWED_SUBMISSION_TRANSITIONS,
     User,
     StudyGroup,
     Lesson,
@@ -47,6 +53,7 @@ from admin_panel.services.achievement_service import evaluate_user_achievements
 from admin_panel.services.settings_service import (
     ensure_default_settings,
     invalidate_settings_cache,
+    validate_telegram_html,
 )
 from admin_panel.services.group_service import (
     parse_month_from_group_name,
@@ -64,7 +71,7 @@ def extract_youtube_id(url: str) -> str:
         match = re.search(pattern, url)
         if match:
             return match.group(1)
-    return url.strip()
+    return ''
 
 
 class StudyGroupDropdownFilter(DropdownFilter):
@@ -81,11 +88,61 @@ class StudyGroupDropdownFilter(DropdownFilter):
         return queryset
 
 
+def _validate_submission_status_and_score(instance, status_val, score_val):
+    if instance and instance.pk:
+        old_status = Submission.objects.filter(pk=instance.pk).values_list('status', flat=True).first()
+        if old_status:
+            allowed = ALLOWED_SUBMISSION_TRANSITIONS.get(old_status, set(SubmissionStatusChoices.values))
+            if status_val not in allowed:
+                raise ValidationError({'status': f'Недопустимый переход статуса: {old_status} -> {status_val}.'})
+    task = getattr(instance, 'task', None)
+    if score_val is not None:
+        max_score = (task.max_score or 0) if task else 10000
+        if score_val < 0 or (task and score_val > max_score):
+            raise ValidationError({'score': f'Оценка должна быть от 0 до {max_score}.'})
+
+
+class SubmissionAdminForm(forms.ModelForm):
+    class Meta:
+        model = Submission
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        if 'solution_link' in cleaned and cleaned.get('solution_link'):
+            cleaned['solution_link'] = validate_safe_url(cleaned['solution_link'], allow_media_path=False, max_length=500)
+        if 'voice_feedback_url' in cleaned and cleaned.get('voice_feedback_url'):
+            cleaned['voice_feedback_url'] = validate_safe_url(cleaned['voice_feedback_url'], allow_media_path=True, max_length=500)
+        _validate_submission_status_and_score(
+            self.instance,
+            cleaned.get('status', getattr(self.instance, 'status', SubmissionStatusChoices.SENT)),
+            cleaned.get('score'),
+        )
+        return cleaned
+
+
+class SubmissionListForm(forms.ModelForm):
+    class Meta:
+        model = Submission
+        fields = ('status', 'score')
+
+    def clean(self):
+        cleaned = super().clean()
+        _validate_submission_status_and_score(
+            self.instance,
+            cleaned.get('status', getattr(self.instance, 'status', SubmissionStatusChoices.SENT)),
+            cleaned.get('score'),
+        )
+        return cleaned
+
+
 @admin.register(Submission)
 class SubmissionAdmin(ModelAdmin):
+    form = SubmissionAdminForm
     list_filter_submit = True
     group_lookup = 'user__group_number'
     list_fullwidth = True
+    list_select_related = ('user', 'task', 'reviewer')
     list_display = (
         'user',
         'task',
@@ -100,28 +157,51 @@ class SubmissionAdmin(ModelAdmin):
     ordering = ('-created_at',)
     actions = ['mark_accepted', 'mark_revision']
 
-    @admin.action(description='✅ Принять выбранные ДЗ (ACCEPTED)')
+    def get_changelist_form(self, request, **kwargs):
+        return SubmissionListForm
+
+    @admin.action(description='✅ Принять выбранные ДЗ (ACCEPTED)', permissions=['change'])
     def mark_accepted(self, request, queryset):
         updated = 0
-        for sub in queryset.select_related('task', 'reviewer'):
+        skipped = 0
+        username = request.user.get_username() if hasattr(request.user, 'get_username') else getattr(request.user, 'login', '')
+        reviewer_user = User.objects.filter(login=username).first() if username else None
+        for sub in queryset.select_related('user', 'task', 'reviewer'):
+            allowed = ALLOWED_SUBMISSION_TRANSITIONS.get(sub.status, set(SubmissionStatusChoices.values))
+            if SubmissionStatusChoices.ACCEPTED not in allowed:
+                skipped += 1
+                continue
+            if Submission.objects.filter(
+                user_id=sub.user_id, task_id=sub.task_id, status=SubmissionStatusChoices.ACCEPTED
+            ).exclude(pk=sub.pk).exists():
+                skipped += 1
+                continue
             sub.status = SubmissionStatusChoices.ACCEPTED
             if sub.score is None and sub.task.has_score and sub.task.max_score is not None:
                 sub.score = sub.task.max_score
-            sub.reviewer_id = getattr(sub.reviewer, 'pk', None)
+            if reviewer_user:
+                sub.reviewer = reviewer_user
             sub.reviewed_at = timezone.now()
             sub.save()
             updated += 1
-        self.message_user(request, f'Принято работ: {updated}.', level=messages.SUCCESS)
+        msg = f'Принято работ: {updated}.' + (f' Пропущено: {skipped}.' if skipped else '')
+        self.message_user(request, msg, level=messages.SUCCESS if not skipped else messages.WARNING)
 
-    @admin.action(description='🔄 Отправить на доработку (REVISION)')
+    @admin.action(description='🔄 Отправить на доработку (REVISION)', permissions=['change'])
     def mark_revision(self, request, queryset):
         updated = 0
-        for sub in queryset:
+        skipped = 0
+        for sub in queryset.select_related('user', 'task'):
+            allowed = ALLOWED_SUBMISSION_TRANSITIONS.get(sub.status, set(SubmissionStatusChoices.values))
+            if SubmissionStatusChoices.REVISION not in allowed:
+                skipped += 1
+                continue
             sub.status = SubmissionStatusChoices.REVISION
             sub.reviewed_at = timezone.now()
             sub.save()
             updated += 1
-        self.message_user(request, f'Отправлено на доработку: {updated}.', level=messages.WARNING)
+        msg = f'Отправлено на доработку: {updated}.' + (f' Пропущено: {skipped}.' if skipped else '')
+        self.message_user(request, msg, level=messages.WARNING)
 
     @admin.display(description='Текущий статус', ordering='status')
     def status_badge(self, obj):
@@ -134,12 +214,17 @@ class SubmissionAdmin(ModelAdmin):
     @admin.display(description='GitHub')
     def solution_link_click(self, obj):
         if obj.solution_link:
-            return format_html(
-                '<a href="{}" target="_blank" rel="noopener noreferrer" '
-                'class="merts-link">'
-                'Открыть ↗</a>',
-                obj.solution_link,
-            )
+            try:
+                safe_url = validate_safe_url(obj.solution_link, allow_media_path=False, max_length=500)
+            except ValidationError:
+                return obj.solution_link[:60]
+            if safe_url:
+                return format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer" '
+                    'class="merts-link">'
+                    'Открыть ↗</a>',
+                    safe_url,
+                )
         return '—'
 
     def save_model(self, request, obj, form, change):
@@ -178,16 +263,22 @@ class StudyGroupAdmin(ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    @admin.action(description='Архивировать выбранные группы')
+    @admin.action(description='Архивировать выбранные группы', permissions=['change'])
     def archive_groups(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может архивировать группы.')
         queryset.update(is_active=False)
 
-    @admin.action(description='Активировать выбранные группы')
+    @admin.action(description='Активировать выбранные группы', permissions=['change'])
     def activate_groups(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может активировать группы.')
         queryset.update(is_active=True)
 
-    @admin.action(description='📢 Отправить сообщение в Telegram студентам группы')
+    @admin.action(description='📢 Отправить сообщение в Telegram студентам группы', permissions=['change'])
     def send_group_telegram_message(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может запускать массовую рассылку.')
         group_names = list(queryset.values_list('name', flat=True))
         recipients = list(
             User.objects.filter(
@@ -203,14 +294,23 @@ class StudyGroupAdmin(ModelAdmin):
             if not text:
                 self.message_user(request, 'Введите текст сообщения.', level=messages.ERROR)
                 return None
+            if len(text) > 4096:
+                self.message_user(request, 'Текст сообщения превышает лимит Telegram (4096 символов).', level=messages.ERROR)
+                return None
+            try:
+                validate_telegram_html(text)
+            except ValidationError as exc:
+                self.message_user(request, '; '.join(exc.messages), level=messages.ERROR)
+                return None
             counts = async_broadcast_message(recipients, text)
             self.message_user(
                 request,
                 f'Рассылка по группам ({", ".join(group_names)}): {telegram_delivery_report([counts])}',
-                level=messages.SUCCESS,
+                level=telegram_delivery_level([counts]),
             )
             return None
         return render(request, 'admin/admin_panel/telegram_broadcast.html', {
+            **self.admin_site.each_context(request),
             'title': 'Рассылка в Telegram по учебным группам',
             'queryset': queryset,
             'selected_count': queryset.count(),
@@ -287,15 +387,17 @@ class SearchableGroupWidget(forms.TextInput):
         return format_html('{}<datalist id="{}">{}</datalist>', super().render(name, value, attrs, renderer), list_id, options)
 
 
-def clean_group(value):
+def clean_group(value, *, existing_value=None):
     from admin_panel.services.group_service import validate_group_name
     if not value or value.upper() == 'ALL':
         return ''
+    if existing_value and value.strip().lower() == existing_value.strip().lower():
+        return existing_value.strip()
     value = validate_group_name(value)
-    group = StudyGroup.objects.filter(name=value).first()
+    group = StudyGroup.objects.filter(name__iexact=value).first()
     if group and not group.is_active:
         raise forms.ValidationError('Группа в архиве.')
-    return value
+    return group.name if group else value
 
 
 class LessonAdminForm(forms.ModelForm):
@@ -318,13 +420,22 @@ class LessonAdminForm(forms.ModelForm):
         cleaned_data = super().clean()
         video_link = (cleaned_data.get('video_link') or '').strip()
         if video_link:
-            y_id = extract_youtube_id(video_link)
+            try:
+                video_link = validate_safe_url(video_link, allow_media_path=False, max_length=500)
+                cleaned_data['video_link'] = video_link
+            except ValidationError as exc:
+                self.add_error('video_link', exc.message)
+                return cleaned_data
+            y_id = extract_youtube_id(video_link)[:128]
             if not y_id:
                 self.add_error('video_link', 'Не удалось извлечь YouTube ID из ссылки. Проверьте формат ссылки.')
             else:
                 cleaned_data['youtube_id'] = y_id
 
-        grp = clean_group((cleaned_data.get('group_number') or '').strip())
+        grp = clean_group(
+            (cleaned_data.get('group_number') or '').strip(),
+            existing_value=getattr(self.instance, 'group_number', None) if self.instance and self.instance.pk else None,
+        )
         if grp:
             cleaned_data['group_number'] = grp
             if cleaned_data.get('month') == 1:
@@ -345,9 +456,11 @@ def telegram_delivery_report(results):
 
 
 def telegram_delivery_level(results):
-    return messages.WARNING if any(
-        result.get(key) for result in results for key in ('errors', 'unconnected', 'queued')
-    ) else messages.SUCCESS
+    if any(result.get(key) for result in results for key in ('errors', 'unconnected')):
+        return messages.WARNING
+    if any(result.get('queued') for result in results):
+        return messages.INFO
+    return messages.SUCCESS
 
 
 class GroupSavingAdmin(ModelAdmin):
@@ -398,14 +511,15 @@ class LessonAdmin(GroupSavingAdmin):
             )
         return '—'
 
-    @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
+    @admin.action(description="📢 Отправить/повторить уведомление в Telegram", permissions=['change'])
     def broadcast_lesson_telegram(self, request, queryset):
         results = [notify_lesson_published(lesson) for lesson in queryset]
         self.message_user(request, telegram_delivery_report(results), level=telegram_delivery_level(results))
 
     def save_model(self, request, obj, form, change):
-        if obj.video_link and not obj.youtube_id:
-            obj.youtube_id = extract_youtube_id(obj.video_link)
+        changed = set(getattr(form, 'changed_data', ()))
+        if obj.video_link and (not change or 'video_link' in changed or not obj.youtube_id):
+            obj.youtube_id = extract_youtube_id(obj.video_link)[:128]
         if obj.group_number:
             obj.group_number = obj.group_number.strip()
         super().save_model(request, obj, form, change)
@@ -429,7 +543,17 @@ class TaskAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        grp = clean_group((cleaned_data.get('group_number') or '').strip())
+        for url_field in ('example_link', 'attachment_link'):
+            raw_val = cleaned_data.get(url_field)
+            if raw_val:
+                try:
+                    cleaned_data[url_field] = validate_safe_url(raw_val, allow_media_path=False, max_length=500) or None
+                except ValidationError as exc:
+                    self.add_error(url_field, exc.message)
+        grp = clean_group(
+            (cleaned_data.get('group_number') or '').strip(),
+            existing_value=getattr(self.instance, 'group_number', None) if self.instance and self.instance.pk else None,
+        )
         if grp:
             cleaned_data['group_number'] = grp
             if cleaned_data.get('month') == 1:
@@ -458,7 +582,7 @@ class TaskAdmin(GroupSavingAdmin):
         text = 'Все группы' if val.upper() == 'ALL' else val
         return format_html('<span class="merts-badge">{}</span>', text)
 
-    @admin.action(description="📢 Отправить/повторить уведомление в Telegram")
+    @admin.action(description="📢 Отправить/повторить уведомление в Telegram", permissions=['change'])
     def broadcast_task_telegram(self, request, queryset):
         results = [notify_task_published(task) for task in queryset]
         self.message_user(request, telegram_delivery_report(results), level=telegram_delivery_level(results))
@@ -495,11 +619,17 @@ class ScoreAdjustmentInline(TabularInline):
     model = ScoreAdjustment
     fk_name = 'user'
     extra = 0
+    raw_id_fields = ('admin',)
     fields = ('amount', 'reason', 'month', 'admin', 'created_at')
     readonly_fields = ('created_at',)
     classes = ('collapse',)
     verbose_name = 'Бонус / штраф'
     verbose_name_plural = 'Бонусы и штрафы студента'
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'admin':
+            kwargs['queryset'] = User.objects.filter(role=RoleChoices.ADMIN)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 class UserAchievementInline(TabularInline):
@@ -514,6 +644,12 @@ class UserAchievementInline(TabularInline):
 
 
 class UserAdminForm(forms.ModelForm):
+    new_password = forms.CharField(
+        label='Новый пароль',
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        help_text='Оставьте пустым, чтобы не менять пароль. Пароль автоматически хешируется.',
+    )
     group_selector = forms.CharField(widget=SearchableGroupWidget(),
         label='Учебная группа',
         required=False,
@@ -528,12 +664,18 @@ class UserAdminForm(forms.ModelForm):
 
     class Meta:
         model = User
-        fields = '__all__'
+        exclude = ('password_hash',)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance and self.instance.pk and self.instance.group_number:
             self.initial['group_selector'] = self.instance.group_number
+
+    def clean_new_password(self):
+        pwd = self.cleaned_data.get('new_password') or ''
+        if pwd:
+            validate_password(pwd)
+        return pwd
 
     def clean_telegram_chat_id(self):
         val = self.cleaned_data.get('telegram_chat_id')
@@ -547,7 +689,10 @@ class UserAdminForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         if 'group_selector' in self.fields:
-            grp = clean_group((cleaned_data.get('group_selector') or '').strip())
+            grp = clean_group(
+                (cleaned_data.get('group_selector') or '').strip(),
+                existing_value=getattr(self.instance, 'group_number', None) if self.instance and self.instance.pk else None,
+            )
             cleaned_data['group_selector'] = grp
             if grp:
                 cleaned_data['group_number'] = grp
@@ -560,6 +705,9 @@ class UserAdminForm(forms.ModelForm):
 class UserAdmin(GroupSavingAdmin):
     list_filter_submit = True
     group_lookup = 'group_number'
+
+    def has_view_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
 
     def has_add_permission(self, request):
         return is_admin_owner(request.user)
@@ -584,10 +732,10 @@ class UserAdmin(GroupSavingAdmin):
     )
     list_filter = ('role', 'mentor', 'current_month', StudyGroupDropdownFilter)
     search_fields = ('login', 'name', 'telegram', 'telegram_username', 'telegram_chat_id', 'group_number')
-    list_editable = ('name', 'group_number', 'current_month')
+    list_editable = ('name', 'current_month')
     raw_id_fields = ('mentor',)
     ordering = ('-created_at',)
-    readonly_fields = ('id', 'created_at', 'updated_at')
+    readonly_fields = ('id', 'telegram_auth_code', 'created_at', 'updated_at')
     inlines = [ScoreAdjustmentInline, UserAchievementInline]
     actions = [
         'test_telegram_connection',
@@ -596,17 +744,35 @@ class UserAdmin(GroupSavingAdmin):
         'send_custom_telegram_message',
     ]
 
+    def delete_model(self, request, obj):
+        try:
+            super().delete_model(request, obj)
+        except (ProtectedError, IntegrityError):
+            self.message_user(
+                request,
+                f'Нельзя удалить пользователя «{obj.login}»: есть связанные сдачи, корректировки, ачивки или заказы.',
+                level=messages.ERROR,
+            )
+
+    def delete_queryset(self, request, queryset):
+        try:
+            super().delete_queryset(request, queryset)
+        except (ProtectedError, IntegrityError):
+            self.message_user(
+                request,
+                'Не удалось удалить выбранных пользователей: у части из них есть связанные сдачи, корректировки, ачивки или заказы.',
+                level=messages.ERROR,
+            )
+
     def save_model(self, request, obj, form, change):
         changed = set(getattr(form, 'changed_data', ()))
         cleaned = getattr(form, 'cleaned_data', {})
+        if isinstance(cleaned, dict) and cleaned.get('new_password'):
+            obj.set_password(cleaned['new_password'])
         if 'group_selector' in cleaned and (not change or 'group_selector' in changed):
             grp = (cleaned.get('group_selector') or '').strip()
             obj.group_number = grp or None
-            obj.study_group = StudyGroup.objects.filter(name=grp).first() if grp else None
-        elif change and 'group_number' in changed:
-            grp = (obj.group_number or '').strip()
-            obj.group_number = grp or None
-            obj.study_group = StudyGroup.objects.filter(name=grp).first() if grp else None
+            obj.study_group = StudyGroup.objects.filter(name__iexact=grp).first() if grp else None
         super().save_model(request, obj, form, change)
 
     @admin.display(description='Telegram')
@@ -618,8 +784,10 @@ class UserAdmin(GroupSavingAdmin):
             return format_html('<span class="merts-warning">@{} (не активен)</span>', obj.telegram_username)
         return '—'
 
-    @admin.action(description="🧪 Проверить связь (отправить тест в Telegram)")
+    @admin.action(description="🧪 Проверить связь (отправить тест в Telegram)", permissions=['change'])
     def test_telegram_connection(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может выполнять это действие.')
         for user in queryset:
             ok, report = send_test_telegram_message(user)
             if ok:
@@ -627,85 +795,103 @@ class UserAdmin(GroupSavingAdmin):
             else:
                 self.message_user(request, f"Внимание для @{user.login}: {report}", level=messages.WARNING)
 
-    @admin.action(description="🧮 Пересчитать баллы и обновить архив текущего месяца")
+    @admin.action(description="🧮 Пересчитать баллы и обновить архив текущего месяца", permissions=['change'])
     def recalculate_student_scores(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может выполнять это действие.')
         from django.db.models import Sum
         from admin_panel.services.score_service import annotate_user_scores, latest_accepted
 
-        selected_users = list(queryset)
+        selected_users = list(queryset.filter(role=RoleChoices.STUDENT))
         target_months = sorted({max(1, int(u.current_month or 1)) for u in selected_users})
-        ranks_by_month = {}
-        for month in target_months:
-            ranked = list(
-                annotate_user_scores(User.objects.filter(role=RoleChoices.STUDENT), month=month)
-                .order_by('-total_score', '-tasks_accepted_count', 'created_at', 'id')
-                .values('id', 'total_score', 'tasks_accepted_count')
-            )
-            ranks_by_month[month] = {
-                row['id']: (idx + 1, int(row['total_score'] or 0), int(row['tasks_accepted_count'] or 0))
-                for idx, row in enumerate(ranked)
-            }
-            for archive in MonthlyScoreArchive.objects.filter(month=month):
-                if archive.user_id in ranks_by_month[month]:
-                    new_rank, _, _ = ranks_by_month[month][archive.user_id]
-                    if archive.final_rank != new_rank:
-                        archive.final_rank = new_rank
-                        archive.save(update_fields=['final_rank'])
+        with transaction.atomic():
+            ranks_by_month = {}
+            for month in target_months:
+                ranked = list(
+                    annotate_user_scores(User.objects.filter(role=RoleChoices.STUDENT), month=month)
+                    .order_by('-total_score', '-tasks_accepted_count', 'created_at', 'id')
+                    .values('id', 'total_score', 'tasks_accepted_count')
+                )
+                ranks_by_month[month] = {
+                    row['id']: (idx + 1, int(row['total_score'] or 0), int(row['tasks_accepted_count'] or 0))
+                    for idx, row in enumerate(ranked)
+                }
+                for archive in MonthlyScoreArchive.objects.filter(month=month):
+                    if archive.user_id in ranks_by_month[month]:
+                        new_rank, _, _ = ranks_by_month[month][archive.user_id]
+                        if archive.final_rank != new_rank:
+                            archive.final_rank = new_rank
+                            archive.save(update_fields=['final_rank'])
 
-        updated = 0
-        for student in selected_users:
-            month = max(1, int(student.current_month or 1))
-            month_map = ranks_by_month.get(month, {})
-            if student.pk in month_map:
-                final_rank, month_score, tasks_cnt = month_map[student.pk]
-            else:
-                accepted = latest_accepted(Submission.objects.filter(user_id=student.pk, task__month=month))
-                sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
-                adj_score = ScoreAdjustment.objects.filter(user_id=student.pk, month=month).aggregate(s=Sum('amount'))['s'] or 0
-                month_score = sub_score + adj_score
-                tasks_cnt = accepted.count()
-                final_rank = len(month_map) + 1
-            MonthlyScoreArchive.objects.update_or_create(
-                user=student,
-                month=month,
-                defaults={
-                    'final_score': month_score,
-                    'tasks_accepted_count': tasks_cnt,
-                    'final_rank': final_rank,
-                },
-            )
-            updated += 1
+            updated = 0
+            for student in selected_users:
+                month = max(1, int(student.current_month or 1))
+                month_map = ranks_by_month.get(month, {})
+                if student.pk in month_map:
+                    final_rank, month_score, tasks_cnt = month_map[student.pk]
+                else:
+                    accepted = latest_accepted(Submission.objects.filter(user_id=student.pk, task__month=month))
+                    sub_score = accepted.aggregate(s=Sum('score'))['s'] or 0
+                    adj_score = ScoreAdjustment.objects.filter(user_id=student.pk, month=month).aggregate(s=Sum('amount'))['s'] or 0
+                    month_score = sub_score + adj_score
+                    tasks_cnt = accepted.count()
+                    final_rank = len(month_map) + 1
+                MonthlyScoreArchive.objects.update_or_create(
+                    user=student,
+                    month=month,
+                    defaults={
+                        'final_score': month_score,
+                        'tasks_accepted_count': tasks_cnt,
+                        'final_rank': final_rank,
+                    },
+                )
+                updated += 1
         self.message_user(
             request,
-            f"Пересчитаны и синхронизированы баллы для {updated} пользователей.",
+            f"Пересчитаны и синхронизированы баллы для {updated} студентов.",
             level=messages.SUCCESS,
         )
 
-    @admin.action(description="🏆 Перепроверить условия всех ачивок")
+    @admin.action(description="🏆 Перепроверить условия всех ачивок", permissions=['change'])
     def reevaluate_achievements(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может выполнять это действие.')
         total_awarded = 0
+        checked = 0
         for student in queryset:
             awarded = evaluate_user_achievements(student.pk, trigger_filter='ALL')
             total_awarded += len(awarded)
+            checked += 1
         self.message_user(
             request,
-            f"Проверено пользователей: {queryset.count()}. Выдано новых ачивок: {total_awarded}.",
+            f"Проверено пользователей: {checked}. Выдано новых ачивок: {total_awarded}.",
             level=messages.SUCCESS,
         )
 
-    @admin.action(description="📢 Отправить произвольное сообщение в Telegram")
+    @admin.action(description="📢 Отправить произвольное сообщение в Telegram", permissions=['change'])
     def send_custom_telegram_message(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может выполнять массовую рассылку.')
         recipients = [u.telegram_chat_id for u in queryset if u.telegram_chat_id]
         if request.POST.get('apply') == '1':
             text = (request.POST.get('message_text') or '').strip()
             if not text:
                 self.message_user(request, 'Введите текст сообщения.', level=messages.ERROR)
                 return None
+            if len(text) > 4096:
+                self.message_user(request, 'Текст сообщения превышает лимит Telegram (4096 символов).', level=messages.ERROR)
+                return None
+            try:
+                validate_telegram_html(text)
+            except ValidationError as exc:
+                self.message_user(request, '; '.join(exc.messages), level=messages.ERROR)
+                return None
             counts = async_broadcast_message(recipients, text)
             counts['unconnected'] = queryset.count() - len(recipients)
             self.message_user(request, telegram_delivery_report([counts]), level=telegram_delivery_level([counts]))
             return None
         return render(request, 'admin/admin_panel/telegram_broadcast.html', {
+            **self.admin_site.each_context(request),
             'title': 'Персональная рассылка выбранным пользователям',
             'queryset': queryset,
             'selected_count': queryset.count(),
@@ -716,7 +902,7 @@ class UserAdmin(GroupSavingAdmin):
 
     fieldsets = (
         ('Основная информация', {
-            'fields': ('login', 'name', 'role', 'password_hash'),
+            'fields': ('login', 'name', 'role', 'new_password'),
         }),
         ('Telegram и бот', {
             'fields': ('telegram_chat_id', 'telegram', 'telegram_username', 'telegram_auth_code'),
@@ -736,11 +922,29 @@ class UserAdmin(GroupSavingAdmin):
     )
 
 
+class ScoreAdjustmentAdminForm(forms.ModelForm):
+    class Meta:
+        model = ScoreAdjustment
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        amount = cleaned.get('amount')
+        month = cleaned.get('month')
+        if amount is not None and (amount == 0 or not -10000 <= amount <= 10000):
+            self.add_error('amount', 'Изменение баллов должно быть от -10000 до 10000 и не равно 0.')
+        if month is not None and not 1 <= month <= 24:
+            self.add_error('month', 'Месяц должен быть от 1 до 24.')
+        return cleaned
+
+
 @admin.register(ScoreAdjustment)
 class ScoreAdjustmentAdmin(ModelAdmin):
+    form = ScoreAdjustmentAdminForm
     list_filter_submit = True
     group_lookup = 'user__group_number'
     list_fullwidth = True
+    list_select_related = ('user', 'admin')
     list_display = ('user', 'amount', 'reason', 'month', 'admin', 'created_at')
     list_editable = ('amount', 'reason', 'month')
     list_filter = ('month', StudyGroupDropdownFilter)
@@ -750,11 +954,15 @@ class ScoreAdjustmentAdmin(ModelAdmin):
 
 class PresetIconGalleryWidget(forms.Widget):
     def render(self, name, value, attrs=None, renderer=None):
-        selected_val = escape(value or '')
+        raw_val = str(value or '')
+        selected_val = escape(raw_val)
+        caption_preview = escape(raw_val[:80]) + ('...' if len(raw_val) > 80 else '') if raw_val else 'Выберите пресет ниже или загрузите файл'
+        safe_name = escape(str(name))
+        js_hidden_id = json.dumps(f'id_{name}')
         cards_html = []
         for item in PRESET_ACHIEVEMENT_ICONS:
             url = item['url']
-            is_selected = selected_val == url
+            is_selected = raw_val == url
             border_color = '#f59e0b' if is_selected else '#27272a'
             bg_color = 'rgba(245, 158, 11, 0.14)' if is_selected else '#18181b'
             cards_html.append(
@@ -778,7 +986,7 @@ class PresetIconGalleryWidget(forms.Widget):
         initial_preview = escape(resolve_icon_preview_src(value or ''))
         html = f'''
         <div style="display:flex;flex-direction:column;gap:14px;">
-            <input type="hidden" name="{name}" id="id_{name}" value="{selected_val}" />
+            <input type="hidden" name="{safe_name}" id="id_{safe_name}" value="{selected_val}" />
             <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:14px;
                         background:#09090b;border:1px solid #27272a;max-width:460px;">
                 <div style="width:48px;height:48px;min-width:48px;border-radius:12px;background:rgba(245,158,11,0.12);
@@ -790,7 +998,7 @@ class PresetIconGalleryWidget(forms.Widget):
                         Текущее превью иконки
                     </div>
                     <div id="merts_live_icon_caption" style="font-size:12px;color:#a1a1aa;margin-top:2px;word-break:break-all;">
-                        {selected_val[:80] + ('...' if len(selected_val) > 80 else '') if selected_val else 'Выберите пресет ниже или загрузите файл'}
+                        {caption_preview}
                     </div>
                 </div>
             </div>
@@ -802,7 +1010,7 @@ class PresetIconGalleryWidget(forms.Widget):
             window.__selectMertsPresetIcon = function(btn) {{
                 var url = btn.getAttribute('data-preset-url');
                 var src = btn.getAttribute('data-preset-src');
-                var hidden = document.getElementById('id_{name}');
+                var hidden = document.getElementById({js_hidden_id});
                 if (hidden) hidden.value = url;
                 var iconInput = document.getElementById('id_icon_url');
                 if (iconInput) iconInput.value = url;
@@ -947,7 +1155,6 @@ class AchievementAdminForm(forms.ModelForm):
 
             ext = os.path.splitext(uploaded.name or '')[1].lower()
             allowed_map = {
-
                 '.png': 'image/png',
                 '.webp': 'image/webp',
                 '.jpg': 'image/jpeg',
@@ -956,24 +1163,39 @@ class AchievementAdminForm(forms.ModelForm):
             if ext not in allowed_map:
                 raise forms.ValidationError('Разрешены только файлы форматов .png, .webp или .jpg.')
 
-            raw_bytes = uploaded.read()
-            mime_type = allowed_map[ext]
+            from admin_panel.services.media_service import read_upload, validate_image_buffer
             try:
-                from admin_panel.services.media_service import save_optimized_media_asset
-                asset = save_optimized_media_asset(
-                    buffer=raw_bytes,
-                    mime_type=mime_type,
-                    kind='ACHIEVEMENT_ICON',
-                )
-                cleaned_data['icon_url'] = asset['url']
+                raw_bytes = read_upload(uploaded, 'ACHIEVEMENT_ICON')
+                mime_type = allowed_map[ext]
+                validate_image_buffer(raw_bytes, mime_type, kind='ACHIEVEMENT_ICON')
+                self._pending_icon = (raw_bytes, mime_type)
+                cleaned_data['icon_url'] = (self.instance.icon_url if self.instance and self.instance.pk else '') or '/api/v1/media/presets/icons/trophy.svg'
             except Exception as e:
-                raise forms.ValidationError(f'Ошибка сохранения иконки в MediaAsset: {str(e)}')
+                raise forms.ValidationError(f'Ошибка проверки иконки: {str(e)}')
         elif raw_icon_url:
-            cleaned_data['icon_url'] = normalize_icon_url(raw_icon_url)
+            normalized = normalize_icon_url(raw_icon_url)
+            if not find_preset_icon(normalized):
+                try:
+                    normalized = validate_safe_url(normalized, allow_media_path=True, max_length=2048)
+                except ValidationError as exc:
+                    self.add_error('icon_url', exc.message)
+                    return cleaned_data
+            cleaned_data['icon_url'] = normalized
         elif preset_val:
-            cleaned_data['icon_url'] = normalize_icon_url(preset_val)
+            normalized_preset = normalize_icon_url(preset_val)
+            if not find_preset_icon(normalized_preset):
+                try:
+                    normalized_preset = validate_safe_url(normalized_preset, allow_media_path=True, max_length=2048)
+                except ValidationError as exc:
+                    self.add_error('preset_selector', exc.message)
+                    return cleaned_data
+            cleaned_data['icon_url'] = normalized_preset
         else:
             cleaned_data['icon_url'] = '/api/v1/media/presets/icons/trophy.svg'
+
+        pts = cleaned_data.get('points')
+        if pts is not None and pts < 0:
+            self.add_error('points', 'Баллы достижения не могут быть отрицательными.')
 
         return cleaned_data
 
@@ -997,6 +1219,18 @@ class AchievementAdmin(ModelAdmin):
     search_fields = ('title', 'code', 'description', 'criteria')
     ordering = ('created_at',)
     actions = ['reevaluate_all_students']
+
+    def save_model(self, request, obj, form, change):
+        pending = getattr(form, '_pending_icon', None)
+        if pending:
+            from admin_panel.services.media_service import save_optimized_media_asset
+            asset = save_optimized_media_asset(
+                buffer=pending[0],
+                mime_type=pending[1],
+                kind='ACHIEVEMENT_ICON',
+            )
+            obj.icon_url = asset['url']
+        super().save_model(request, obj, form, change)
 
     def has_delete_permission(self, request, obj=None):
         if obj is not None and UserAchievement.objects.filter(achievement_id=obj.pk).exists():
@@ -1025,15 +1259,16 @@ class AchievementAdmin(ModelAdmin):
         if deletable.exists():
             super().delete_queryset(request, deletable)
 
-    @admin.action(description='🏆 Перепроверить все ачивки для всех студентов')
+    @admin.action(description='🏆 Перепроверить все ачивки для всех студентов', permissions=['change'])
     def reevaluate_all_students(self, request, queryset):
         total = 0
-        students = User.objects.filter(role=RoleChoices.STUDENT)
-        for student in students:
+        checked = 0
+        for student in User.objects.filter(role=RoleChoices.STUDENT).iterator(chunk_size=100):
             total += len(evaluate_user_achievements(student.pk, trigger_filter='ALL'))
+            checked += 1
         self.message_user(
             request,
-            f'Проверено студентов: {students.count()}. Выдано новых ачивок: {total}.',
+            f'Проверено студентов: {checked}. Выдано новых ачивок: {total}.',
             level=messages.SUCCESS,
         )
 
@@ -1129,6 +1364,9 @@ class MediaAssetAdmin(ModelAdmin):
     readonly_fields = ('id', 'kind', 'mime_type', 'size_bytes', 'owner_id', 'created_at', 'asset_preview')
     ordering = ('-created_at',)
 
+    def has_add_permission(self, request):
+        return False
+
     def get_queryset(self, request):
         return super().get_queryset(request).defer('data')
 
@@ -1197,12 +1435,17 @@ class PlatformSettingAdmin(ModelAdmin):
     }
     actions = ['seed_default_settings', 'clear_settings_cache']
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None:
+            return ('key', 'value_type', 'updated_at')
+        return ('updated_at',)
+
     def get_queryset(self, request):
         ensure_default_settings()
         return super().get_queryset(request)
 
     def has_view_permission(self, request, obj=None):
-        return bool(request.user and request.user.is_staff)
+        return is_admin_owner(request.user)
 
     def has_add_permission(self, request):
         return is_admin_owner(request.user)
@@ -1213,14 +1456,18 @@ class PlatformSettingAdmin(ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return is_admin_owner(request.user)
 
-    @admin.action(description='🔄 Восстановить недостающие настройки по умолчанию')
+    @admin.action(description='🔄 Восстановить недостающие настройки по умолчанию', permissions=['change'])
     def seed_default_settings(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может синхронизировать настройки.')
         ensure_default_settings()
         invalidate_settings_cache()
         self.message_user(request, 'Дефолтные настройки платформы синхронизированы.', level=messages.SUCCESS)
 
-    @admin.action(description='⚡ Сбросить кеш настроек и /api/v1/system/config')
+    @admin.action(description='⚡ Сбросить кеш настроек и /api/v1/system/config', permissions=['change'])
     def clear_settings_cache(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может сбрасывать кеш настроек.')
         invalidate_settings_cache()
         self.message_user(request, 'Кеш настроек и публичного конфига очищен.', level=messages.SUCCESS)
 
@@ -1249,17 +1496,21 @@ class TelegramOutboxAdmin(ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return is_admin_owner(request.user)
 
-    @admin.action(description='🔁 Повторить неудачные отправки')
+    @admin.action(description='🔁 Повторить неудачные отправки', permissions=['change'])
     def retry_failed(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может управлять очередью Telegram.')
         from admin_panel.services.outbox_service import retry_outbox_queryset
-        res = retry_outbox_queryset(queryset.filter(status='failed'), drain_now=True)
-        self.message_user(request, f"В очереди на повтор: {res['queued']}. Доставлено сразу: {res['sent']}.", level=messages.SUCCESS)
+        res = retry_outbox_queryset(queryset.filter(status='failed'), drain_now=False)
+        self.message_user(request, f"В очереди на повтор: {res['queued']}. Воркер доставит в фоне.", level=messages.SUCCESS)
 
-    @admin.action(description='📨 Повторить выбранные (кроме доставленных)')
+    @admin.action(description='📨 Повторить выбранные (кроме доставленных)', permissions=['change'])
     def retry_selected(self, request, queryset):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может управлять очередью Telegram.')
         from admin_panel.services.outbox_service import retry_outbox_queryset
-        res = retry_outbox_queryset(queryset, drain_now=True)
-        self.message_user(request, f"В очереди на повтор: {res['queued']}. Доставлено сразу: {res['sent']}.", level=messages.SUCCESS)
+        res = retry_outbox_queryset(queryset, drain_now=False)
+        self.message_user(request, f"В очереди на повтор: {res['queued']}. Воркер доставит в фоне.", level=messages.SUCCESS)
 
 
 class ShopProductForm(forms.ModelForm):
@@ -1269,15 +1520,20 @@ class ShopProductForm(forms.ModelForm):
         model = ShopProduct
         fields = '__all__'
 
+    def clean_image_url(self):
+        raw = self.cleaned_data.get('image_url') or ''
+        return validate_safe_url(raw, allow_media_path=True, max_length=500)
+
     def clean_image(self):
-        from .services.media_service import FORMATS, MAX_PIXELS, read_upload
+        from .services.media_service import FORMATS, MAX_PIXELS, read_upload, validate_image_buffer
         image = self.cleaned_data.get('image')
         if image:
             try:
                 if image.image.format not in FORMATS or image.image.width * image.image.height > MAX_PIXELS:
                     raise ValueError('Недопустимый формат или размер изображения.')
-                read_upload(image, 'GENERAL')
-            except ValueError as error:
+                raw_bytes = read_upload(image, 'GENERAL')
+                validate_image_buffer(raw_bytes, image.content_type or 'image/png', kind='GENERAL')
+            except (ValueError, OSError) as error:
                 raise forms.ValidationError(str(error)) from error
             finally:
                 image.seek(0)
@@ -1299,12 +1555,12 @@ class ShopProductAdmin(ModelAdmin):
         image = form.cleaned_data.get('image')
         fields = set(form.changed_data) - {'image'}
         if image:
-            asset = save_optimized_media_asset(read_upload(image, 'GENERAL'), image.content_type)
+            asset = save_optimized_media_asset(read_upload(image, 'GENERAL'), image.content_type or 'image/png')
             obj.image_url = asset['url']
             fields.add('image_url')
-        if change:
+        if change and fields:
             obj.save(update_fields=fields)
-        else:
+        elif not change:
             super().save_model(request, obj, form, change)
 
 
@@ -1321,18 +1577,23 @@ class ShopOrderAdmin(ModelAdmin):
     def has_add_permission(self, request):
         return False
 
+    def has_change_permission(self, request, obj=None):
+        return is_admin_owner(request.user)
+
     def has_delete_permission(self, request, obj=None):
         return False
 
-    @admin.action(description='✅ Отметить выданным')
+    @admin.action(description='✅ Отметить выданным', permissions=['change'])
     def complete_orders(self, request, queryset):
         self._process_batch(request, queryset, ShopOrderStatus.COMPLETED)
 
-    @admin.action(description='❌ Отменить заказ и вернуть баллы')
+    @admin.action(description='❌ Отменить заказ и вернуть баллы', permissions=['change'])
     def cancel_orders(self, request, queryset):
         self._process_batch(request, queryset, ShopOrderStatus.CANCELLED)
 
     def _process_batch(self, request, queryset, status):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может обрабатывать заказы мерча.')
         from .services.shop_service import process_order
         order_ids = list(queryset.values_list('pk', flat=True))
         changed = sum(process_order(order_id, status, request.user) for order_id in order_ids)

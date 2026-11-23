@@ -5,6 +5,7 @@ from .user_views import (
     AvatarUploadView,
     BannerUploadView,
     EasterEggView,
+    ClaimEasterEggAliasView,
     UserAchievementsListView,
     TelegramConnectView,
     TelegramDisconnectView,

@@ -1,4 +1,10 @@
+from collections.abc import Mapping
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Count, Sum
+from django.utils import timezone
+from admin_panel.achievement_icons import to_absolute_media_url
+from admin_panel.api_utils import validate_safe_url
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from rest_framework.views import APIView
@@ -8,7 +14,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from drf_spectacular.utils import extend_schema
-from admin_panel.models import User, UserAchievement
+from admin_panel.models import User, UserAchievement, PasswordResetTicket, ShopOrderStatus
 from admin_panel.serializers import (
     UserProfileSerializer,
     ChangePasswordSerializer,
@@ -21,9 +27,10 @@ from admin_panel.serializers import (
 )
 from admin_panel.services.media_service import save_optimized_media_asset, read_upload
 from admin_panel.services.achievement_service import award_achievement, evaluate_user_achievements, TriggerTypeChoices
+from admin_panel.services.score_service import latest_accepted
 from admin_panel.services.telegram_service import get_bot_username
-from admin_panel.services.settings_service import get_setting
-from admin_panel.services.shop_service import shop_balance
+from admin_panel.services.settings_service import cache_delete_safe, cache_set_safe, get_setting
+from admin_panel.throttles import AuthThrottle
 from admin_panel.views.shop_views import ShopBalanceSerializer
 
 
@@ -43,8 +50,22 @@ class CurrentUserResponseSerializer(ShopBalanceSerializer):
 class UserProfileUpdateRequestSerializer(serializers.Serializer):
     name = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
     telegram = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
-    avatarUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    bannerUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    avatarUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=500)
+    bannerUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=500)
+
+    def _validate_media_url(self, value):
+        if value is None or not value.strip():
+            return None
+        try:
+            return validate_safe_url(value, allow_media_path=True, max_length=500)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message)
+
+    def validate_avatarUrl(self, value):
+        return self._validate_media_url(value)
+
+    def validate_bannerUrl(self, value):
+        return self._validate_media_url(value)
 
 
 class UserEnvelopeSerializer(serializers.Serializer):
@@ -106,10 +127,27 @@ class CurrentUserView(APIView):
     @extend_schema(operation_id="users_me_retrieve", summary="Получить профиль, статистику и баланс магазина", responses={200: CurrentUserResponseSerializer})
     def get(self, request):
         user = request.user
+        hw_agg = latest_accepted(user.submissions.all()).aggregate(
+            total=Sum('score', default=0),
+            cnt=Count('id'),
+        )
+        homework_total = hw_agg['total'] or 0
+        accepted_count = hw_agg['cnt'] or 0
+        adjustments_total = user.score_adjustments.aggregate(total=Sum('amount', default=0))['total'] or 0
+        achievements_total = user.user_achievements.aggregate(total=Sum('achievement__points', default=0))['total'] or 0
+        spent_points = user.shop_orders.filter(
+            status__in=(ShopOrderStatus.PENDING, ShopOrderStatus.COMPLETED)
+        ).aggregate(total=Sum('price_coins', default=0))['total'] or 0
+
+        total_score = homework_total + adjustments_total
+        earned_points = homework_total + achievements_total + adjustments_total
+        user.total_score = total_score
+        user.tasks_accepted_count = accepted_count
+
         data = UserProfileSerializer(user, context={'request': request}).data
         stats = {
-            "totalScore": user.calculate_total_score(),
-            "tasksAcceptedCount": user.accepted_tasks_count(),
+            "totalScore": total_score,
+            "tasksAcceptedCount": accepted_count,
             "streakCount": user.streak_count or 0,
         }
         return Response({
@@ -117,7 +155,9 @@ class CurrentUserView(APIView):
             "isTelegramConnected": bool(user.telegram_chat_id),
             "telegramUsername": user.telegram_username,
             "stats": stats,
-            **shop_balance(user),
+            "totalEarnedPoints": earned_points,
+            "spentPoints": spent_points,
+            "availableCoins": max(0, earned_points - spent_points),
         })
 
     @extend_schema(
@@ -127,6 +167,15 @@ class CurrentUserView(APIView):
         responses={200: UserEnvelopeSerializer, 400: ErrorResponseSerializer},
     )
     def patch(self, request):
+        if not isinstance(request.data, Mapping):
+            return Response({'message': 'Invalid request payload'}, status=400)
+        serializer = UserProfileUpdateRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user = request.user
         field_map = {
             'name': 'name',
@@ -134,34 +183,23 @@ class CurrentUserView(APIView):
             'avatarUrl': 'avatar_url',
             'bannerUrl': 'banner_url',
         }
-        from urllib.parse import urlsplit
-        for key in ('avatarUrl', 'bannerUrl'):
-            if key not in request.data:
-                continue
-            value = request.data.get(key)
-            if not value:
-                continue
-            if not isinstance(value, str):
-                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
-            cleaned = value.strip()
-            if not cleaned:
-                continue
-            if '\\' in cleaned or any(ord(ch) < 32 for ch in cleaned) or cleaned.startswith('//'):
-                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
-            parsed = urlsplit(cleaned)
-            if parsed.scheme not in ('', 'https', 'http') or (parsed.scheme == '' and not cleaned.startswith('/')):
-                return Response({'message': 'Недопустимый URL изображения.'}, status=400)
+        updated_fields = []
         for json_key, model_key in field_map.items():
-            if json_key in request.data:
-                raw_val = request.data[json_key]
-                setattr(user, model_key, (raw_val.strip() if isinstance(raw_val, str) else raw_val) or None)
+            if json_key in serializer.validated_data:
+                raw_val = serializer.validated_data[json_key]
+                cleaned = raw_val.strip() if isinstance(raw_val, str) else raw_val
+                setattr(user, model_key, cleaned or None)
+                updated_fields.append(model_key)
 
-        user.save(update_fields=[field_map[key] for key in field_map if key in request.data] + ['updated_at'])
+        if updated_fields:
+            user.save(update_fields=updated_fields + ['updated_at'])
         data = UserProfileSerializer(user, context={'request': request}).data
         return Response({"user": data})
 
 
 class ChangePasswordView(APIView):
+    throttle_classes = (AuthThrottle,)
+    throttle_scope = 'change_password'
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
 
@@ -202,6 +240,7 @@ class ChangePasswordView(APIView):
         user.password_uses_sha256 = False
         user.must_change_password = False
         user.sessions.all().delete()
+        PasswordResetTicket.objects.filter(user=user).delete()
         user.save()
         return Response({"message": "Пароль успешно изменен"})
 
@@ -235,10 +274,12 @@ class AvatarUploadView(APIView):
                 owner_id=request.user.id,
             )
             request.user.refresh_from_db()
+            abs_url = to_absolute_media_url(asset['url'], request=request)
+            asset_payload = {**asset, 'url': abs_url}
 
             return Response({
-                "avatarUrl": asset['url'],
-                "asset": asset,
+                "avatarUrl": abs_url,
+                "asset": asset_payload,
                 "user": UserProfileSerializer(request.user, context={'request': request}).data,
             })
         except ValueError as e:
@@ -277,10 +318,12 @@ class BannerUploadView(APIView):
                 owner_id=request.user.id,
             )
             request.user.refresh_from_db()
+            abs_url = to_absolute_media_url(asset['url'], request=request)
+            asset_payload = {**asset, 'url': abs_url}
 
             return Response({
-                "bannerUrl": asset['url'],
-                "asset": asset,
+                "bannerUrl": abs_url,
+                "asset": asset_payload,
                 "user": UserProfileSerializer(request.user, context={'request': request}).data,
             })
         except ValueError as e:
@@ -310,7 +353,22 @@ class EasterEggView(APIView):
         if not awarded:
             # Check if user already had it
             return Response({"success": True, "message": "Пасхалка активирована (ачивка уже была получена ранее)"})
+        for item in awarded:
+            if isinstance(item, dict) and item.get('iconUrl'):
+                from admin_panel.achievement_icons import normalize_icon_url
+                item['iconUrl'] = normalize_icon_url(item['iconUrl'], request=request)
         return Response({"success": True, "awarded": awarded})
+
+
+class ClaimEasterEggAliasView(EasterEggView):
+    @extend_schema(
+        operation_id="me_claim_easter_egg",
+        summary="Алиас активации пасхалки и получения ачивки",
+        request=None,
+        responses={200: EasterEggResponseSerializer, 403: EasterEggResponseSerializer},
+    )
+    def post(self, request):
+        return super().post(request)
 
 
 class UserAchievementsListView(APIView):
@@ -341,9 +399,17 @@ class TelegramConnectView(APIView):
     )
     def post(self, request):
         user = request.user
+        old_code = user.telegram_auth_code
         code = uuid.uuid4().hex[:16]
         user.telegram_auth_code = code
         user.save(update_fields=['telegram_auth_code', 'updated_at'])
+        if old_code:
+            cache_delete_safe(f'tg_auth_code_ttl:{old_code}')
+        cache_set_safe(
+            f'tg_auth_code_ttl:{code}',
+            {'user_id': user.id, 'exp': timezone.now().timestamp() + 900},
+            86400,
+        )
 
         bot_username = get_bot_username()
         link = f"https://t.me/{bot_username}?start={code}"
@@ -365,8 +431,11 @@ class TelegramDisconnectView(APIView):
     )
     def delete(self, request):
         user = request.user
+        old_code = user.telegram_auth_code
         user.telegram_chat_id = None
         user.telegram_username = None
         user.telegram_auth_code = None
         user.save(update_fields=['telegram_chat_id', 'telegram_username', 'telegram_auth_code', 'updated_at'])
+        if old_code:
+            cache_delete_safe(f'tg_auth_code_ttl:{old_code}')
         return Response({"success": True, "message": "Telegram успешно отвязан"})

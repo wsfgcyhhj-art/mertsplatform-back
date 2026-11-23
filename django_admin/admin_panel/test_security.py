@@ -224,10 +224,18 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(client.post('/api/v1/auth/refresh', {'refreshToken': login.json()['refreshToken']},
                                      format='json').status_code, 200)
 
-    @override_settings(CSRF_COOKIE_SECURE=True, CSRF_COOKIE_SAMESITE='None')
+    @override_settings(
+        DEBUG=True,
+        CSRF_COOKIE_SECURE=True,
+        CSRF_COOKIE_SAMESITE='None',
+        CORS_ALLOWED_ORIGIN_REGEXES=[
+            r'^http://(localhost|127\.0\.0\.1)(:\d+)?$',
+            r'^https://mertsplatform-[a-z0-9-]+\.vercel\.app$',
+        ],
+    )
     def test_cors_preflight_and_cookie_refresh_from_local_origin(self):
         client = APIClient(enforce_csrf_checks=True)
-        for origin in ('http://localhost:5173', 'http://127.0.0.1:8080', 'https://merts-preview.vercel.app'):
+        for origin in ('http://localhost:5173', 'http://127.0.0.1:8080', 'https://mertsplatform-preview.vercel.app'):
             response = client.options('/api/v1/auth/login', secure=True, HTTP_ORIGIN=origin,
                                       HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
                                       HTTP_ACCESS_CONTROL_REQUEST_HEADERS='authorization, x-csrftoken')
@@ -250,10 +258,28 @@ class SecurityIntegrationTests(TransactionTestCase):
         self.assertEqual(blocked.status_code, 403)
         refresh = client.post('/api/v1/auth/refresh', {}, secure=True, HTTP_ORIGIN=origin, HTTP_X_CSRFTOKEN=csrf)
         self.assertEqual(refresh.status_code, 200)
-        profile = client.get('/api/v1/users/me', secure=True, HTTP_ORIGIN='https://merts-preview.vercel.app',
+        profile = client.get('/api/v1/users/me', secure=True, HTTP_ORIGIN='https://mertsplatform-preview.vercel.app',
                              HTTP_AUTHORIZATION='Bearer ' + refresh.json()['accessToken'])
         self.assertEqual(profile.status_code, 200)
-        self.assertEqual(profile['Access-Control-Allow-Origin'], 'https://merts-preview.vercel.app')
+        self.assertEqual(profile['Access-Control-Allow-Origin'], 'https://mertsplatform-preview.vercel.app')
+
+    @override_settings(
+        DEBUG=False,
+        CORS_ALLOWED_ORIGINS=['https://mertsplatform.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[],
+    )
+    def test_cors_and_refresh_reject_localhost_and_arbitrary_vercel_when_debug_false(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.cookies['refreshToken'] = 'dummy-cookie-token'
+        for blocked_origin in ('http://localhost:5173', 'https://untrusted-preview.vercel.app'):
+            preflight = client.options('/api/v1/auth/login', HTTP_ORIGIN=blocked_origin,
+                                       HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST')
+            self.assertNotIn('Access-Control-Allow-Origin', preflight)
+            blocked_refresh = client.post('/api/v1/auth/refresh', {}, HTTP_ORIGIN=blocked_origin)
+            self.assertEqual(blocked_refresh.status_code, 403)
+        allowed = client.options('/api/v1/auth/login', HTTP_ORIGIN='https://mertsplatform.vercel.app',
+                                 HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST')
+        self.assertEqual(allowed['Access-Control-Allow-Origin'], 'https://mertsplatform.vercel.app')
 
     @override_settings(ALLOWED_HOSTS=['166.0.28.165.sslip.io', 'localhost', '127.0.0.1', 'testserver'])
     def test_vercel_cross_origin_auth_without_csrf(self):

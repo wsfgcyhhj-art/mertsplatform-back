@@ -317,12 +317,25 @@ SENSITIVE_KEY_TOKENS = (
     'apikey',
     'webhook',
     'credential',
+    'jwt',
+    'key',
+    'auth',
+    'dsn',
+    'database',
+    'smtp',
+    'cookie',
+    'session',
+    'fernet',
+    'hmac',
+    'cert',
+    'salt',
 )
 
 _ALLOWED_TG_HTML_TAGS = {
     'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
     'span', 'tg-spoiler', 'a', 'tg-emoji', 'code', 'pre', 'blockquote',
 }
+_BARE_AMP_RE = re.compile(r'&(?!lt;|gt;|amp;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)')
 
 
 def is_sensitive_setting_key(key: str) -> bool:
@@ -339,14 +352,23 @@ class _TelegramHTMLValidator(HTMLParser):
         t = tag.lower()
         if t not in _ALLOWED_TG_HTML_TAGS:
             raise ValidationError(f'Неподдерживаемый Telegram HTML-тег: <{tag}>.')
+        attr_map = dict(attrs)
         if t == 'a':
-            href = dict(attrs).get('href', '').strip()
-            if href and not (href.startswith(('http://', 'https://', 'tg://', 'mailto:', '{'))):
-                raise ValidationError('Недопустимый href в шаблоне Telegram.')
+            href = (attr_map.get('href') or '').strip()
+            if not href or not href.startswith(('http://', 'https://', 'tg://', 'mailto:', '{')):
+                raise ValidationError('Тег <a> должен содержать корректный атрибут href.')
+        elif t == 'span' and (attr_map.get('class') or '').strip() != 'tg-spoiler':
+            raise ValidationError('Тег <span> в Telegram HTML поддерживается только с class="tg-spoiler".')
         self.stack.append(t)
 
     def handle_startendtag(self, tag, attrs):
         raise ValidationError(f'Самозакрывающийся тег <{tag}/> не поддерживается Telegram HTML.')
+
+    def handle_data(self, data):
+        if '<' in data:
+            raise ValidationError('Символ < вне HTML-тега нужно экранировать как &lt;.')
+        if _BARE_AMP_RE.search(data):
+            raise ValidationError('Символ & должен быть экранирован как &amp;.')
 
     def handle_endtag(self, tag):
         t = tag.lower()
@@ -441,14 +463,14 @@ def validate_setting_value(key: str, raw: str, value_type: str, *, is_public: bo
         if role != 'STUDENT':
             raise ValidationError('По соображениям безопасности default_role может быть только STUDENT.')
         text = 'STUDENT'
-    elif key in ('avatar_max_mb', 'banner_max_mb') and not (1 <= parsed <= 25):
-        raise ValidationError(f'Лимит "{key}" должен быть от 1 до 25 МБ.')
-    elif key == 'default_start_month' and not (1 <= parsed <= 24):
-        raise ValidationError('Стартовый месяц должен быть от 1 до 24.')
-    elif key in ('default_task_points', 'streak_reward_points', 'easter_egg_reward_points') and not (0 <= parsed <= 10000):
-        raise ValidationError(f'Значение "{key}" должно быть от 0 до 10000.')
-    elif key in ('bonus_task_multiplier', 'streak_threshold_days') and not (1 <= parsed <= 365):
-        raise ValidationError(f'Значение "{key}" должно быть от 1 до 365.')
+    elif key in ('avatar_max_mb', 'banner_max_mb') and (type(parsed) is not int or not (1 <= parsed <= 25)):
+        raise ValidationError(f'Лимит "{key}" должен быть целым числом от 1 до 25 МБ.')
+    elif key == 'default_start_month' and (type(parsed) is not int or not (1 <= parsed <= 24)):
+        raise ValidationError('Стартовый месяц должен быть целым числом от 1 до 24.')
+    elif key in ('default_task_points', 'streak_reward_points', 'easter_egg_reward_points') and (type(parsed) is not int or not (0 <= parsed <= 10000)):
+        raise ValidationError(f'Значение "{key}" должно быть целым числом от 0 до 10000.')
+    elif key in ('bonus_task_multiplier', 'streak_threshold_days') and (type(parsed) is not int or not (1 <= parsed <= 365)):
+        raise ValidationError(f'Значение "{key}" должно быть целым числом от 1 до 365.')
     elif key in ('frontend_url', 'support_url') and stripped:
         URLValidator(schemes=['http', 'https'])(stripped)
     elif key.startswith('tg_template_') and stripped:
@@ -460,6 +482,7 @@ def validate_setting_value(key: str, raw: str, value_type: str, *, is_public: bo
 def invalidate_settings_cache() -> None:
     cache_delete_safe(SETTINGS_CACHE_KEY)
     cache_delete_safe(SYSTEM_CONFIG_CACHE_KEY)
+    cache_delete_safe('default_achievements_seeded:v1')
 
 
 def ensure_default_settings() -> None:

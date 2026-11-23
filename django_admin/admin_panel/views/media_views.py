@@ -98,6 +98,8 @@ class PresetBannerDetailView(APIView):
             )
         response = HttpResponse(preset['svg'], content_type='image/svg+xml; charset=utf-8')
         response['Cache-Control'] = 'public, max-age=86400'
+        response['Cross-Origin-Resource-Policy'] = 'cross-origin'
+        response['Content-Security-Policy'] = "default-src 'none'; sandbox"
         return response
 
 
@@ -122,6 +124,8 @@ class PresetAvatarDetailView(APIView):
             )
         response = HttpResponse(preset['svg'], content_type='image/svg+xml; charset=utf-8')
         response['Cache-Control'] = 'public, max-age=86400'
+        response['Cross-Origin-Resource-Policy'] = 'cross-origin'
+        response['Content-Security-Policy'] = "default-src 'none'; sandbox"
         return response
 
 
@@ -146,4 +150,6 @@ class PresetIconDetailView(APIView):
             )
         response = HttpResponse(preset['svg'], content_type='image/svg+xml; charset=utf-8')
         response['Cache-Control'] = 'public, max-age=86400'
+        response['Cross-Origin-Resource-Policy'] = 'cross-origin'
+        response['Content-Security-Policy'] = "default-src 'none'; sandbox"
         return response

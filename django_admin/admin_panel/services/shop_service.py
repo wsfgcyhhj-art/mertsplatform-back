@@ -14,7 +14,7 @@ def shop_balance(user):
     homework = latest_accepted(user.submissions.all()).aggregate(total=Sum('score', default=0))
     achievements = user.user_achievements.aggregate(total=Sum('achievement__points', default=0))
     adjustments = user.score_adjustments.aggregate(total=Sum('amount', default=0))
-    earned = homework['total'] + achievements['total'] + user.streak_count * 5 + adjustments['total']
+    earned = homework['total'] + achievements['total'] + adjustments['total']
     spent = user.shop_orders.filter(
         status__in=(ShopOrderStatus.PENDING, ShopOrderStatus.COMPLETED)
     ).aggregate(total=Sum('price_coins', default=0))['total']
@@ -39,7 +39,7 @@ def place_order(user, product_id, comment, request_key=None, expected_price=None
     product = ShopProduct.objects.select_for_update().get(pk=product_id, is_active=True)
     if expected_price is not None and expected_price != product.price_coins:
         raise ShopConflict('Цена изменилась. Обновите каталог перед покупкой.')
-    if product.stock == 0:
+    if product.stock <= 0:
         raise ShopConflict('Товар закончился.')
     balance = shop_balance(user)
     if balance['availableCoins'] < product.price_coins:
@@ -78,7 +78,7 @@ def process_order(order_id, status, operator):
         raise ValueError('Invalid shop order transition')
     user_id = ShopOrder.objects.values_list('user_id', flat=True).get(pk=order_id)
     User.objects.select_for_update().get(pk=user_id)
-    order = ShopOrder.objects.select_for_update().get(pk=order_id)
+    order = ShopOrder.objects.select_for_update(of=('self',)).select_related('product').get(pk=order_id)
     if order.status != ShopOrderStatus.PENDING:
         return False
 
@@ -90,6 +90,11 @@ def process_order(order_id, status, operator):
         product = ShopProduct.objects.select_for_update().get(pk=order.product_id)
         product.stock += 1
         product.save(update_fields=['stock'])
+        send_async_notification(
+            order.user_id,
+            f'ℹ️ <b>Заказ отменён.</b> Товар <b>{escape_html(order.product.title)}</b> — '
+            f'<b>{order.price_coins} баллов</b> возвращены на ваш баланс.',
+        )
     else:
         send_async_notification(
             order.user_id,

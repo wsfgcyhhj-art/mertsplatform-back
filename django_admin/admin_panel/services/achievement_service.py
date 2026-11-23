@@ -18,7 +18,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Начало пути',
         'description': 'Добро пожаловать на платформу! Первый шаг в мир разработки сделан.',
         'icon_url': '/api/v1/media/presets/icons/sparkles.svg',
-        'category': 'general',
+        'category': 'START',
         'trigger_type': TriggerTypeChoices.ON_REGISTER,
         'threshold': 1,
         'points': 10,
@@ -29,7 +29,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Первый рубеж',
         'description': 'Ваша первая практическая работа успешно проверена и принята ментором!',
         'icon_url': '/api/v1/media/presets/icons/check-circle.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.ACCEPTED_TASKS,
         'threshold': 1,
         'points': 15,
@@ -40,7 +40,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Первая двадцатка',
         'description': 'Набрано первые 20 баллов в общем рейтинге успеваемости.',
         'icon_url': '/api/v1/media/presets/icons/star.svg',
-        'category': 'points',
+        'category': 'SCORES',
         'trigger_type': TriggerTypeChoices.TOTAL_SCORE,
         'threshold': 20,
         'points': 20,
@@ -51,7 +51,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Полпути к вершине',
         'description': 'Вы набрали 50 баллов! Отличный темп и превосходная дисциплина.',
         'icon_url': '/api/v1/media/presets/icons/trophy.svg',
-        'category': 'points',
+        'category': 'SCORES',
         'trigger_type': TriggerTypeChoices.TOTAL_SCORE,
         'threshold': 50,
         'points': 30,
@@ -62,7 +62,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Любопытный исследователь',
         'description': 'Секретная пасхалка найдена! Настоящий инженер всегда изучает детали.',
         'icon_url': '/api/v1/media/presets/icons/search.svg',
-        'category': 'special',
+        'category': 'SECRET',
         'trigger_type': TriggerTypeChoices.EASTER_EGG,
         'threshold': 1,
         'points': 25,
@@ -73,7 +73,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Лидер месяца',
         'description': 'Первое место в общем зачете месяца! Невероятный результат.',
         'icon_url': '/api/v1/media/presets/icons/crown.svg',
-        'category': 'special',
+        'category': 'SPECIAL',
         'trigger_type': TriggerTypeChoices.MANUAL,
         'threshold': None,
         'points': 50,
@@ -84,7 +84,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Перфекционист',
         'description': 'Задание выполнено идеально с максимальным возможным баллом!',
         'icon_url': '/api/v1/media/presets/icons/zap.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.PERFECT_SCORE,
         'threshold': 1,
         'points': 20,
@@ -95,7 +95,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Охотник за бонусами',
         'description': 'Выполнено со звездочкой: первое бонусное задание сдано на отлично.',
         'icon_url': '/api/v1/media/presets/icons/flame.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.BONUS_TASKS,
         'threshold': 1,
         'points': 25,
@@ -106,7 +106,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Железная воля',
         'description': 'Непрерывный ежедневный стрик активности в течение 7 дней подряд!',
         'icon_url': '/api/v1/media/presets/icons/calendar.svg',
-        'category': 'streak',
+        'category': 'STREAK',
         'trigger_type': TriggerTypeChoices.STREAK_DAYS,
         'threshold': 7,
         'points': 35,
@@ -117,7 +117,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Работа над ошибками',
         'description': 'Задание отправлено на доработку и после правок успешно принято ментором.',
         'icon_url': '/api/v1/media/presets/icons/code.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.REVISION_ACCEPTED,
         'threshold': 1,
         'points': 15,
@@ -128,7 +128,7 @@ DEFAULT_ACHIEVEMENTS_DATA = [
         'title': 'Без лишних слов',
         'description': '3 разных задания приняты ментором с первой попытки (v1).',
         'icon_url': '/api/v1/media/presets/icons/rocket.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.FIRST_TRY_ACCEPTED,
         'threshold': 3,
         'points': 30,
@@ -137,22 +137,32 @@ DEFAULT_ACHIEVEMENTS_DATA = [
     {
         'code': 'MONTH_FINISHER',
         'title': 'Прорыв месяца',
-        'description': 'Успешно закрыты все 10 обязательных заданий учебного месяца!',
+        'description': 'Успешно закрыты первые 10 принятых заданий на платформе!',
         'icon_url': '/api/v1/media/presets/icons/target.svg',
-        'category': 'tasks',
+        'category': 'TASKS',
         'trigger_type': TriggerTypeChoices.ACCEPTED_TASKS,
         'threshold': 10,
         'points': 50,
-        'criteria': 'Принято 10 учебных заданий',
+        'criteria': 'Принято 10 учебных заданий на платформе',
     },
 ]
+
+_LEGACY_CATEGORY_MAP = {
+    'general': 'START',
+    'tasks': 'TASKS',
+    'points': 'SCORES',
+    'special': 'SPECIAL',
+    'streak': 'STREAK',
+}
 
 
 def ensure_default_achievements():
     """
     Ensures standard gamification achievements exist in database.
     """
-    from admin_panel.services.settings_service import get_setting
+    from admin_panel.services.settings_service import cache_get_safe, cache_set_safe, get_setting
+    if cache_get_safe('default_achievements_seeded:v1') and Achievement.objects.count() >= len(DEFAULT_ACHIEVEMENTS_DATA):
+        return
     streak_days = int(get_setting('streak_threshold_days', 7) or 7)
     streak_points = int(get_setting('streak_reward_points', 35) or 35)
     easter_points = int(get_setting('easter_egg_reward_points', 25) or 25)
@@ -165,7 +175,7 @@ def ensure_default_achievements():
             points = streak_points
         elif code == 'EASTER_EGG':
             points = easter_points
-        Achievement.objects.get_or_create(
+        ach, created = Achievement.objects.get_or_create(
             code=code,
             defaults={
                 'title': data['title'],
@@ -179,6 +189,10 @@ def ensure_default_achievements():
                 'is_active': True,
             }
         )
+        if not created and ach.category in _LEGACY_CATEGORY_MAP:
+            ach.category = data['category']
+            ach.save(update_fields=['category'])
+    cache_set_safe('default_achievements_seeded:v1', 1, 300)
 
 
 def award_achievement(user_id: str, code: str) -> Optional[Dict[str, Any]]:
@@ -250,9 +264,11 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
     if trigger_filter in (TriggerTypeChoices.ON_REGISTER, TriggerTypeChoices.EASTER_EGG):
         for ach in candidates:
             if ach.trigger_type == trigger_filter:
-                if ach.code == 'EASTER_EGG' and int(easter_override) != 25:
-                    ach.points = int(easter_override)
-                    ach.save(update_fields=['points'])
+                if ach.code == 'EASTER_EGG':
+                    target_pts = int(easter_override)
+                    if ach.points != target_pts:
+                        ach.points = target_pts
+                        ach.save(update_fields=['points'])
                 res = award_achievement(user_id, ach.code)
                 if res:
                     awarded.append(res)
@@ -264,13 +280,13 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
         for ach in candidates:
             if ach.trigger_type != TriggerTypeChoices.STREAK_DAYS:
                 continue
-            threshold = ach.threshold if ach.threshold is not None else 1
-            if ach.code == 'STREAK_MASTER' and int(streak_days_override) != 7:
-                threshold = int(streak_days_override)
+            threshold = int(streak_days_override) if ach.code == 'STREAK_MASTER' else (ach.threshold if ach.threshold is not None else 1)
             if current_streak >= threshold:
-                if ach.code == 'STREAK_MASTER' and int(streak_points_override) != 35 and ach.points != int(streak_points_override):
-                    ach.points = int(streak_points_override)
-                    ach.save(update_fields=['points'])
+                if ach.code == 'STREAK_MASTER':
+                    target_pts = int(streak_points_override)
+                    if ach.points != target_pts:
+                        ach.points = target_pts
+                        ach.save(update_fields=['points'])
                 res = award_achievement(user_id, ach.code)
                 if res:
                     awarded.append(res)
@@ -315,7 +331,10 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
         if task_meta and task_meta.is_bonus:
             bonus_accepted_task_ids.add(task_id)
 
-        had_revision = any(s.status == SubmissionStatusChoices.REVISION for s in task_subs)
+        had_revision = any(
+            s.status == SubmissionStatusChoices.REVISION or getattr(s, 'was_revised', False)
+            for s in task_subs
+        )
         accepted_on_v1 = any(s.version == 1 for s in accepted_for_task)
         if accepted_on_v1 and not had_revision:
             first_try_accepted_task_ids.add(task_id)
@@ -323,17 +342,18 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
         if had_revision:
             revision_accepted_task_ids.add(task_id)
 
-        if task_meta and task_meta.has_score and task_meta.max_score:
-            if any(s.score is not None and s.score >= task_meta.max_score for s in accepted_for_task):
+        latest_sub = latest.get(task_id)
+        if task_meta and task_meta.has_score and task_meta.max_score and latest_sub:
+            if latest_sub.score is not None and latest_sub.score >= task_meta.max_score:
                 perfect_score_task_ids.add(task_id)
 
     for ach in candidates:
-        threshold = ach.threshold if ach.threshold is not None else 1
-        if ach.code == 'STREAK_MASTER' and int(streak_days_override) != 7:
-            threshold = int(streak_days_override)
+        threshold = int(streak_days_override) if ach.code == 'STREAK_MASTER' else (ach.threshold if ach.threshold is not None else 1)
         should_award = False
 
-        if ach.trigger_type == TriggerTypeChoices.TOTAL_SCORE:
+        if ach.trigger_type == TriggerTypeChoices.ON_REGISTER:
+            should_award = True
+        elif ach.trigger_type == TriggerTypeChoices.TOTAL_SCORE:
             should_award = total_score >= threshold
         elif ach.trigger_type == TriggerTypeChoices.ACCEPTED_TASKS:
             should_award = len(accepted_task_ids) >= threshold
@@ -349,9 +369,11 @@ def evaluate_user_achievements(user_id: str, trigger_filter: str = 'ALL') -> Lis
             should_award = current_streak >= threshold
 
         if should_award:
-            if ach.code == 'STREAK_MASTER' and int(streak_points_override) != 35 and ach.points != int(streak_points_override):
-                ach.points = int(streak_points_override)
-                ach.save(update_fields=['points'])
+            if ach.code == 'STREAK_MASTER':
+                target_pts = int(streak_points_override)
+                if ach.points != target_pts:
+                    ach.points = target_pts
+                    ach.save(update_fields=['points'])
             res = award_achievement(user_id, ach.code)
             if res:
                 awarded.append(res)

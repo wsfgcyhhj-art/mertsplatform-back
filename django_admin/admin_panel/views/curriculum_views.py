@@ -1,5 +1,8 @@
-from django.db import transaction
-from admin_panel.models import User
+from collections.abc import Mapping
+from datetime import timezone as dt_timezone
+from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
+from admin_panel.models import ALLOWED_SUBMISSION_TRANSITIONS, User
 from django.core.validators import URLValidator
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
@@ -41,37 +44,14 @@ class TasksListResponseSerializer(PaginatedMetaMixin):
 
 class SubmissionCreateSerializer(serializers.Serializer):
     taskId = serializers.CharField(max_length=64)
-    solutionLink = serializers.CharField(max_length=500)
-    comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    solutionLink = serializers.CharField(max_length=500, validators=[URLValidator(schemes=['https', 'http'])])
+    comment = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=10000)
 
 
 class SubmissionsListResponseSerializer(PaginatedMetaMixin):
     submissions = SubmissionSerializer(many=True)
 from admin_panel.services.telegram_service import notify_submission_created
 from admin_panel.views.auth_views import update_user_streak
-
-ALLOWED_SUBMISSION_TRANSITIONS = {
-    SubmissionStatusChoices.SENT: {
-        SubmissionStatusChoices.SENT,
-        SubmissionStatusChoices.IN_REVIEW,
-        SubmissionStatusChoices.REVISION,
-        SubmissionStatusChoices.ACCEPTED,
-    },
-    SubmissionStatusChoices.IN_REVIEW: {
-        SubmissionStatusChoices.IN_REVIEW,
-        SubmissionStatusChoices.REVISION,
-        SubmissionStatusChoices.ACCEPTED,
-    },
-    SubmissionStatusChoices.REVISION: {
-        SubmissionStatusChoices.REVISION,
-        SubmissionStatusChoices.IN_REVIEW,
-        SubmissionStatusChoices.ACCEPTED,
-    },
-    SubmissionStatusChoices.ACCEPTED: {
-        SubmissionStatusChoices.ACCEPTED,
-        SubmissionStatusChoices.REVISION,
-    },
-}
 
 
 def task_is_visible(task, user):
@@ -104,13 +84,15 @@ class LessonsListView(APIView):
             # Student: only their group or ALL, and month <= current_month
             max_allowed = max(1, user.current_month or 1)
             raw_month = qparam(request, 'month')
-            if raw_month and raw_month.lower() != 'all':
+            if raw_month and raw_month.strip().lower() != 'all':
                 try:
                     m = int(raw_month)
-                    m = min(m, max_allowed)
-                    qs = qs.filter(month=m)
                 except ValueError:
                     qs = qs.filter(month__lte=max_allowed)
+                else:
+                    if not 1 <= m <= 24:
+                        return Response({'message': 'Invalid month parameter'}, status=400)
+                    qs = qs.filter(month=min(m, max_allowed))
             else:
                 qs = qs.filter(month__lte=max_allowed)
 
@@ -121,11 +103,15 @@ class LessonsListView(APIView):
         else:
             # Mentor
             raw_month = qparam(request, 'month')
-            if raw_month and raw_month.lower() != 'all':
+            if raw_month and raw_month.strip().lower() != 'all':
                 try:
-                    qs = qs.filter(month=int(raw_month))
+                    m = int(raw_month)
                 except ValueError:
                     pass
+                else:
+                    if not 1 <= m <= 24:
+                        return Response({'message': 'Invalid month parameter'}, status=400)
+                    qs = qs.filter(month=m)
             group = qparam(request, 'groupNumber', 'group_number')
             if group:
                 qs = qs.filter(group_number__iexact=group.strip())
@@ -186,11 +172,15 @@ class TasksListView(APIView):
                 qs = qs.filter(group_number__iexact=group.strip())
 
         raw_month = qparam(request, 'month')
-        if raw_month and raw_month.lower() != 'all':
+        if raw_month and raw_month.strip().lower() != 'all':
             try:
-                qs = qs.filter(month=int(raw_month))
+                m = int(raw_month)
             except ValueError:
                 qs = qs.filter(month=user.current_month)
+            else:
+                if not 1 <= m <= 24:
+                    return Response({'message': 'Invalid month parameter'}, status=400)
+                qs = qs.filter(month=m)
         elif not raw_month and user.role != RoleChoices.ADMIN:
             qs = qs.filter(month=user.current_month)
 
@@ -331,13 +321,14 @@ class TaskDetailView(APIView):
             409: ErrorResponseSerializer,
         },
     )
+    @transaction.atomic
     def delete(self, request, id: str):
         if request.user.role != RoleChoices.ADMIN:
             return Response(
                 {"statusCode": 403, "error": "Forbidden", "message": "Admin privileges required"},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        task = Task.objects.filter(id=id).first()
+        task = Task.objects.select_for_update().filter(id=id).first()
         if not task:
             return Response(
                 {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
@@ -352,7 +343,17 @@ class TaskDetailView(APIView):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        task.delete()
+        try:
+            task.delete()
+        except (ProtectedError, IntegrityError):
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "Нельзя удалить задание, по которому уже есть сдачи студентов.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response({"message": "Task deleted successfully"})
 
 
@@ -392,14 +393,20 @@ class SubmissionsView(APIView):
 
         st = qparam(request, 'status')
         if st:
-            qs = qs.filter(status=st.upper())
+            st_up = st.strip().upper()
+            if st_up not in SubmissionStatusChoices.values:
+                return Response({'message': 'Invalid status filter'}, status=400)
+            qs = qs.filter(status=st_up)
 
         raw_month = qparam(request, 'month')
         if raw_month:
             try:
-                qs = qs.filter(task__month=int(raw_month))
-            except ValueError:
-                pass
+                month_val = int(raw_month)
+            except (TypeError, ValueError):
+                return Response({'message': 'Invalid month filter'}, status=400)
+            if not 1 <= month_val <= 24:
+                return Response({'message': 'month must be between 1 and 24'}, status=400)
+            qs = qs.filter(task__month=month_val)
 
         search = (qparam(request, 'search') or '').strip()
         if search:
@@ -421,7 +428,7 @@ class SubmissionsView(APIView):
         if isinstance(page_meta, dict) and 'error' in page_meta:
             return Response({'message': page_meta['error']}, status=400)
 
-        serializer = SubmissionSerializer(items, many=True)
+        serializer = SubmissionSerializer(items, many=True, context={'request': request})
         payload = {"submissions": serializer.data}
         if page_meta is not None:
             payload.update(page_meta)
@@ -440,10 +447,19 @@ class SubmissionsView(APIView):
     )
     @transaction.atomic
     def post(self, request):
+        if not isinstance(request.data, Mapping):
+            return Response({"statusCode": 400, "error": "Bad Request", "message": "Invalid payload"}, status=400)
+        req_serializer = SubmissionCreateSerializer(data=request.data)
+        if not req_serializer.is_valid():
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": req_serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        req_data = req_serializer.validated_data
         user = User.objects.select_for_update().get(pk=request.user.pk)
-        task_id = request.data.get('taskId')
-        solution_link = (request.data.get('solutionLink') or '').strip()
-        comment = (request.data.get('comment') or '').strip() or None
+        task_id = req_data['taskId'].strip()
+        solution_link = req_data['solutionLink'].strip()
+        comment = (req_data.get('comment') or '').strip() or None
 
         if not task_id or not solution_link:
             return Response(
@@ -462,21 +478,20 @@ class SubmissionsView(APIView):
         if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
             return Response({'message': 'Forbidden'}, status=403)
 
-        try:
-            URLValidator(schemes=['https', 'http'])(solution_link)
-        except ValidationError:
-            return Response({'message': 'Укажите HTTP(S) ссылку на решение.'}, status=400)
-
         if Submission.objects.filter(
             user_id=user.id,
             task_id=task.id,
-            status=SubmissionStatusChoices.ACCEPTED,
+            status__in=(
+                SubmissionStatusChoices.SENT,
+                SubmissionStatusChoices.IN_REVIEW,
+                SubmissionStatusChoices.ACCEPTED,
+            ),
         ).exists():
             return Response(
                 {
                     "statusCode": 409,
                     "error": "Conflict",
-                    "message": "Задание уже принято ментором, повторная сдача не требуется.",
+                    "message": "У вас уже есть активная или принятая сдача по этому заданию.",
                 },
                 status=status.HTTP_409_CONFLICT,
             )
@@ -485,20 +500,26 @@ class SubmissionsView(APIView):
         last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
         version = (last_sub.version + 1) if last_sub else 1
 
-        submission = Submission.objects.create(
-            user=user,
-            task=task,
-            version=version,
-            solution_link=solution_link,
-            comment=comment,
-            status=SubmissionStatusChoices.SENT,
-        )
+        try:
+            submission = Submission.objects.create(
+                user=user,
+                task=task,
+                version=version,
+                solution_link=solution_link,
+                comment=comment,
+                status=SubmissionStatusChoices.SENT,
+            )
+        except IntegrityError:
+            return Response(
+                {"statusCode": 409, "error": "Conflict", "message": "У вас уже есть активная или принятая сдача по этому заданию."},
+                status=status.HTTP_409_CONFLICT,
+            )
         update_user_streak(user)
 
         # Notify mentors via Telegram
         notify_submission_created(submission)
 
-        serializer = SubmissionSerializer(submission)
+        serializer = SubmissionSerializer(submission, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -526,7 +547,7 @@ class SubmissionDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        serializer = SubmissionSerializer(sub)
+        serializer = SubmissionSerializer(sub, context={'request': request})
         return Response(serializer.data)
 
     @extend_schema(
@@ -547,7 +568,16 @@ class SubmissionDetailView(APIView):
                 {"statusCode": 403, "error": "Forbidden", "message": "Mentor privileges required"},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        if not isinstance(request.data, Mapping):
+            return Response({"statusCode": 400, "error": "Bad Request", "message": "Invalid payload"}, status=400)
 
+        owner_id = Submission.objects.filter(id=id).values_list('user_id', flat=True).first()
+        if not owner_id:
+            return Response(
+                {"statusCode": 404, "error": "Not Found", "message": "Submission not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        User.objects.select_for_update().filter(pk=owner_id).first()
         try:
             sub = Submission.objects.select_for_update(of=('self',)).select_related('user', 'task').get(id=id)
         except Submission.DoesNotExist:
@@ -561,7 +591,10 @@ class SubmissionDetailView(APIView):
         data = review.validated_data
         expected_updated_at = data.get('expectedUpdatedAt')
         if expected_updated_at is not None and sub.updated_at is not None:
-            if abs((sub.updated_at - expected_updated_at).total_seconds()) > 0.005:
+            sub_updated_at = sub.updated_at
+            if timezone.is_naive(sub_updated_at):
+                sub_updated_at = timezone.make_aware(sub_updated_at, dt_timezone.utc)
+            if abs((sub_updated_at - expected_updated_at).total_seconds()) > 0.005:
                 return Response(
                     {
                         "statusCode": 409,
@@ -581,6 +614,19 @@ class SubmissionDetailView(APIView):
                         "message": f"Недопустимый переход статуса: {sub.status} -> {new_status}.",
                     },
                     status=status.HTTP_400_BAD_REQUEST,
+                )
+            if new_status == SubmissionStatusChoices.ACCEPTED and Submission.objects.filter(
+                user_id=sub.user_id,
+                task_id=sub.task_id,
+                status=SubmissionStatusChoices.ACCEPTED,
+            ).exclude(pk=sub.pk).exists():
+                return Response(
+                    {
+                        "statusCode": 409,
+                        "error": "Conflict",
+                        "message": "У студента уже есть принятая версия по этому заданию.",
+                    },
+                    status=status.HTTP_409_CONFLICT,
                 )
             sub.status = new_status
         if 'score' in data:
@@ -606,5 +652,5 @@ class SubmissionDetailView(APIView):
         sub.reviewed_at = timezone.now()
         sub.save()  # Triggers post_save signal -> evaluates achievements and notifies student via on_commit
 
-        serializer = SubmissionSerializer(sub)
+        serializer = SubmissionSerializer(sub, context={'request': request})
         return Response(serializer.data)

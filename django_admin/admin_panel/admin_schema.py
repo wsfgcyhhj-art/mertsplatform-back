@@ -8,7 +8,7 @@ from django.utils.deprecation import MiddlewareMixin
 class AdminSchemaGuard(MiddlewareMixin):
     def process_exception(self, request, exception):
         if not (request.path.rstrip('/') == '/admin/login' or
-                request.path.startswith('/admin/admin_panel/studygroup/')):
+                request.path.startswith('/admin/admin_panel/')):
             return None
         if not isinstance(exception, (ProgrammingError, OperationalError)):
             return None

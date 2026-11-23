@@ -39,27 +39,8 @@ def parse_month_from_group_name(group_name: Optional[str]) -> int:
 
 
 def ensure_study_groups_synced() -> None:
-    """
-    Scans existing User, Lesson, and Task records and ensures all unique group_numbers
-    are recorded as StudyGroup entities in the database.
-    """
-    from admin_panel.models import User, Lesson, Task, StudyGroup
-
-    try:
-        user_groups = User.objects.exclude(group_number__isnull=True).exclude(group_number='').values_list('group_number', flat=True).distinct()
-        lesson_groups = Lesson.objects.exclude(group_number__isnull=True).exclude(group_number='').values_list('group_number', flat=True).distinct()
-        task_groups = Task.objects.exclude(group_number__isnull=True).exclude(group_number='').values_list('group_number', flat=True).distinct()
-
-        all_names = set()
-        for g in list(user_groups) + list(lesson_groups) + list(task_groups):
-            if g and str(g).strip() and str(g).strip().upper() != 'ALL':
-                all_names.add(str(g).strip())
-
-        existing_names = set(StudyGroup.objects.values_list('name', flat=True))
-        missing = all_names - existing_names
-
-    except Exception as e:
-        logger.warning("Error syncing study groups: %s", e)
+    """Compatibility no-op kept for legacy callers."""
+    return None
 
 
 def get_study_group_choices(include_all: bool = True) -> List[Tuple[str, str]]:
@@ -67,6 +48,7 @@ def get_study_group_choices(include_all: bool = True) -> List[Tuple[str, str]]:
     Generates a list of (value, label) tuples for Django forms / admin Select dropdowns.
     Format: 'js-02 (Месяц 2 • 14 студентов)'
     """
+    from django.db.models import Count
     from admin_panel.models import StudyGroup, User, RoleChoices
 
     choices: List[Tuple[str, str]] = []
@@ -74,9 +56,15 @@ def get_study_group_choices(include_all: bool = True) -> List[Tuple[str, str]]:
         choices.append(('', '— Все группы месяца (общий доступ) —'))
 
     try:
-        groups = StudyGroup.objects.filter(is_active=True).order_by('month', 'name')
+        groups = list(StudyGroup.objects.filter(is_active=True).order_by('month', 'name'))
+        counts = dict(
+            User.objects.filter(role=RoleChoices.STUDENT, group_number__in=[g.name for g in groups])
+            .values('group_number')
+            .annotate(cnt=Count('id'))
+            .values_list('group_number', 'cnt')
+        )
         for g in groups:
-            st_count = User.objects.filter(role=RoleChoices.STUDENT, group_number=g.name).count()
+            st_count = counts.get(g.name, 0)
             count_label = f"{st_count} студ." if st_count > 0 else "нет студентов"
             label = f"{g.name} — Месяц {g.month} ({count_label})"
             choices.append((g.name, label))

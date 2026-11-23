@@ -58,14 +58,14 @@ def find_preset_avatar(slug: str) -> Optional[Dict[str, str]]:
     return None
 
 def get_all_media_presets_catalog(request=None):
-    from admin_panel.achievement_icons import PRESET_ACHIEVEMENT_ICONS, normalize_icon_url
+    from admin_panel.achievement_icons import PRESET_ACHIEVEMENT_ICONS, normalize_icon_url, to_absolute_media_url
     return {
         "banners": [
-            {"slug": b["slug"], "title": b["title"], "url": b["url"], "dataUri": b["data_uri"]}
+            {"slug": b["slug"], "title": b["title"], "url": to_absolute_media_url(b["url"], request=request), "dataUri": b["data_uri"]}
             for b in PRESET_BANNERS
         ],
         "avatars": [
-            {"slug": a["slug"], "title": a["title"], "url": a["url"], "dataUri": a["data_uri"]}
+            {"slug": a["slug"], "title": a["title"], "url": to_absolute_media_url(a["url"], request=request), "dataUri": a["data_uri"]}
             for a in PRESET_AVATARS
         ],
         "achievementIcons": [

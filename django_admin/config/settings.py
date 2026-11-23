@@ -40,7 +40,7 @@ if TESTING:
 RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173' if DEBUG else 'https://mertsplatform.vercel.app').rstrip('/')
 
 
 def _parse_origins(raw: str, extras: list[str]) -> list[str]:
@@ -60,10 +60,7 @@ CORS_ALLOWED_ORIGINS = _parse_origins(
     ['https://mertsplatform.vercel.app'],
 )
 LOCAL_FRONTEND_ORIGIN_RE = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    LOCAL_FRONTEND_ORIGIN_RE,
-    r"^https://[a-zA-Z0-9-]+\.vercel\.app$",
-]
+CORS_ALLOWED_ORIGIN_REGEXES = [LOCAL_FRONTEND_ORIGIN_RE] if DEBUG else []
 SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', str(not DEBUG)).lower() in ('true', '1')
 CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', str(not DEBUG)).lower() in ('true', '1')
 SESSION_COOKIE_HTTPONLY = True
@@ -144,6 +141,7 @@ DATABASES = {
     } if TESTING and not os.getenv('TEST_DATABASE_URL') else dj_database_url.parse(
         database_url,
         conn_max_age=600,
+        conn_health_checks=True,
         ssl_require=database_requires_ssl
     )
 }
@@ -403,13 +401,15 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+JWT_ACCESS_SECRET = os.getenv('JWT_ACCESS_SECRET', '').strip()
+
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': False,
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
+    'SIGNING_KEY': JWT_ACCESS_SECRET or SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
@@ -444,7 +444,8 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
 
 # Fail closed until the immutable owner IDs and Telegram webhook secret are configured.
 PLATFORM_OWNER_USER_ID = os.getenv('PLATFORM_OWNER_USER_ID', '').strip()
-PLATFORM_OWNER_ADMIN_ID = os.getenv('PLATFORM_OWNER_ADMIN_ID', '1').strip()
+_default_owner_admin_id = '1' if (DEBUG or TESTING) else ''
+PLATFORM_OWNER_ADMIN_ID = os.getenv('PLATFORM_OWNER_ADMIN_ID', _default_owner_admin_id).strip()
 TELEGRAM_WEBHOOK_SECRET = os.getenv('TELEGRAM_WEBHOOK_SECRET', '').strip()
 LOGGING = {
     'version': 1, 'disable_existing_loggers': False,

@@ -25,6 +25,7 @@ ACHIEVEMENT_CATEGORIES = [
     {"code": "SCORES", "label": "Баллы"},
     {"code": "SECRET", "label": "Секретные"},
     {"code": "SPECIAL", "label": "Особые"},
+    {"code": "STREAK", "label": "Стрик"},
     {"code": "general", "label": "Общие"},
 ]
 
@@ -133,9 +134,10 @@ class SystemConfigView(APIView):
         responses={200: SystemConfigResponseSerializer},
     )
     def get(self, request):
-        cached = cache_get_safe(SYSTEM_CONFIG_CACHE_KEY)
-        if cached is not None:
-            return Response(cached)
+        origin = f"{request.scheme}://{request.get_host()}"
+        cached_bucket = cache_get_safe(SYSTEM_CONFIG_CACHE_KEY)
+        if isinstance(cached_bucket, dict) and origin in cached_bucket:
+            return Response(cached_bucket[origin])
 
         cfg = get_all_settings()
         public_cfg = get_public_settings()
@@ -187,7 +189,7 @@ class SystemConfigView(APIView):
             },
             "paginationDefaults": {
                 "defaultPage": 1,
-                "defaultLimit": 20,
+                "defaultLimit": 50,
                 "maxLimit": 200,
             },
             "telegram": {
@@ -200,7 +202,9 @@ class SystemConfigView(APIView):
             "settings": public_cfg,
             "mediaPresets": catalog,
         }
-        cache_set_safe(SYSTEM_CONFIG_CACHE_KEY, payload, SETTINGS_CACHE_TTL)
+        new_bucket = dict(cached_bucket) if isinstance(cached_bucket, dict) and len(cached_bucket) < 20 else {}
+        new_bucket[origin] = payload
+        cache_set_safe(SYSTEM_CONFIG_CACHE_KEY, new_bucket, SETTINGS_CACHE_TTL)
         return Response(payload)
 
 

@@ -25,6 +25,30 @@ class SubmissionStatusChoices(models.TextChoices):
     ACCEPTED = 'ACCEPTED', 'Принято (ACCEPTED)'
 
 
+ALLOWED_SUBMISSION_TRANSITIONS = {
+    SubmissionStatusChoices.SENT: {
+        SubmissionStatusChoices.SENT,
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.IN_REVIEW: {
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.REVISION: {
+        SubmissionStatusChoices.REVISION,
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.ACCEPTED,
+    },
+    SubmissionStatusChoices.ACCEPTED: {
+        SubmissionStatusChoices.ACCEPTED,
+        SubmissionStatusChoices.REVISION,
+    },
+}
+
+
 class TriggerTypeChoices(models.TextChoices):
     MANUAL = 'MANUAL', 'Ручная выдача (MANUAL)'
     ON_REGISTER = 'ON_REGISTER', 'При регистрации / первом входе (ON_REGISTER)'
@@ -44,6 +68,7 @@ class AchievementCategoryChoices(models.TextChoices):
     SCORES = 'SCORES', 'Баллы (SCORES)'
     SECRET = 'SECRET', 'Секретные (SECRET)'
     SPECIAL = 'SPECIAL', 'Особые (SPECIAL)'
+    STREAK = 'STREAK', 'Стрик (STREAK)'
     GENERAL = 'general', 'Общие (general)'
 
 
@@ -144,12 +169,13 @@ class User(AtomicModel):
         if not self.password_hash.startswith(('$2a$', '$2b$', '$2y$')):
             return check_password(raw_password, self.password_hash)
         # Existing accounts include bcrypt(raw) and bcrypt(SHA256(raw)).
-        candidates = [hashlib.sha256(raw_password.encode()).hexdigest().encode()]
-        if not self.password_uses_sha256 and len(raw_password.encode()) <= 72:
-            candidates.insert(0, raw_password.encode())
         try:
-            return any(bcrypt.checkpw(candidate, self.password_hash.encode()) for candidate in candidates)
-        except ValueError:
+            raw_bytes = raw_password.encode('utf-8')
+            candidates = [hashlib.sha256(raw_bytes).hexdigest().encode('ascii')]
+            if not self.password_uses_sha256 and len(raw_bytes) <= 72:
+                candidates.insert(0, raw_bytes)
+            return any(bcrypt.checkpw(candidate, self.password_hash.encode('utf-8')) for candidate in candidates)
+        except (ValueError, UnicodeEncodeError):
             return False
 
     def set_password(self, raw_password: str) -> None:
@@ -170,8 +196,7 @@ class User(AtomicModel):
 
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
-        if self.telegram_chat_id:
-            self.telegram_chat_id = self.telegram_chat_id.strip() or None
+        self.telegram_chat_id = (self.telegram_chat_id or '').strip() or None
         study_group = None
         if self.study_group_id:
             try:
@@ -182,7 +207,10 @@ class User(AtomicModel):
             self.group_number = study_group.name
         elif self.group_number:
             self.group_number = self.group_number.strip()
-            self.study_group = StudyGroup.objects.filter(name=self.group_number).first()
+            matched = StudyGroup.objects.filter(name__iexact=self.group_number).first()
+            self.study_group = matched
+            if matched:
+                self.group_number = matched.name
         if self.group_number and (not self.current_month or self.current_month == 1):
             from admin_panel.services.group_service import parse_month_from_group_name
             extracted = parse_month_from_group_name(self.group_number)
@@ -330,8 +358,8 @@ class Task(AtomicModel):
 
 class Submission(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
-    user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='submissions', verbose_name='Студент')
-    task = models.ForeignKey(Task, models.DO_NOTHING, db_column='task_id', related_name='submissions', verbose_name='Задание')
+    user = models.ForeignKey(User, models.PROTECT, db_column='user_id', related_name='submissions', verbose_name='Студент')
+    task = models.ForeignKey(Task, models.PROTECT, db_column='task_id', related_name='submissions', verbose_name='Задание')
     reviewer = models.ForeignKey(
         User,
         models.SET_NULL,
@@ -345,6 +373,7 @@ class Submission(AtomicModel):
     comment = models.TextField('Комментарий студента', blank=True, null=True)
     solution_link = models.CharField('Ссылка на GitHub', max_length=500)
     status = models.CharField('Статус', max_length=32, choices=SubmissionStatusChoices.choices, default=SubmissionStatusChoices.SENT)
+    was_revised = models.BooleanField('Была на доработке', default=False, db_default=False)
     score = models.IntegerField('Баллы', blank=True, null=True)
     reviewer_comment = models.TextField('Комментарий ревьюера', blank=True, null=True)
     mentor_telegram_msg_id = models.CharField('ID сообщения ментора в TG', max_length=255, blank=True, null=True)
@@ -363,6 +392,8 @@ class Submission(AtomicModel):
 
     def save(self, *args, **kwargs):
         self.updated_at = timezone.now()
+        if self.status == SubmissionStatusChoices.REVISION:
+            self.was_revised = True
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -372,8 +403,8 @@ class Submission(AtomicModel):
 class ScoreAdjustment(AtomicModel):
     idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True)
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
-    user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='score_adjustments', verbose_name='Студент')
-    admin = models.ForeignKey(User, models.DO_NOTHING, db_column='admin_id', related_name='given_adjustments', verbose_name='Администратор')
+    user = models.ForeignKey(User, models.PROTECT, db_column='user_id', related_name='score_adjustments', verbose_name='Студент')
+    admin = models.ForeignKey(User, models.PROTECT, db_column='admin_id', related_name='given_adjustments', verbose_name='Администратор')
     amount = models.IntegerField('Изменение баллов (+/-)')
     reason = models.TextField('Причина')
     month = models.IntegerField('Месяц', default=1)
@@ -436,8 +467,8 @@ class Achievement(models.Model):
 
 class UserAchievement(AtomicModel):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
-    user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='user_achievements', verbose_name='Студент')
-    achievement = models.ForeignKey(Achievement, models.DO_NOTHING, db_column='achievement_id', related_name='user_achievements', verbose_name='Достижение')
+    user = models.ForeignKey(User, models.PROTECT, db_column='user_id', related_name='user_achievements', verbose_name='Студент')
+    achievement = models.ForeignKey(Achievement, models.PROTECT, db_column='achievement_id', related_name='user_achievements', verbose_name='Достижение')
     awarded_at = models.DateTimeField('Дата награждения', default=timezone.now)
 
     class Meta:
@@ -454,7 +485,7 @@ class UserAchievement(AtomicModel):
 
 class MonthlyScoreArchive(models.Model):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
-    user = models.ForeignKey(User, models.DO_NOTHING, db_column='user_id', related_name='monthly_archives', verbose_name='Студент')
+    user = models.ForeignKey(User, models.PROTECT, db_column='user_id', related_name='monthly_archives', verbose_name='Студент')
     month = models.IntegerField('Месяц')
     final_score = models.IntegerField('Итоговый балл')
     tasks_accepted_count = models.IntegerField('Принято задач')

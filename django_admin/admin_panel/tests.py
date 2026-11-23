@@ -199,7 +199,7 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         )
         self.assertEqual(upload_resp.status_code, 200)
         avatar_url = upload_resp.json()['avatarUrl']
-        self.assertTrue(avatar_url.startswith('/api/v1/media/'))
+        self.assertTrue(avatar_url.startswith('http://testserver/api/v1/media/'))
 
         # Fetch binary from GET /api/v1/media/<id>
         media_id = avatar_url.split('/')[-1]
@@ -405,7 +405,15 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         }
         form2 = AchievementAdminForm(data=form_data2, files={'custom_icon_file': uploaded_file})
         self.assertTrue(form2.is_valid(), form2.errors)
-        icon_url = form2.cleaned_data['icon_url']
+        self.assertEqual(MediaAsset.objects.filter(kind='ACHIEVEMENT_ICON').count(), 0)
+
+        # Save via AchievementAdmin creates MediaAsset and sets icon_url
+        from unittest.mock import MagicMock
+        site = AdminSite()
+        admin_obj = AchievementAdmin(Achievement, site)
+        ach_instance = form2.save(commit=False)
+        admin_obj.save_model(MagicMock(), ach_instance, form2, change=False)
+        icon_url = ach_instance.icon_url
         self.assertTrue(icon_url.startswith('/api/v1/media/'))
 
         # Verify MediaAsset record in DB
@@ -415,9 +423,6 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         self.assertEqual(asset.mime_type, 'image/webp')
 
         # 3. Test AchievementAdmin badges
-        site = AdminSite()
-        admin_obj = AchievementAdmin(Achievement, site)
-        ach_instance = Achievement(code='CUSTOM_UPLOAD_TEST', icon_url=icon_url)
         preview_html = admin_obj.icon_preview(ach_instance)
         self.assertIn(f'src="{icon_url}"', preview_html)
         badge_html = admin_obj.icon_source_badge(ach_instance)
@@ -515,7 +520,12 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
             self.assertFalse(mock_send_single.called)
 
         # 4. UserAchievement Trigger
-        ach = Achievement.objects.get(code='WELCOME')
+        ach = Achievement.objects.create(
+            code='MANUAL_NOTIFY_TEST',
+            title='Ручная ачивка',
+            trigger_type='MANUAL',
+            points=10,
+        )
         with patch('admin_panel.services.telegram_service.send_async_notification') as mock_send_single:
             UserAchievement.objects.create(
                 user=student,
@@ -666,6 +676,9 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         site = AdminSite()
         user_admin = UserAdmin(User, site)
         mock_req = MagicMock()
+        mock_req.user.pk = 1
+        mock_req.user.is_authenticated = True
+        mock_req.user.is_superuser = True
         mock_msgs = []
         user_admin.message_user = lambda req, msg, level=None: mock_msgs.append((msg, level))
         with patch('httpx.Client.post') as mock_post:
@@ -704,6 +717,10 @@ class AdminSchemaRegressionTests(TransactionTestCase):
             self.assertEqual(self.client.get('/admin/admin_panel/studygroup/').status_code, 503)
 
     def test_admin_sections_search_and_group_filter(self):
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(self.owner.pk)):
+            self._run_admin_sections_search_and_group_filter()
+
+    def _run_admin_sections_search_and_group_filter(self):
         self.client.force_login(self.owner)
         group = StudyGroup.objects.create(name='audit-js')
         other_group = StudyGroup.objects.create(name='audit-py')
@@ -1224,35 +1241,36 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
         self.assertEqual(t_resp.json()['tasks'][0]['title'], 'Бонус React')
 
         # PlatformSettingAdmin permissions & UserAdmin bulk actions
-        self.client.force_login(self.owner)
-        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 200)
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(self.owner.pk)):
+            self.client.force_login(self.owner)
+            self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 200)
 
-        staff_only = User.objects.create(login='junior_staff', password_hash='x', role=RoleChoices.ADMIN, id='999999')
-        from django.contrib.auth import get_user_model
-        non_owner_dj = get_user_model().objects.create_user(username='junior_staff', password='Staff-Password-2026!', is_staff=True)
-        self.client.force_login(non_owner_dj)
-        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 200)
-        self.assertEqual(self.client.get(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/').status_code, 200)
-        self.assertEqual(
-            self.client.post(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/', {'value': 'tampered'}).status_code,
-            403,
-        )
-        self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/add/').status_code, 403)
-        staff_only.delete()
+            staff_only = User.objects.create(login='junior_staff', password_hash='x', role=RoleChoices.ADMIN, id='999999')
+            from django.contrib.auth import get_user_model
+            non_owner_dj = get_user_model().objects.create_user(username='junior_staff', password='Staff-Password-2026!', is_staff=True)
+            self.client.force_login(non_owner_dj)
+            self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 403)
+            self.assertEqual(self.client.get(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/').status_code, 403)
+            self.assertEqual(
+                self.client.post(f'/admin/admin_panel/platformsetting/{tpl.pk}/change/', {'value': 'tampered'}).status_code,
+                403,
+            )
+            self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/add/').status_code, 403)
+            staff_only.delete()
 
-        self.client.force_login(self.owner)
-        self.client.post('/admin/admin_panel/user/', {'action': 'recalculate_student_scores', '_selected_action': [st.pk]})
-        self.assertEqual(MonthlyScoreArchive.objects.get(user=st, month=1).final_score, 18)
+            self.client.force_login(self.owner)
+            self.client.post('/admin/admin_panel/user/', {'action': 'recalculate_student_scores', '_selected_action': [st.pk]})
+            self.assertEqual(MonthlyScoreArchive.objects.get(user=st, month=1).final_score, 18)
 
-        self.client.post('/admin/admin_panel/user/', {'action': 'reevaluate_achievements', '_selected_action': [st.pk]})
-        self.assertTrue(UserAchievement.objects.filter(user=st, achievement__code='STREAK_MASTER').exists())
+            self.client.post('/admin/admin_panel/user/', {'action': 'reevaluate_achievements', '_selected_action': [st.pk]})
+            self.assertTrue(UserAchievement.objects.filter(user=st, achievement__code='STREAK_MASTER').exists())
 
-        TelegramOutbox.objects.all().delete()
-        broadcast_resp = self.client.post('/admin/admin_panel/user/', {
-            'action': 'send_custom_telegram_message',
-            '_selected_action': [st.pk],
-            'apply': '1',
-            'message_text': 'Важное объявление!',
-        })
-        self.assertEqual(broadcast_resp.status_code, 302)
-        self.assertEqual(TelegramOutbox.objects.filter(chat_id='998877').count(), 1)
+            TelegramOutbox.objects.all().delete()
+            broadcast_resp = self.client.post('/admin/admin_panel/user/', {
+                'action': 'send_custom_telegram_message',
+                '_selected_action': [st.pk],
+                'apply': '1',
+                'message_text': 'Важное объявление!',
+            })
+            self.assertEqual(broadcast_resp.status_code, 302)
+            self.assertEqual(TelegramOutbox.objects.filter(chat_id='998877').count(), 1)

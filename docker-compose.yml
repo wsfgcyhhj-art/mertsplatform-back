@@ -39,7 +39,7 @@ services:
         python manage.py migrate --noinput &&
         python manage.py createcachetable &&
         python manage.py collectstatic --noinput &&
-        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
+        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -61,6 +61,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      DEBUG: "False"
+      TRUST_HTTPS_PROXY: "1"
       TELEGRAM_MODE: "${TELEGRAM_MODE:-polling}"
       TELEGRAM_OUTBOX_EAGER: "False"
     command: ["python", "manage.py", "deliver_telegram"]
@@ -79,6 +81,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      DEBUG: "False"
+      TRUST_HTTPS_PROXY: "1"
       TELEGRAM_MODE: "${TELEGRAM_MODE:-polling}"
       TELEGRAM_OUTBOX_EAGER: "False"
     command: ["python", "manage.py", "runbot"]

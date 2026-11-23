@@ -76,8 +76,10 @@ def _mock_httpx_response(status_code: int, payload: dict, text: str = ''):
 def _superuser_request(method='GET', path='/'):
     req = getattr(RequestFactory(), method.lower())(path)
     req.user = SimpleNamespace(
-        id='owner-req',
+        id=1,
+        pk=1,
         is_active=True,
+        is_authenticated=True,
         is_superuser=True,
         is_staff=True,
         has_perm=lambda *a, **k: True,
@@ -781,7 +783,7 @@ class AuditIntegrationRegressionTests(TransactionTestCase):
 
         ok_resp = self.student_client.patch('/api/v1/users/me', {'avatarUrl': '  /api/v1/media/ok-id  '}, format='json')
         self.assertEqual(ok_resp.status_code, 200)
-        self.assertEqual(ok_resp.json()['user']['avatarUrl'], '/api/v1/media/ok-id')
+        self.assertEqual(ok_resp.json()['user']['avatarUrl'], 'http://testserver/api/v1/media/ok-id')
 
         with override_settings(PLATFORM_OWNER_USER_ID=self.owner.id):
             for idx, bad_month in enumerate((True, 'abc', 0, 25)):
@@ -813,3 +815,286 @@ class AuditIntegrationRegressionTests(TransactionTestCase):
             deep = {'a': deep}
         deep_resp = APIClient().post('/api/v1/auth/login', deep, format='json')
         self.assertEqual(deep_resp.status_code, 400)
+
+
+class AuditV2RegressionTests(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        create_schema()
+
+    def setUp(self):
+        clear_data()
+        invalidate_settings_cache()
+        self.group = StudyGroup.objects.create(name='js-01', month=1, is_active=True)
+        self.owner = create_user(login='v2_owner', role=RoleChoices.ADMIN, has_subscription=True, group_number='js-01')
+        self.owner.set_password('Owner-Pass-2026!')
+        self.owner.save()
+        self.mentor = create_user(login='v2_mentor', role=RoleChoices.ADMIN, has_subscription=True, group_number='js-01')
+        self.mentor.set_password('Mentor-Pass-2026!')
+        self.mentor.save()
+        self.student = create_user(
+            login='v2_student',
+            role=RoleChoices.STUDENT,
+            has_subscription=True,
+            group_number='js-01',
+            current_month=1,
+            avatar_url='/api/v1/media/presets/avatars/avatar-1.svg',
+            banner_url='/api/v1/media/presets/banners/banner-1.svg',
+        )
+        self.student.set_password('Strong-Pass-2026!')
+        self.student.save()
+
+        self.owner_client = APIClient()
+        owner_tok, _, _ = generate_tokens_for_user(self.owner)
+        self.owner_client.credentials(HTTP_AUTHORIZATION='Bearer ' + owner_tok)
+
+        self.mentor_client = APIClient()
+        mentor_tok, _, _ = generate_tokens_for_user(self.mentor)
+        self.mentor_client.credentials(HTTP_AUTHORIZATION='Bearer ' + mentor_tok)
+
+        self.student_client = APIClient()
+        stu_tok, _, _ = generate_tokens_for_user(self.student)
+        self.student_client.credentials(HTTP_AUTHORIZATION='Bearer ' + stu_tok)
+
+    def test_absolute_media_urls_svg_headers_and_system_config_host_isolation(self):
+        ach = Achievement.objects.create(
+            code='V2_ABS_ACH',
+            title='Abs',
+            icon_url='/api/v1/media/presets/icons/star.svg',
+        )
+        UserAchievement.objects.create(user=self.student, achievement=ach)
+
+        me = self.student_client.get('/api/v1/users/me')
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()['user']['avatarUrl'], 'http://testserver/api/v1/media/presets/avatars/avatar-1.svg')
+        self.assertEqual(me.json()['user']['bannerUrl'], 'http://testserver/api/v1/media/presets/banners/banner-1.svg')
+
+        lb = self.student_client.get('/api/v1/leaderboard')
+        self.assertEqual(lb.status_code, 200)
+        self.assertTrue(lb.json()['leaderboard'][0]['avatarUrl'].startswith('http://testserver/'))
+
+        ach_detail = self.student_client.get(f'/api/v1/achievements/{ach.id}')
+        self.assertEqual(ach_detail.status_code, 200)
+        ach_json = ach_detail.json()['achievement']
+        self.assertTrue(ach_json['iconUrl'].startswith('http://testserver/'))
+        self.assertTrue(ach_json['recentAchievers'][0]['avatarUrl'].startswith('http://testserver/'))
+
+        presets = self.student_client.get('/api/v1/media/presets')
+        self.assertEqual(presets.status_code, 200)
+        presets_json = presets.json()
+        self.assertTrue(presets_json['avatars'][0]['url'].startswith('http://testserver/'))
+        self.assertTrue(presets_json['banners'][0]['url'].startswith('http://testserver/'))
+        self.assertTrue(presets_json['achievementIcons'][0]['url'].startswith('http://testserver/'))
+
+        svg_resp = self.client.get('/api/v1/media/presets/icons/star.svg')
+        self.assertEqual(svg_resp.status_code, 200)
+        self.assertEqual(svg_resp['Cross-Origin-Resource-Policy'], 'cross-origin')
+        self.assertIn("default-src 'none'", svg_resp['Content-Security-Policy'])
+
+        with override_settings(ALLOWED_HOSTS=['api-a.example', 'api-b.example', 'testserver']):
+            cfg_a = APIClient().get('/api/v1/system/config', HTTP_HOST='api-a.example').json()
+            cfg_b = APIClient().get('/api/v1/system/config', HTTP_HOST='api-b.example').json()
+            self.assertTrue(cfg_a['mediaPresets']['avatars'][0]['url'].startswith('http://api-a.example/'))
+            self.assertTrue(cfg_b['mediaPresets']['avatars'][0]['url'].startswith('http://api-b.example/'))
+
+    def test_admin_owner_permissions_forms_and_validation(self):
+        from django.contrib.auth import get_user_model
+        from django.core.exceptions import PermissionDenied
+        from admin_panel.admin import LessonAdmin, LessonAdminForm, PlatformSettingAdmin, ShopOrderAdmin
+        from admin_panel.models import ShopOrder, ShopProduct
+
+        dj_model = get_user_model()
+        dj_owner = dj_model.objects.create_superuser(username='v2-dj-owner', password='Owner-Password-2026!')
+        dj_staff = dj_model.objects.create_user(username='v2-dj-staff', password='Staff-Password-2026!', is_staff=True)
+        product = ShopProduct.objects.create(title='Item', price_som=100, price_coins=10, stock=1)
+        ShopOrder.objects.create(user=self.student, product=product, price_coins=10)
+
+        non_owner_req = RequestFactory().post('/admin/')
+        non_owner_req.user = dj_staff
+        owner_req = RequestFactory().get('/admin/')
+        owner_req.user = dj_owner
+
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(dj_owner.pk)):
+            self.client.force_login(dj_staff)
+            self.assertEqual(self.client.get('/admin/admin_panel/user/').status_code, 403)
+            self.assertEqual(self.client.get('/admin/admin_panel/platformsetting/').status_code, 403)
+
+            with self.assertRaises(PermissionDenied):
+                UserAdmin(User, admin.site).recalculate_student_scores(non_owner_req, User.objects.all())
+            with self.assertRaises(PermissionDenied):
+                StudyGroupAdmin(StudyGroup, admin.site).archive_groups(non_owner_req, StudyGroup.objects.all())
+            with self.assertRaises(PermissionDenied):
+                ShopOrderAdmin(ShopOrder, admin.site).cancel_orders(non_owner_req, ShopOrder.objects.all())
+            with self.assertRaises(PermissionDenied):
+                PlatformSettingAdmin(PlatformSetting, admin.site).seed_default_settings(
+                    non_owner_req, PlatformSetting.objects.all()
+                )
+            self.assertFalse(MediaAssetAdmin(MediaAsset, admin.site).has_add_permission(owner_req))
+
+        long_bad_url = 'https://example.com/' + 'x' * 160
+        bad_lesson_form = LessonAdminForm(
+            data={'title': 'L', 'group_number': 'ALL', 'month': 1, 'order': 1, 'video_link': long_bad_url}
+        )
+        self.assertFalse(bad_lesson_form.is_valid())
+        lesson_admin = LessonAdmin(Lesson, admin.site)
+        lesson = Lesson(title='L', month=1, video_link=long_bad_url)
+        with patch.object(lesson_admin, 'message_user'):
+            lesson_admin.save_model(owner_req, lesson, MagicMock(changed_data=[]), False)
+        self.assertEqual(lesson.youtube_id, '')
+
+        with self.assertRaises(ValidationError):
+            validate_setting_value('some_int', True, 'int')
+
+    def test_register_input_validation_submissions_and_easter_egg_alias(self):
+        from datetime import datetime, timezone as dt_timezone
+
+        group2 = StudyGroup.objects.create(name='js-02', month=3, is_active=True)
+        anon = APIClient()
+
+        reg_id = anon.post(
+            '/api/v1/auth/register',
+            {'login': 'reg_by_id', 'password': 'Strong-Pass-2026!', 'groupId': group2.id, 'currentMonth': 9},
+            format='json',
+        )
+        self.assertEqual(reg_id.status_code, 201)
+        self.assertEqual(
+            (reg_id.json()['user']['groupId'], reg_id.json()['user']['groupNumber'], reg_id.json()['user']['currentMonth']),
+            (group2.id, 'js-02', 3),
+        )
+
+        reg_ci = anon.post(
+            '/api/v1/auth/register',
+            {'login': 'reg_ci', 'password': 'Strong-Pass-2026!', 'groupNumber': 'JS-02', 'currentMonth': 12},
+            format='json',
+        )
+        self.assertEqual(reg_ci.status_code, 201)
+        self.assertEqual(
+            (reg_ci.json()['user']['groupId'], reg_ci.json()['user']['groupNumber'], reg_ci.json()['user']['currentMonth']),
+            (group2.id, 'js-02', 3),
+        )
+
+        with override_settings(PLATFORM_OWNER_USER_ID=self.owner.id):
+            bad_json = self.owner_client.post('/api/v1/admin/users', data='[]', content_type='application/json')
+            self.assertEqual(bad_json.status_code, 400)
+            bad_role = self.owner_client.get('/api/v1/admin/users?role=INVALID')
+            self.assertEqual(bad_role.status_code, 400)
+
+        self.assertEqual(self.student_client.get('/api/v1/shop/orders/my?status=INVALID').status_code, 400)
+        self.assertEqual(self.student_client.get('/api/v1/leaderboard?month=99999999999999999999').status_code, 400)
+        self.assertEqual(self.student_client.get('/api/v1/leaderboard?page=99999999999999999999').status_code, 400)
+
+        surrogate_login = anon.post('/api/v1/auth/login', data=b'{"login": "\\ud800", "password": "x"}', content_type='application/json')
+        self.assertIn(surrogate_login.status_code, (400, 401))
+
+        task = Task.objects.create(title='HW1', topic='Py', month=1, max_score=10)
+        s1 = self.student_client.post('/api/v1/submissions', {'taskId': task.id, 'solutionLink': 'https://github.com/u/r1'}, format='json')
+        self.assertEqual(s1.status_code, 201)
+        sub_id = s1.json()['id']
+        dup = self.student_client.post('/api/v1/submissions', {'taskId': task.id, 'solutionLink': 'https://github.com/u/r2'}, format='json')
+        self.assertEqual(dup.status_code, 409)
+
+        real_sub = Submission.objects.get(pk=sub_id)
+        naive_dt = datetime(2026, 2, 1, 10, 0, 0)
+        real_sub.updated_at = naive_dt
+        with patch('admin_panel.views.curriculum_views.Submission.objects') as mock_mgr:
+            mock_mgr.filter.return_value.values_list.return_value.first.return_value = self.student.id
+            mock_mgr.select_for_update.return_value.select_related.return_value.get.return_value = real_sub
+            stale = self.mentor_client.patch(
+                f'/api/v1/submissions/{sub_id}',
+                {'status': 'IN_REVIEW', 'expectedUpdatedAt': '2026-02-01T10:05:00Z'},
+                format='json',
+            )
+            self.assertEqual(stale.status_code, 409)
+            ok_patch = self.mentor_client.patch(
+                f'/api/v1/submissions/{sub_id}',
+                {'status': 'IN_REVIEW', 'expectedUpdatedAt': naive_dt.replace(tzinfo=dt_timezone.utc).isoformat()},
+                format='json',
+            )
+            self.assertEqual(ok_patch.status_code, 200)
+
+        egg = self.student_client.post('/api/v1/me/claim-easter-egg')
+        self.assertEqual(egg.status_code, 200)
+        self.assertTrue(egg.json()['success'])
+
+    def test_shop_balance_ignores_streak_and_revision_in_place_gamification(self):
+        from admin_panel.services.achievement_service import ensure_default_achievements
+        from admin_panel.services.shop_service import shop_balance
+
+        ensure_default_achievements()
+        streaker = create_user(login='v2_streaker', role=RoleChoices.STUDENT, streak_count=20)
+        self.assertEqual(shop_balance(streaker)['availableCoins'], 0)
+
+        for idx in range(3):
+            task = Task.objects.create(title=f'T{idx}', topic='Py', month=1, max_score=10)
+            sub = Submission.objects.create(user=streaker, task=task, version=1, status=SubmissionStatusChoices.SENT)
+            sub.status = SubmissionStatusChoices.REVISION
+            sub.save()
+            sub.status = SubmissionStatusChoices.ACCEPTED
+            sub.score = 10
+            sub.save()
+            sub.refresh_from_db()
+            self.assertTrue(sub.was_revised)
+
+        self.assertTrue(UserAchievement.objects.filter(user=streaker, achievement__code='BUG_HUNTER').exists())
+        self.assertFalse(UserAchievement.objects.filter(user=streaker, achievement__code='SPEED_DEMON').exists())
+
+    def test_outbox_retry_rate_limit_truncation_polling_and_auth_code_ttl(self):
+        from admin_panel.services.telegram_service import handle_start_command
+
+        corrupt = TelegramOutbox.objects.create(chat_id='100', dedupe_key=str(uuid4()), payload={'encrypted': 'not-a-fernet-token'})
+        self.assertFalse(outbox_service.deliver(corrupt.pk))
+        corrupt.refresh_from_db()
+        self.assertEqual(corrupt.status, 'failed')
+
+        with self.settings(TELEGRAM_OUTBOX_EAGER=False):
+            outbox_service.enqueue('100', 'Rate test', dedupe_key='rate-429-key')
+        rate_item = TelegramOutbox.objects.get(dedupe_key='rate-429-key')
+        with (
+            patch('admin_panel.services.telegram_service.get_bot_token', return_value='tok'),
+            patch('httpx.Client.post', return_value=_mock_httpx_response(429, {'ok': False, 'error_code': 429, 'parameters': {'retry_after': 30}})),
+        ):
+            self.assertFalse(outbox_service.deliver(rate_item.pk))
+        rate_item.refresh_from_db()
+        self.assertEqual(rate_item.status, 'pending')
+        self.assertEqual(rate_item.attempts, 0)
+        self.assertGreater(rate_item.available_at, timezone.now() + timedelta(seconds=20))
+
+        sending_item = TelegramOutbox.objects.create(chat_id='101', dedupe_key=str(uuid4()), payload={'encrypted': 'x'}, status='sending')
+        failed_item = TelegramOutbox.objects.create(chat_id='102', dedupe_key=str(uuid4()), payload={'encrypted': 'x'}, status='failed', attempts=5)
+        res = outbox_service.retry_outbox_queryset(TelegramOutbox.objects.filter(pk__in=[sending_item.pk, failed_item.pk]), drain_now=False)
+        self.assertEqual(res['queued'], 1)
+        sending_item.refresh_from_db()
+        failed_item.refresh_from_db()
+        self.assertEqual(sending_item.status, 'sending')
+        self.assertEqual(failed_item.status, 'pending')
+
+        with (
+            patch('admin_panel.services.telegram_service.get_bot_token', return_value='tok'),
+            patch('httpx.Client.post', return_value=_mock_httpx_response(200, {'ok': True})) as mock_post,
+        ):
+            self.assertTrue(send_telegram_message('123', '<b>' + 'a' * 5000 + '</b>'))
+        self.assertLessEqual(len(mock_post.call_args.kwargs['json']['text']), 4096)
+
+        poison_resp = _mock_httpx_response(200, {'ok': True, 'result': [{'update_id': 500, 'message': {'chat': {'id': 1}, 'text': '/help'}}]})
+        empty_resp = _mock_httpx_response(200, {'ok': True, 'result': []})
+        with (
+            patch('admin_panel.services.telegram_service.get_bot_token', return_value='tok'),
+            patch('admin_panel.services.telegram_service.process_telegram_update', side_effect=RuntimeError('boom')),
+            patch('time.sleep'),
+            patch('httpx.Client') as mock_client_cls,
+        ):
+            mock_client = mock_client_cls.return_value.__enter__.return_value
+            mock_client.post.return_value = _mock_httpx_response(200, {'ok': True})
+            mock_client.get.side_effect = [poison_resp, poison_resp, poison_resp, empty_resp]
+            final_offset = run_telegram_polling(max_cycles=4)
+        self.assertEqual(final_offset, 501)
+        self.assertEqual(mock_client.get.call_args_list[3].kwargs['params']['offset'], 501)
+
+        self.student.telegram_auth_code = 'expcode1'
+        self.student.save(update_fields=['telegram_auth_code'])
+        cache_set_safe('tg_auth_code_ttl:expcode1', {'user_id': self.student.id, 'exp': timezone.now().timestamp() - 10}, 60)
+        reply = handle_start_command('9001', 'expcode1', 'v2user')
+        self.assertIn('истёк', reply)
+        self.student.refresh_from_db()
+        self.assertIsNone(self.student.telegram_auth_code)

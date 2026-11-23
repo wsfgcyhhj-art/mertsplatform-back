@@ -1,3 +1,4 @@
+from admin_panel.achievement_icons import to_absolute_media_url
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
 from admin_panel.services.score_service import annotate_user_scores
@@ -166,8 +167,9 @@ class AchievementDetailView(APIView):
         responses={200: AchievementDetailResponseSerializer, 404: ErrorResponseSerializer},
     )
     def get(self, request, id: str):
+        ensure_default_achievements()
         ach = Achievement.objects.filter(
-            Q(id=id) | Q(code=id.upper()),
+            Q(id=id) | Q(code__iexact=id),
             is_active=True,
         ).first()
         if not ach:
@@ -194,7 +196,7 @@ class AchievementDetailView(APIView):
                 'id': ua.user.id,
                 'name': ua.user.name,
                 'login': ua.user.login,
-                'avatarUrl': ua.user.avatar_url,
+                'avatarUrl': to_absolute_media_url(ua.user.avatar_url, request=request),
                 'awardedAt': ua.awarded_at,
             }
             for ua in recent_qs
@@ -222,33 +224,27 @@ class LeaderboardView(APIView):
     def get(self, request):
         raw_month = qparam(request, 'month')
         target_month = None
-        if raw_month not in (None, '', 'all', 'ALL'):
+        if raw_month not in (None, '') and str(raw_month).strip().lower() != 'all':
             try:
                 target_month = int(raw_month)
-                if target_month < 1:
+                if not 1 <= target_month <= 24:
                     return Response({'message': 'Invalid month parameter'}, status=400)
-            except ValueError:
+            except (TypeError, ValueError):
                 return Response({'message': 'Invalid month parameter'}, status=400)
 
         try:
-            page = max(1, int(qparam(request, 'page', default=1)))
-            limit = min(200, max(1, int(qparam(request, 'limit', 'pageSize', default=50))))
-        except ValueError:
+            page = int(qparam(request, 'page', default=1))
+            limit = int(qparam(request, 'limit', 'pageSize', default=50))
+        except (TypeError, ValueError):
+            return Response({'message': 'Invalid pagination'}, status=400)
+        if not 1 <= page <= 100000 or not 1 <= limit <= 200:
             return Response({'message': 'Invalid pagination'}, status=400)
 
         students_qs = User.objects.filter(role=RoleChoices.STUDENT)
 
         group_filter = (qparam(request, 'groupNumber', 'group_number') or '').strip()
-        if group_filter:
+        if group_filter and group_filter.upper() != 'ALL':
             students_qs = students_qs.filter(group_number__iexact=group_filter)
-
-        search = (qparam(request, 'search') or '').strip()
-        if search:
-            students_qs = students_qs.filter(
-                Q(login__icontains=search) | Q(name__icontains=search) | Q(group_number__icontains=search)
-            )
-
-        students_qs = annotate_user_scores(students_qs, month=target_month)
 
         ordering = resolve_ordering(
             qparam(request, 'ordering'),
@@ -263,6 +259,17 @@ class LeaderboardView(APIView):
         )
         if 'id' not in ordering and '-id' not in ordering:
             ordering = list(ordering) + ['id']
+
+        search = (qparam(request, 'search') or '').strip()
+        rank_map = None
+        if search:
+            ranked_ids = annotate_user_scores(students_qs, month=target_month).order_by(*ordering).values_list('id', flat=True)
+            rank_map = {uid: pos for pos, uid in enumerate(ranked_ids, 1)}
+            students_qs = students_qs.filter(
+                Q(login__icontains=search) | Q(name__icontains=search) | Q(group_number__icontains=search)
+            )
+
+        students_qs = annotate_user_scores(students_qs, month=target_month)
 
         total = students_qs.count()
         start = (page - 1) * limit
@@ -284,11 +291,11 @@ class LeaderboardView(APIView):
 
         results = [
             {
-                'rank': start + idx + 1,
+                'rank': rank_map[row['id']] if rank_map is not None else (start + idx + 1),
                 'id': row['id'],
                 'name': row['name'],
                 'login': row['login'],
-                'avatarUrl': row['avatar_url'],
+                'avatarUrl': to_absolute_media_url(row['avatar_url'], request=request),
                 'groupNumber': row['group_number'],
                 'currentMonth': row['current_month'],
                 'streakCount': row['streak_count'],

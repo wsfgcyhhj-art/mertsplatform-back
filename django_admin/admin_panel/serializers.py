@@ -12,7 +12,7 @@ def validate_new_password(value, user=None):
 
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
-from admin_panel.achievement_icons import normalize_icon_url
+from admin_panel.achievement_icons import normalize_icon_url, to_absolute_media_url
 from admin_panel.models import (
     User,
     Lesson,
@@ -31,6 +31,11 @@ class ShortUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'login', 'name', 'role', 'avatar_url', 'group_number')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['avatar_url'] = to_absolute_media_url(data.get('avatar_url'), request=self.context.get('request'))
+        return data
 
 
 class ShortTaskSerializer(serializers.ModelSerializer):
@@ -103,11 +108,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
             return int(annotated)
         return obj.accepted_tasks_count()
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        data['avatarUrl'] = to_absolute_media_url(data.get('avatarUrl'), request=request)
+        data['bannerUrl'] = to_absolute_media_url(data.get('bannerUrl'), request=request)
+        return data
+
 
 class RegisterSerializer(serializers.Serializer):
     login = serializers.CharField(min_length=3, max_length=255)
     password = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
-    groupNumber = serializers.CharField(max_length=64)
+    groupNumber = serializers.CharField(max_length=64, required=False, allow_blank=True)
     name = serializers.CharField(required=False, allow_blank=True, max_length=255)
     telegram = serializers.CharField(required=False, allow_blank=True, max_length=255)
     groupId = serializers.CharField(required=False, allow_blank=True, max_length=64)
@@ -131,14 +143,14 @@ class LoginSerializer(serializers.Serializer):
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    currentPassword = serializers.CharField()
+    currentPassword = serializers.CharField(max_length=1024, trim_whitespace=False)
     newPassword = serializers.CharField(min_length=8, max_length=1024, trim_whitespace=False, validators=[validate_new_password])
 
 
 class LessonSerializer(serializers.ModelSerializer):
-    videoLink = serializers.URLField(source='video_link')
-    youtubeId = serializers.CharField(source='youtube_id')
-    groupNumber = serializers.CharField(source='group_number')
+    videoLink = serializers.URLField(source='video_link', max_length=500, validators=[URLValidator(schemes=['http', 'https'])])
+    youtubeId = serializers.CharField(source='youtube_id', max_length=128)
+    groupNumber = serializers.CharField(source='group_number', max_length=64)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
 
@@ -168,15 +180,21 @@ class ShortMySubmissionSerializer(serializers.Serializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
-    groupNumber = serializers.CharField(source="group_number", required=False, allow_blank=True, allow_null=True)
-    exampleLink = serializers.URLField(source='example_link', allow_null=True, required=False)
-    attachmentLink = serializers.URLField(source='attachment_link', allow_null=True, required=False)
+    groupNumber = serializers.CharField(source="group_number", required=False, allow_blank=True, allow_null=True, max_length=64)
+    exampleLink = serializers.URLField(source='example_link', allow_null=True, allow_blank=True, required=False, max_length=500, validators=[URLValidator(schemes=['http', 'https'])])
+    attachmentLink = serializers.URLField(source='attachment_link', allow_null=True, allow_blank=True, required=False, max_length=500, validators=[URLValidator(schemes=['http', 'https'])])
     hasScore = serializers.BooleanField(source='has_score', default=False)
     maxScore = serializers.IntegerField(source='max_score', allow_null=True, required=False)
     isBonus = serializers.BooleanField(source='is_bonus', default=False)
     mySubmission = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+
+    def validate_exampleLink(self, value):
+        return value or None
+
+    def validate_attachmentLink(self, value):
+        return value or None
 
     def validate_groupNumber(self, value):
         from admin_panel.models import StudyGroup
@@ -330,7 +348,7 @@ class SubmissionReviewSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=SubmissionStatusChoices.choices, required=False)
     score = serializers.IntegerField(min_value=0, required=False)
     reviewerComment = serializers.CharField(max_length=10000, required=False, allow_null=True, allow_blank=True)
-    voiceFeedbackUrl = serializers.CharField(max_length=2048, required=False, allow_null=True, allow_blank=True,
+    voiceFeedbackUrl = serializers.CharField(max_length=500, required=False, allow_null=True, allow_blank=True,
                                             validators=[URLValidator(schemes=['http', 'https'])])
     expectedUpdatedAt = serializers.DateTimeField(required=False, allow_null=True)
 

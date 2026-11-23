@@ -54,10 +54,12 @@ class TelegramWebhookView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         data = request.data
-        if isinstance(data, dict):
-            try:
-                process_telegram_update(data)
-            except Exception as exc:
-                logger.exception("Telegram webhook update error: %s", type(exc).__name__)
-                return Response({"ok": False, "error": "update processing error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        serializer = TelegramWebhookUpdateSerializer(data=data)
+        if not serializer.is_valid():
+            return Response({"ok": False, "error": "invalid update payload"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            process_telegram_update(data)
+        except Exception as exc:
+            logger.exception("Telegram webhook update error: %s", type(exc).__name__)
+            return Response({"ok": False, "error": "update processing error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"ok": True}, status=status.HTTP_200_OK)
