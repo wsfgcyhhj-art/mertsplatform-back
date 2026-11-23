@@ -1,5 +1,8 @@
 import base64
+import os
 from typing import Dict, List, Optional
+
+DEFAULT_PUBLIC_BACKEND_URL = 'https://166.0.28.165.sslip.io'
 
 
 def _to_data_uri(svg: str) -> str:
@@ -154,14 +157,36 @@ def find_preset_icon(value: Optional[str]) -> Optional[Dict[str, str]]:
     return _BY_SLUG.get(slug_candidate) or _BY_LEGACY.get(slug_candidate)
 
 
-def normalize_icon_url(value: Optional[str]) -> str:
+def _to_absolute_icon_url(path: str, request=None) -> str:
+    if not path.startswith('/') or path.startswith('//'):
+        return path
+    if request is not None:
+        return request.build_absolute_uri(path)
+    from django.conf import settings
+    configured_base = (
+        getattr(settings, 'BACKEND_PUBLIC_URL', None)
+        or getattr(settings, 'SITE_URL', None)
+        or os.getenv('BACKEND_PUBLIC_URL', '')
+        or os.getenv('SITE_URL', '')
+        or ''
+    ).strip().rstrip('/')
+    if configured_base.startswith(('http://', 'https://')):
+        return f'{configured_base}{path}'
+    if os.getenv('TRUST_HTTPS_PROXY', '1') == '1':
+        return f'{DEFAULT_PUBLIC_BACKEND_URL}{path}'
+    return path
+
+
+def normalize_icon_url(value: Optional[str], request=None, *, absolute: bool = False) -> str:
     if not value or not value.strip():
-        return '/api/v1/media/presets/icons/trophy.svg'
-    clean = value.strip()
-    preset = find_preset_icon(clean)
-    if preset:
-        return f"/api/v1/media/presets/icons/{preset['slug']}.svg"
-    return clean
+        normalized = '/api/v1/media/presets/icons/trophy.svg'
+    else:
+        clean = value.strip()
+        preset = find_preset_icon(clean)
+        normalized = f"/api/v1/media/presets/icons/{preset['slug']}.svg" if preset else clean
+    if request is not None or absolute:
+        return _to_absolute_icon_url(normalized, request=request)
+    return normalized
 
 
 def resolve_icon_preview_src(value: Optional[str]) -> str:

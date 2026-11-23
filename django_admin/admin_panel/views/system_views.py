@@ -139,7 +139,7 @@ class SystemConfigView(APIView):
 
         cfg = get_all_settings()
         public_cfg = get_public_settings()
-        catalog = get_all_media_presets_catalog()
+        catalog = get_all_media_presets_catalog(request=request)
         bot_username = get_bot_username()
         avatar_max_mb = max(1, int(cfg.get('avatar_max_mb', 2) or 2))
         banner_max_mb = max(1, int(cfg.get('banner_max_mb', 5) or 5))

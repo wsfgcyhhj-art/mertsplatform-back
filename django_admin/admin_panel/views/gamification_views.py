@@ -143,7 +143,7 @@ class AchievementsCatalogView(APIView):
 
         catalog = []
         for a in items:
-            item = AchievementSerializer(a).data
+            item = AchievementSerializer(a, context={'request': request}).data
             unlocked = a.id in unlocked_ids
             item['isUnlocked'] = unlocked
             item['isUnlockedByMe'] = unlocked
@@ -176,7 +176,7 @@ class AchievementDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        item = AchievementSerializer(ach).data
+        item = AchievementSerializer(ach, context={'request': request}).data
         unlocked = UserAchievement.objects.filter(
             user_id=request.user.id,
             achievement_id=ach.id,

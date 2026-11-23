@@ -302,7 +302,11 @@ class AchievementSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['iconUrl'] = normalize_icon_url(instance.icon_url)
+        data['iconUrl'] = normalize_icon_url(
+            instance.icon_url,
+            request=self.context.get('request'),
+            absolute=True,
+        )
         return data
 
 

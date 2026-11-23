@@ -73,7 +73,7 @@ class MediaPresetsCatalogView(APIView):
         responses={200: MediaPresetsCatalogResponseSerializer},
     )
     def get(self, request):
-        catalog = get_all_media_presets_catalog()
+        catalog = get_all_media_presets_catalog(request=request)
         return Response(catalog)
 
 

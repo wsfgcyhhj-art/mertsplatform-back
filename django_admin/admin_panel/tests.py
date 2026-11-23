@@ -2,7 +2,7 @@ from django.utils import timezone
 import io
 import json
 from PIL import Image
-from django.test import TransactionTestCase, Client
+from django.test import TransactionTestCase, Client, override_settings
 from django.db import connection
 from admin_panel.models import (
     User,
@@ -769,13 +769,13 @@ class AdminSchemaRegressionTests(TransactionTestCase):
 
         ensure_default_achievements()
 
-        # 1. All presets & default achievement icons use /api/v1/media/presets/icons/ and return 200 SVG
+        # 1. All presets use full http(s)://.../api/v1/media/presets/icons/ and return 200 SVG
         presets_resp = self.client.get('/api/v1/media/presets')
         self.assertEqual(presets_resp.status_code, 200)
         preset_icons = presets_resp.json()['achievementIcons']
         self.assertEqual(len(preset_icons), 16)
         for item in preset_icons:
-            self.assertTrue(item['url'].startswith('/api/v1/media/presets/icons/'), item)
+            self.assertRegex(item['url'], r'^https?://[^/]+/api/v1/media/presets/icons/[^/]+\.svg$', item)
             svg_resp = self.client.get(item['url'])
             self.assertEqual(svg_resp.status_code, 200, item['url'])
             self.assertIn('image/svg+xml', svg_resp['Content-Type'])
@@ -815,8 +815,10 @@ class AdminSchemaRegressionTests(TransactionTestCase):
             self.assertIn('isUnlocked', item)
             self.assertIn('isUnlockedByMe', item)
             self.assertEqual(item['isUnlockedByMe'], item['isUnlocked'])
+            self.assertRegex(item['iconUrl'], r'^https?://[^/]+/api/v1/media/presets/icons/[^/]+\.svg$', item)
 
         unlocked_item = next(item for item in catalog if item['id'] == ach.id)
+        self.assertEqual(unlocked_item['iconUrl'], 'http://testserver/api/v1/media/presets/icons/star.svg')
         self.assertTrue(unlocked_item['isUnlocked'])
         self.assertTrue(unlocked_item['isUnlockedByMe'])
 
@@ -829,7 +831,7 @@ class AdminSchemaRegressionTests(TransactionTestCase):
         self.assertEqual(detail_resp.status_code, 200)
         payload = detail_resp.json()['achievement']
         self.assertEqual(payload['id'], ach.id)
-        self.assertEqual(payload['iconUrl'], '/api/v1/media/presets/icons/star.svg')
+        self.assertEqual(payload['iconUrl'], 'http://testserver/api/v1/media/presets/icons/star.svg')
         self.assertTrue(payload['isUnlocked'])
         self.assertTrue(payload['isUnlockedByMe'])
         self.assertEqual(payload['isUnlockedByMe'], payload['isUnlocked'])
@@ -840,9 +842,35 @@ class AdminSchemaRegressionTests(TransactionTestCase):
         locked_detail_resp = self.client.get(f"/api/v1/achievements/{locked_item['id']}", **auth)
         self.assertEqual(locked_detail_resp.status_code, 200)
         locked_payload = locked_detail_resp.json()['achievement']
+        self.assertRegex(locked_payload['iconUrl'], r'^https?://[^/]+/api/v1/media/presets/icons/[^/]+\.svg$')
         self.assertFalse(locked_payload['isUnlocked'])
         self.assertFalse(locked_payload['isUnlockedByMe'])
         self.assertEqual(locked_payload['isUnlockedByMe'], locked_payload['isUnlocked'])
+
+        me_ach_resp = self.client.get('/api/v1/users/me/achievements', **auth)
+        self.assertEqual(me_ach_resp.status_code, 200)
+        me_achievements = me_ach_resp.json()
+        self.assertTrue(me_achievements)
+        for entry in me_achievements:
+            self.assertRegex(entry['achievement']['iconUrl'], r'^https?://[^/]+/api/v1/media/presets/icons/[^/]+\.svg$')
+        me_star = next(entry for entry in me_achievements if entry['achievement']['id'] == ach.id)
+        self.assertEqual(me_star['achievement']['iconUrl'], 'http://testserver/api/v1/media/presets/icons/star.svg')
+
+        # 3. Fallback when request is not passed to serializer
+        import os
+        from unittest.mock import patch
+        from admin_panel.serializers import AchievementSerializer
+
+        with override_settings(BACKEND_PUBLIC_URL='https://api.example.com'):
+            self.assertEqual(
+                AchievementSerializer(ach).data['iconUrl'],
+                'https://api.example.com/api/v1/media/presets/icons/star.svg',
+            )
+        with patch.dict(os.environ, {'BACKEND_PUBLIC_URL': '', 'SITE_URL': '', 'TRUST_HTTPS_PROXY': '1'}):
+            self.assertEqual(
+                AchievementSerializer(ach).data['iconUrl'],
+                'https://166.0.28.165.sslip.io/api/v1/media/presets/icons/star.svg',
+            )
 
     def test_dangling_study_group_does_not_break_login_or_profile(self):
         group = StudyGroup.objects.create(name='js-09', month=2)

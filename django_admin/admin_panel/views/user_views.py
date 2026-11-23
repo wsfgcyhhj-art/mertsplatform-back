@@ -324,7 +324,7 @@ class UserAchievementsListView(APIView):
             .select_related('achievement')
             .order_by('-awarded_at')
         )
-        serializer = UserAchievementSerializer(achievements, many=True)
+        serializer = UserAchievementSerializer(achievements, many=True, context={'request': request})
         return Response(serializer.data)
 
 

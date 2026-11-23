@@ -212,7 +212,7 @@ def award_achievement(user_id: str, code: str) -> Optional[Dict[str, Any]]:
         'code': ach.code,
         'title': ach.title,
         'description': ach.description,
-        'iconUrl': normalize_icon_url(ach.icon_url),
+        'iconUrl': normalize_icon_url(ach.icon_url, absolute=True),
         'category': ach.category,
         'triggerType': ach.trigger_type,
         'threshold': ach.threshold,
