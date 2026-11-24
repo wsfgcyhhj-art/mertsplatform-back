@@ -1160,6 +1160,9 @@ class AchievementAdminForm(forms.ModelForm):
 
         is_existing = bool(self.instance and self.instance.pk and not self.instance._state.adding)
         is_system = is_existing and self.instance.code in SYSTEM_ACHIEVEMENT_CODES
+        self._initial_trigger_type = self.instance.trigger_type if is_existing else None
+        self._initial_threshold = self.instance.threshold if is_existing else None
+        self._initial_criteria = (self.instance.criteria or '').strip() if is_existing else ''
         if 'code' in self.fields:
             self.fields['code'].required = False
             if is_system:
@@ -1215,20 +1218,28 @@ class AchievementAdminForm(forms.ModelForm):
         if pts is not None and pts < 0:
             self.add_error('points', 'Награда не может быть отрицательной.')
 
-        criteria = (cleaned_data.get('criteria') or (self.instance.criteria if is_existing else '') or '').strip()
-        if not criteria:
-            auto_criteria_map = {
-                'MANUAL': 'Выдается ментором или администратором вручную',
-                'ON_REGISTER': 'Авторизоваться на платформе',
-                'TOTAL_SCORE': f'Набрать суммарно {threshold or 1} баллов',
-                'ACCEPTED_TASKS': f'Получить статус ACCEPTED по {threshold or 1} заданиям',
-                'BONUS_TASKS': f'Получить статус ACCEPTED по {threshold or 1} бонусным заданиям',
-                'FIRST_TRY_ACCEPTED': f'Сдать {threshold or 1} заданий со статусом ACCEPTED с первой попытки',
-                'PERFECT_SCORE': f'Сдать {threshold or 1} заданий на максимальный балл',
-                'REVISION_ACCEPTED': f'Сдать {threshold or 1} заданий после доработки (REVISION -> ACCEPTED)',
-                'STREAK_DAYS': f'Проявлять активность на платформе {threshold or 1} дней подряд (стрик)',
-                'EASTER_EGG': 'Найти секретную пасхалку на платформе',
-            }
+        auto_criteria_map = {
+            'MANUAL': 'Выдается ментором или администратором вручную',
+            'ON_REGISTER': 'Авторизоваться на платформе',
+            'TOTAL_SCORE': f'Набрать суммарно {threshold or 1} баллов',
+            'ACCEPTED_TASKS': f'Получить статус ACCEPTED по {threshold or 1} заданиям',
+            'BONUS_TASKS': f'Получить статус ACCEPTED по {threshold or 1} бонусным заданиям',
+            'FIRST_TRY_ACCEPTED': f'Сдать {threshold or 1} заданий со статусом ACCEPTED с первой попытки',
+            'PERFECT_SCORE': f'Сдать {threshold or 1} заданий на максимальный балл',
+            'REVISION_ACCEPTED': f'Сдать {threshold or 1} заданий после доработки (REVISION -> ACCEPTED)',
+            'STREAK_DAYS': f'Проявлять активность на платформе {threshold or 1} дней подряд (стрик)',
+            'EASTER_EGG': 'Найти секретную пасхалку на платформе',
+        }
+        rule_changed = is_existing and (
+            trigger_type != self._initial_trigger_type
+            or (trigger_type in self.NUMERIC_TRIGGER_TYPES and threshold != self._initial_threshold)
+        )
+        explicit_criteria = (cleaned_data.get('criteria') or '').strip() if 'criteria' in self.fields else ''
+        if explicit_criteria and (not is_existing or explicit_criteria != self._initial_criteria or not rule_changed):
+            criteria = explicit_criteria
+        elif is_existing and not rule_changed and self._initial_criteria:
+            criteria = self._initial_criteria
+        else:
             criteria = auto_criteria_map.get(trigger_type, '')
         self._resolved_criteria = criteria
         if 'criteria' in self.fields:
@@ -1421,13 +1432,17 @@ class AchievementAdmin(ModelAdmin):
     @admin.display(description='Иконка')
     def list_icon(self, obj):
         src = resolve_icon_preview_src(obj.icon_url)
+        fallback = resolve_icon_preview_src('')
         return format_html(
-            '<div style="width:36px;height:36px;border-radius:9px;background:rgba(245,158,11,0.12);'
+            '<div style="width:40px;height:40px;border-radius:10px;background:rgba(245,158,11,0.12);'
             'border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">'
-            '<img src="{}" alt="{}" loading="lazy" style="width:24px;height:24px;object-fit:contain;" />'
+            '<img src="{}" alt="{}" width="32" height="32" loading="lazy" '
+            'data-fallback="{}" onerror="this.onerror=null;this.src=this.dataset.fallback;" '
+            'style="width:32px;height:32px;object-fit:contain;" />'
             '</div>',
             src,
             obj.code,
+            fallback,
         )
 
     @admin.display(description='Ачивка', ordering='title')
@@ -1477,6 +1492,7 @@ class AchievementAdmin(ModelAdmin):
     def icon_preview(self, obj):
         raw_url = (obj.icon_url or '').strip() if obj else ''
         src = resolve_icon_preview_src(raw_url)
+        fallback = resolve_icon_preview_src('')
         preset = find_preset_icon(raw_url)
         if preset:
             caption = f"Пресет: {preset['label']} ({preset['slug']})"
@@ -1496,6 +1512,7 @@ class AchievementAdmin(ModelAdmin):
             '<div style="width:72px;height:72px;min-width:72px;border-radius:14px;background:rgba(245,158,11,0.12);'
             'border:1px solid rgba(245,158,11,0.35);display:flex;align-items:center;justify-content:center;">'
             f'<img id="merts_ach_icon_preview" src="{escape(src)}" alt="{escape(getattr(obj, "code", "") or "preview")}" '
+            f'data-fallback="{escape(fallback)}" onerror="this.onerror=null;this.src=this.dataset.fallback;" '
             'style="width:44px;height:44px;object-fit:contain;" />'
             '</div>'
             '<div id="merts_ach_icon_caption" style="font-size:13px;color:#a1a1aa;word-break:break-word;">'
@@ -1564,9 +1581,17 @@ class InstructionPdfUploadForm(forms.Form):
         uploaded = self.cleaned_data.get('pdf_file')
         if not uploaded:
             return uploaded
+        ext = os.path.splitext(uploaded.name or '')[1].lower()
+        raw_mime = (uploaded.content_type or '').split(';', 1)[0].strip().lower()
+        effective_mime = (
+            'application/pdf'
+            if ext == '.pdf' and raw_mime in {'', 'application/octet-stream'}
+            else (raw_mime or 'application/pdf')
+        )
         try:
             raw_bytes = read_upload(uploaded, 'DOCUMENT')
-            validate_pdf_buffer(raw_bytes, uploaded.content_type or 'application/pdf')
+            validate_pdf_buffer(raw_bytes, effective_mime)
+            self._validated_pdf = (raw_bytes, 'application/pdf')
         except (ValueError, OSError) as error:
             raise forms.ValidationError(str(error)) from error
         finally:
@@ -1608,10 +1633,11 @@ class MediaAssetAdmin(ModelAdmin):
         form = InstructionPdfUploadForm(request.POST, request.FILES) if request.method == 'POST' else InstructionPdfUploadForm()
         if request.method == 'POST' and form.is_valid():
             uploaded = form.cleaned_data['pdf_file']
-            asset = save_instruction_pdf_asset(
+            raw_bytes, mime_type = getattr(form, '_validated_pdf', None) or (
                 read_upload(uploaded, 'DOCUMENT'),
-                uploaded.content_type or 'application/pdf',
+                'application/pdf',
             )
+            asset = save_instruction_pdf_asset(raw_bytes, mime_type)
             size_kb = round(asset['sizeBytes'] / 1024, 1)
             self.message_user(
                 request,
@@ -1708,6 +1734,20 @@ class PlatformSettingAdmin(ModelAdmin):
         models.TextField: {'widget': forms.Textarea(attrs={'rows': 2, 'style': 'min-width: 240px;'})},
     }
     actions = ['seed_default_settings', 'clear_settings_cache']
+    actions_list = ['open_upload_instruction_pdf']
+
+    def has_open_upload_instruction_pdf_permission(self, request):
+        return is_admin_owner(request.user)
+
+    @unfold_action(
+        description='📄 Загрузить PDF-инструкцию',
+        url_path='upload-instruction-pdf',
+        permissions=['open_upload_instruction_pdf'],
+    )
+    def open_upload_instruction_pdf(self, request):
+        if not is_admin_owner(request.user):
+            raise PermissionDenied('Только владелец может загружать PDF-инструкцию.')
+        return redirect(reverse('admin:admin_panel_mediaasset_changelist') + 'upload-instruction-pdf/')
 
     def get_readonly_fields(self, request, obj=None):
         if obj is not None:

@@ -1407,12 +1407,15 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
 
             good_post = self.client.post(
                 upload_url,
-                {'pdf_file': SimpleUploadedFile('MertsPlatform_Instruction.pdf', updated_pdf, content_type='application/pdf')},
+                {'pdf_file': SimpleUploadedFile('MertsPlatform_Instruction.pdf', updated_pdf, content_type='application/octet-stream')},
             )
             self.assertEqual(good_post.status_code, 302)
             changelist_resp = self.client.get('/admin/admin_panel/mediaasset/')
             self.assertEqual(changelist_resp.status_code, 200)
             self.assertContains(changelist_resp, 'upload-instruction-pdf')
+            settings_redirect = self.client.get('/admin/admin_panel/platformsetting/upload-instruction-pdf/')
+            self.assertEqual(settings_redirect.status_code, 302)
+            self.assertTrue(settings_redirect['Location'].endswith('/admin/admin_panel/mediaasset/upload-instruction-pdf/'))
 
         self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 2)
         active_id = PlatformSetting.objects.get(key='instruction_pdf_asset_id').value
@@ -1571,9 +1574,10 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
         asset_id = manual_ach.icon_url.rsplit('/', 1)[-1]
         self.assertEqual(MediaAsset.objects.get(pk=asset_id).mime_type, 'image/webp')
 
-        # 6. Editing system achievement preserves its code even if tampered in POST
+        # 6. Editing system achievement preserves its code & custom criteria, while rule edit updates auto criteria
         ensure_default_achievements()
         welcome_ach = Achievement.objects.get(code='WELCOME')
+        original_welcome_criteria = welcome_ach.criteria
         r6 = self.client.post(
             f'/admin/admin_panel/achievement/{welcome_ach.pk}/change/',
             {
@@ -1590,14 +1594,36 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
         self.assertEqual(r6.status_code, 302)
         welcome_ach.refresh_from_db()
         self.assertEqual(welcome_ach.code, 'WELCOME')
+        self.assertEqual(welcome_ach.criteria, original_welcome_criteria)
 
-        # 7. Changelist renders with annotated awarded count and no N+1 across rows
+        ach_v2 = Achievement.objects.get(code='MASTER_KODA_2')
+        r6_rule = self.client.post(
+            f'/admin/admin_panel/achievement/{ach_v2.pk}/change/',
+            {
+                'title': ach_v2.title,
+                'code': ach_v2.code,
+                'description': ach_v2.description,
+                'category': ach_v2.category,
+                'is_active': 'on',
+                'preset_icon': ach_v2.icon_url,
+                'trigger_type': 'TOTAL_SCORE',
+                'threshold': '45',
+                'points': str(ach_v2.points),
+            },
+        )
+        self.assertEqual(r6_rule.status_code, 302)
+        ach_v2.refresh_from_db()
+        self.assertIn('45', ach_v2.criteria)
+
+        # 7. Changelist renders 32x32 icon with fallback, annotated awarded count and no N+1 across rows
         mentor = create_user(login='ach_adm_mentor', role=RoleChoices.ADMIN)
         s1 = create_user(login='ach_adm_stud1', role=RoleChoices.STUDENT)
         s2 = create_user(login='ach_adm_stud2', role=RoleChoices.STUDENT)
         with CaptureQueriesContext(connection) as q_before:
             changelist_1 = self.client.get(list_url)
         self.assertEqual(changelist_1.status_code, 200)
+        self.assertContains(changelist_1, 'width="32" height="32"')
+        self.assertContains(changelist_1, 'data-fallback="data:image/svg+xml;base64,')
 
         UserAchievement.objects.create(user=s1, achievement=welcome_ach)
         UserAchievement.objects.create(user=s2, achievement=welcome_ach)
@@ -1607,19 +1633,41 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
         self.assertEqual(changelist_2.status_code, 200)
         self.assertLessEqual(len(q_after), len(q_before) + 1)
 
-        # 8. Admin action recalculates selected auto achievements (skips MANUAL)
+        # 8a. Automatic trigger via achievement_service on score gain
         ScoreAdjustment.objects.create(user=s1, admin=mentor, amount=25, reason='Bonus', month=1)
+        self.assertTrue(UserAchievement.objects.filter(user=s1, achievement=auto_ach).exists())
+
+        # 8b. Retroactive admin action recalculates selected auto achievements (skips MANUAL)
+        r_retro = self.client.post(
+            add_url,
+            {
+                'title': 'Ретро Лидер',
+                'code': '',
+                'description': 'Создана после начисления баллов',
+                'category': 'SCORES',
+                'is_active': 'on',
+                'preset_icon': '/api/v1/media/presets/icons/trophy.svg',
+                'trigger_type': 'TOTAL_SCORE',
+                'threshold': '25',
+                'points': '25',
+            },
+        )
+        self.assertEqual(r_retro.status_code, 302)
+        retro_ach = Achievement.objects.get(code='RETRO_LIDER')
+        self.assertFalse(UserAchievement.objects.filter(user=s1, achievement=retro_ach).exists())
+
         act_resp = self.client.post(
             list_url,
             {
                 'action': 'recalculate_and_award_students',
-                '_selected_action': [auto_ach.pk, manual_ach.pk],
+                '_selected_action': [retro_ach.pk, manual_ach.pk],
             },
             follow=True,
         )
         self.assertEqual(act_resp.status_code, 200)
-        self.assertTrue(UserAchievement.objects.filter(user=s1, achievement=auto_ach).exists())
-        self.assertFalse(UserAchievement.objects.filter(user=s2, achievement=auto_ach).exists())
+        self.assertContains(act_resp, 'Выдано новых наград: 1.')
+        self.assertTrue(UserAchievement.objects.filter(user=s1, achievement=retro_ach).exists())
+        self.assertFalse(UserAchievement.objects.filter(user=s2, achievement=retro_ach).exists())
         self.assertFalse(UserAchievement.objects.filter(user=s2, achievement=manual_ach).exists())
 
         # 9. GET /api/v1/achievements returns created items with absolute iconUrl and unlocked state
