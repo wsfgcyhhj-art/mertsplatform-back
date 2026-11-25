@@ -13,6 +13,7 @@ from admin_panel.authentication import rotate_refresh, revoke_session
 from admin_panel.serializers import EmptyRequestSerializer
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
+from zoneinfo import ZoneInfo
 from django.utils import timezone
 from rest_framework.exceptions import ParseError, UnsupportedMediaType
 from rest_framework.views import APIView
@@ -27,6 +28,7 @@ from admin_panel.serializers import (
     RegisterSerializer,
     LoginSerializer,
     UserProfileSerializer,
+    CodeMessageErrorSerializer,
     ErrorResponseSerializer,
     MessageResponseSerializer,
 )
@@ -103,8 +105,18 @@ def set_auth_cookies(request, response, refresh_token: str):
     )
 
 
+_STREAK_TZ = ZoneInfo('Asia/Bishkek')
+
+
+def _local_streak_date(dt: datetime):
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, dt_timezone.utc)
+    return dt.astimezone(_STREAK_TZ).date()
+
+
 def update_user_streak(user: User) -> int:
     now = timezone.now()
+    today_local = _local_streak_date(now)
     with transaction.atomic():
         locked = User.objects.select_for_update().get(pk=user.pk)
         changed = False
@@ -115,7 +127,7 @@ def update_user_streak(user: User) -> int:
             locked.last_active_date = now
             changed = True
         else:
-            days_diff = (now.date() - locked.last_active_date.date()).days
+            days_diff = (today_local - _local_streak_date(locked.last_active_date)).days
             if days_diff == 1:
                 locked.streak_count = (locked.streak_count or 0) + 1
                 locked.last_active_date = now
@@ -472,6 +484,7 @@ class TelegramWebAppAuthView(APIView):
             400: ErrorResponseSerializer,
             401: ErrorResponseSerializer,
             403: ErrorResponseSerializer,
+            503: CodeMessageErrorSerializer,
         },
     )
     @transaction.atomic
@@ -500,18 +513,6 @@ class TelegramWebAppAuthView(APIView):
         tg_username = tg_data['telegram_username']
 
         user = User.objects.select_for_update().filter(telegram_chat_id=tg_id).first()
-        if not user and tg_username:
-            user = (
-                User.objects.select_for_update()
-                .filter(telegram_username__iexact=tg_username)
-                .filter(Q(telegram_chat_id__isnull=True) | Q(telegram_chat_id=''))
-                .first()
-            )
-            if user:
-                user.telegram_chat_id = tg_id
-                user.telegram_username = tg_username.lower()
-                user.save(update_fields=['telegram_chat_id', 'telegram_username', 'updated_at'])
-
         if not user:
             return Response({
                 "linked": False,
@@ -561,6 +562,7 @@ class TelegramWebAppLinkView(APIView):
             401: ErrorResponseSerializer,
             403: ErrorResponseSerializer,
             409: ErrorResponseSerializer,
+            503: CodeMessageErrorSerializer,
         },
     )
     @transaction.atomic

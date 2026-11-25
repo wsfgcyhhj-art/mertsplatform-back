@@ -31,6 +31,8 @@ from .achievement_icons import (
 from .models import (
     ALLOWED_SUBMISSION_TRANSITIONS,
     User,
+    Session,
+    PasswordResetTicket,
     StudyGroup,
     Lesson,
     Task,
@@ -121,14 +123,14 @@ def annotate_burnout_risk(queryset):
 def filter_burnout_risk(queryset, *, now=None):
     now = now or timezone.now()
     cutoff = now - timedelta(days=4)
+    no_recent_sub = Q(_last_submission_at__lt=cutoff) | Q(_last_submission_at__isnull=True)
+    no_recent_act = Q(last_active_date__lt=cutoff) | (Q(last_active_date__isnull=True) & Q(created_at__lt=cutoff))
     return (
         annotate_burnout_risk(queryset)
         .filter(role=RoleChoices.STUDENT, is_active=True)
         .filter(
             Q(streak_count=0, _submissions_count__gt=0)
-            | Q(_last_submission_at__lt=cutoff)
-            | Q(last_active_date__lt=cutoff)
-            | Q(_last_submission_at__isnull=True, last_active_date__isnull=True, created_at__lt=cutoff)
+            | (no_recent_sub & no_recent_act)
         )
     )
 
@@ -170,9 +172,14 @@ def get_burnout_radar_rows(limit: int = 50) -> list[dict]:
 
 
 def dashboard_callback(request, context):
+    limit = 50
     try:
-        total_at_risk = filter_burnout_risk(User.objects.all()).count()
-        radar_rows = get_burnout_radar_rows(limit=50)
+        radar_rows = get_burnout_radar_rows(limit=limit)
+        total_at_risk = (
+            len(radar_rows)
+            if len(radar_rows) < limit
+            else filter_burnout_risk(User.objects.all()).count()
+        )
     except (OperationalError, ProgrammingError):
         total_at_risk = 0
         radar_rows = []
@@ -186,14 +193,16 @@ def burnout_nudge_view(request, user_id: str):
         return HttpResponseNotAllowed(['POST'])
     if not getattr(request.user, 'is_staff', False):
         raise PermissionDenied('Требуются права администратора.')
-    student = User.objects.filter(pk=user_id, role=RoleChoices.STUDENT).first()
+    student = User.objects.filter(pk=user_id, role=RoleChoices.STUDENT, is_active=True).first()
     if not student:
-        messages.error(request, 'Студент не найден.')
+        messages.error(request, 'Студент не найден или деактивирован.')
         return redirect(reverse('admin:index'))
-    if send_burnout_nudge(student):
+    if not student.telegram_chat_id:
+        messages.warning(request, f'У студента @{student.login} не привязан Telegram-бот.')
+    elif send_burnout_nudge(student):
         messages.success(request, f'Напоминание отправлено студенту @{student.login} в Telegram.')
     else:
-        messages.warning(request, f'У студента @{student.login} не привязан Telegram-бот.')
+        messages.warning(request, f'Напоминание студенту @{student.login} уже отправлялось сегодня.')
     return redirect(reverse('admin:index'))
 
 
@@ -304,7 +313,7 @@ class SubmissionAdmin(ModelAdmin):
             ),
         }),
         ('🤖 AI-разбор', {
-            'fields': ('ai_review_panel', 'ai_feedback', 'ai_reviewed_at'),
+            'fields': ('ai_review_panel', 'ai_reviewed_at'),
         }),
         ('Системные даты', {
             'fields': ('created_at', 'updated_at'),
@@ -780,7 +789,10 @@ class TaskAdmin(GroupSavingAdmin):
                 level=messages.ERROR,
             )
             return
-        super().delete_model(request, obj)
+        from admin_panel.views.curriculum_views import refund_task_deadline_boosters
+        with transaction.atomic():
+            refund_task_deadline_boosters([obj.pk])
+            super().delete_model(request, obj)
 
     def delete_queryset(self, request, queryset):
         blocked_ids = set(queryset.filter(submissions__isnull=False).values_list('pk', flat=True))
@@ -791,8 +803,12 @@ class TaskAdmin(GroupSavingAdmin):
                 level=messages.ERROR,
             )
         deletable = queryset.exclude(pk__in=blocked_ids)
-        if deletable.exists():
-            super().delete_queryset(request, deletable)
+        deletable_ids = list(deletable.values_list('pk', flat=True))
+        if deletable_ids:
+            from admin_panel.views.curriculum_views import refund_task_deadline_boosters
+            with transaction.atomic():
+                refund_task_deadline_boosters(deletable_ids)
+                super().delete_queryset(request, deletable)
 
 
 class ScoreAdjustmentInline(TabularInline):
@@ -871,8 +887,13 @@ class UserAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        if cleaned_data.get('unlocked_avatar_frames') is None:
+        frames_val = cleaned_data.get('unlocked_avatar_frames')
+        if frames_val in (None, ''):
             cleaned_data['unlocked_avatar_frames'] = []
+        elif not isinstance(frames_val, list) or not all(isinstance(item, str) for item in frames_val):
+            self.add_error('unlocked_avatar_frames', 'Укажите JSON-массив строк (например: ["gold", "neon"]).')
+        else:
+            cleaned_data['unlocked_avatar_frames'] = [item.strip().lower() for item in frames_val if item.strip()]
         if cleaned_data.get('streak_freezes') is None:
             cleaned_data['streak_freezes'] = 0
         if cleaned_data.get('deadline_boosters') is None:
@@ -957,13 +978,21 @@ class UserAdmin(GroupSavingAdmin):
     def save_model(self, request, obj, form, change):
         changed = set(getattr(form, 'changed_data', ()))
         cleaned = getattr(form, 'cleaned_data', {})
-        if isinstance(cleaned, dict) and cleaned.get('new_password'):
+        password_changed = bool(isinstance(cleaned, dict) and cleaned.get('new_password'))
+        old_role = None
+        if change and obj.pk:
+            old_role = User.objects.filter(pk=obj.pk).values_list('role', flat=True).first()
+        if password_changed:
             obj.set_password(cleaned['new_password'])
         if 'group_selector' in cleaned and (not change or 'group_selector' in changed):
             grp = (cleaned.get('group_selector') or '').strip()
             obj.group_number = grp or None
             obj.study_group = StudyGroup.objects.filter(name__iexact=grp).first() if grp else None
         super().save_model(request, obj, form, change)
+        role_changed = bool(change and old_role is not None and old_role != obj.role)
+        if change and obj.pk and (password_changed or not obj.is_active or role_changed):
+            Session.objects.filter(user_id=obj.pk).delete()
+            PasswordResetTicket.objects.filter(user_id=obj.pk).delete()
 
     @admin.display(description='Telegram')
     def telegram_status_badge(self, obj):

@@ -92,6 +92,15 @@ class ShopOrderThrottle(BaseThrottle):
         return 300
 
 
+class GitHubValidateThrottle(BaseThrottle):
+    def allow_request(self, request, view):
+        login = getattr(request.user, 'login', '') if getattr(request, 'user', None) else ''
+        return consume_auth_attempt(client_ip(request), login, scope='github_validate', ip_limit=30, account_limit=15)
+
+    def wait(self):
+        return 300
+
+
 class AdminLoginThrottleMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response

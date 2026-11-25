@@ -53,6 +53,12 @@ def verify_telegram_webapp_init_data(init_data: str, *, bot_token: str | None = 
 
     data_pairs = [(key, val) for key, val in pairs if key != 'hash']
     params_dict = dict(data_pairs)
+    if len(params_dict) != len(data_pairs):
+        raise TelegramWebAppAuthError(
+            'TMA_INVALID_INIT_DATA',
+            'Обнаружены дублирующиеся параметры в initData.',
+            status_code=400,
+        )
 
     raw_auth_date = params_dict.get('auth_date')
     try:

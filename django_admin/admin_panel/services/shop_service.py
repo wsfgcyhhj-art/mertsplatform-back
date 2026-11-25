@@ -60,7 +60,8 @@ def place_order(user, product_id, comment, request_key=None, expected_price=None
         frame_slug = str(meta.get('frameSlug') or '').strip().lower()
         if not frame_slug:
             raise ShopConflict('Некорректные метаданные рамки аватара.')
-        unlocked_frames = list(user.unlocked_avatar_frames or [])
+        raw_unlocked = user.unlocked_avatar_frames if isinstance(user.unlocked_avatar_frames, list) else []
+        unlocked_frames = [str(f).strip().lower() for f in raw_unlocked if isinstance(f, (str, int)) and str(f).strip()]
         if frame_slug in unlocked_frames:
             raise ShopConflict('Эта рамка аватара уже разблокирована.')
 
@@ -91,7 +92,8 @@ def place_order(user, product_id, comment, request_key=None, expected_price=None
             user.updated_at = now
             user.save(update_fields=['deadline_boosters', 'updated_at'])
         elif product.item_type == ShopItemTypeChoices.AVATAR_FRAME:
-            unlocked_frames = list(user.unlocked_avatar_frames or [])
+            raw_unlocked = user.unlocked_avatar_frames if isinstance(user.unlocked_avatar_frames, list) else []
+            unlocked_frames = [str(f).strip().lower() for f in raw_unlocked if isinstance(f, (str, int)) and str(f).strip()]
             if frame_slug not in unlocked_frames:
                 unlocked_frames.append(frame_slug)
             user.unlocked_avatar_frames = unlocked_frames

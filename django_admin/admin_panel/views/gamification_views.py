@@ -366,13 +366,27 @@ class GroupLeaderboardView(APIView):
             if not g_active:
                 archived_groups.add(norm)
 
+        total_counts_by_group = {}
+        for raw_grp, cnt in (
+            User.objects.filter(role=RoleChoices.STUDENT)
+            .exclude(group_number__isnull=True)
+            .exclude(group_number='')
+            .values('group_number')
+            .annotate(cnt=Count('id'))
+            .values_list('group_number', 'cnt')
+        ):
+            norm = normalize_group_number(raw_grp)
+            if not norm or norm == 'all' or norm in archived_groups:
+                continue
+            total_counts_by_group[norm] = total_counts_by_group.get(norm, 0) + int(cnt or 0)
+
         rows = list(
             annotate_user_scores(
-                User.objects.filter(role=RoleChoices.STUDENT)
+                User.objects.filter(role=RoleChoices.STUDENT, is_active=True)
                 .exclude(group_number__isnull=True)
                 .exclude(group_number=''),
                 month=target_month,
-            ).values('group_number', 'is_active', 'total_score', 'tasks_accepted_count')
+            ).values('group_number', 'total_score', 'tasks_accepted_count')
         )
 
         buckets = {}
@@ -385,17 +399,15 @@ class GroupLeaderboardView(APIView):
             if bucket is None:
                 bucket = {
                     'groupNumber': canonical_names.get(norm, raw_grp),
-                    'studentsCount': 0,
+                    'studentsCount': total_counts_by_group.get(norm, 0),
                     'activeStudentsCount': 0,
                     'totalScore': 0,
                     'acceptedTasksCount': 0,
                 }
                 buckets[norm] = bucket
-            bucket['studentsCount'] += 1
-            if row['is_active']:
-                bucket['activeStudentsCount'] += 1
-                bucket['totalScore'] += int(row['total_score'] or 0)
-                bucket['acceptedTasksCount'] += int(row['tasks_accepted_count'] or 0)
+            bucket['activeStudentsCount'] += 1
+            bucket['totalScore'] += int(row['total_score'] or 0)
+            bucket['acceptedTasksCount'] += int(row['tasks_accepted_count'] or 0)
 
         compiled = []
         for bucket in buckets.values():

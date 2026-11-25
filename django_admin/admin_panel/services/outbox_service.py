@@ -94,12 +94,13 @@ def deliver(pk):
         reset_last_telegram_error()
         payload = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
         if payload.get('kind') == 'ai_review':
-            from .ai_review_service import run_ai_review_for_submission
+            from .ai_review_service import MAX_AI_REVIEW_ATTEMPTS, run_ai_review_for_submission
             ok = run_ai_review_for_submission(
                 payload['submission_id'],
                 notify_mentors=bool(payload.get('notify_mentors')),
+                final_attempt=(item.attempts >= MAX_AI_REVIEW_ATTEMPTS),
             )
-            error = '' if ok else 'AI review task failed'
+            error = '' if ok else 'AI review transient failure (scheduled retry)'
             permanent = False
             retry_after = None
         else:

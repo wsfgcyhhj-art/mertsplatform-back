@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from admin_panel.models import (
     User,
+    PasswordResetTicket,
     Submission,
     SubmissionStatusChoices,
     ScoreAdjustment,
@@ -217,6 +218,7 @@ class AdminUserRoleView(APIView):
         request=AdminUserRoleSerializer,
         responses={200: UserProfileSerializer, 400: ErrorResponseSerializer, 403: ErrorResponseSerializer, 404: ErrorResponseSerializer},
     )
+    @transaction.atomic
     def patch(self, request, id: str):
         if not is_owner(request.user):
             return Response({"message": "Owner privileges required"}, status=403)
@@ -229,7 +231,7 @@ class AdminUserRoleView(APIView):
             return Response({"statusCode": 400, "error": "Bad Request", "message": "Invalid payload"}, status=400)
 
         try:
-            target_user = User.objects.get(id=id)
+            target_user = User.objects.select_for_update().get(id=id)
         except User.DoesNotExist:
             return Response(
                 {"statusCode": 404, "error": "Not Found", "message": "User not found"},
@@ -248,8 +250,12 @@ class AdminUserRoleView(APIView):
                 {"statusCode": 400, "error": "Bad Request", "message": "Owner cannot demote themselves"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        old_role = target_user.role
         target_user.role = role
         target_user.save(update_fields=['role', 'updated_at'])
+        if old_role != role:
+            target_user.sessions.all().delete()
+            PasswordResetTicket.objects.filter(user=target_user).delete()
 
         return Response(UserProfileSerializer(target_user, context={'request': request}).data)
 

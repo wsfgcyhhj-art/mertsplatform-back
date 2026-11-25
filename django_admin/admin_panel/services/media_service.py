@@ -122,5 +122,6 @@ def save_instruction_pdf_asset(buffer, mime_type='application/pdf', owner_id=Non
             'is_public': False,
         },
     )
+    MediaAsset.objects.filter(kind='DOCUMENT').exclude(pk=asset['id']).delete()
     transaction.on_commit(invalidate_settings_cache)
     return asset

@@ -1419,7 +1419,8 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
             self.assertEqual(settings_redirect.status_code, 302)
             self.assertTrue(settings_redirect['Location'].endswith('/admin/admin_panel/mediaasset/upload-instruction-pdf/'))
 
-        self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 2)
+        self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 1)
+        self.assertFalse(MediaAsset.objects.filter(pk=saved['id']).exists())
         active_id = PlatformSetting.objects.get(key='instruction_pdf_asset_id').value
         new_asset = MediaAsset.objects.get(pk=active_id)
         self.assertEqual(new_asset.kind, 'DOCUMENT')
@@ -2274,7 +2275,7 @@ class PlatformV2FeaturesTestCase(TransactionTestCase):
             self.assertTrue(r_linked.json()['linked'])
             self.assertEqual(r_linked.json()['user']['login'], 'tma_student')
 
-            # 6. Auto-match by telegram_username without prior telegram_chat_id
+            # 6. Security (AUD-V2-01): telegram_username alone without telegram_chat_id MUST NOT auto-link
             by_uname_student = create_user(
                 login='uname_match',
                 role=RoleChoices.STUDENT,
@@ -2284,9 +2285,10 @@ class PlatformV2FeaturesTestCase(TransactionTestCase):
             uname_init = self._build_tma_init_data(bot_token, {'id': 900200, 'username': 'Matched_By_Uname'})
             r_uname = anon.post('/api/v1/auth/telegram-webapp', {'initData': uname_init}, format='json')
             self.assertEqual(r_uname.status_code, 200)
-            self.assertTrue(r_uname.json()['linked'])
+            self.assertFalse(r_uname.json()['linked'])
+            self.assertNotIn('accessToken', r_uname.json())
             by_uname_student.refresh_from_db()
-            self.assertEqual(by_uname_student.telegram_chat_id, '900200')
+            self.assertIsNone(by_uname_student.telegram_chat_id)
 
     def test_v2_08_install_platform_updates_idempotent(self):
         from io import StringIO
@@ -2381,3 +2383,379 @@ class PlatformV2FeaturesTestCase(TransactionTestCase):
              patch.object(tg, 'get_bot_token', return_value='bot_tok_test'), \
              patch.object(tg.httpx, 'Client', return_value=err_ctx):
             self.assertEqual(tg.run_telegram_polling(max_cycles=1), 0)
+
+    def test_v2_10_audit_fixes_tma_github_boosters_sessions_and_ai_retries(self):
+        from datetime import timedelta
+        from unittest.mock import MagicMock, patch
+        from django.contrib import admin
+        from django.core.cache import cache
+        from django.test import RequestFactory
+        from rest_framework.test import APIClient
+        from admin_panel.admin import SubmissionAdmin, TaskAdmin, UserAdmin
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import PasswordResetTicket, Session, TaskDeadlineExtension, TelegramOutbox
+        from admin_panel.services import outbox_service
+        from admin_panel.services.ai_review_service import SYSTEM_PROMPT, fetch_repository_source_files
+
+        bot_token = '123456789:AAExampleAuditBotToken999'
+        anon = APIClient()
+
+        # AUD-V2-01 & AUD-V2-15: Admin with prefilled telegram_username cannot be hijacked via TMA;
+        # duplicate keys -> 400; missing bot token -> 503.
+        admin_victim = create_user(
+            login='admin_victim',
+            role=RoleChoices.ADMIN,
+            telegram_username='mentor_victim',
+            telegram_chat_id=None,
+        )
+        with patch.dict('os.environ', {'TELEGRAM_BOT_TOKEN': ''}):
+            r_503 = anon.post('/api/v1/auth/telegram-webapp', {'initData': 'auth_date=1&hash=abc'}, format='json')
+            self.assertEqual(r_503.status_code, 503)
+            self.assertEqual(r_503.json()['code'], 'TMA_BOT_NOT_CONFIGURED')
+
+        with patch.dict('os.environ', {'TELEGRAM_BOT_TOKEN': bot_token}):
+            hijack_init = self._build_tma_init_data(bot_token, {'id': 666777, 'username': 'mentor_victim'})
+            r_hijack = anon.post('/api/v1/auth/telegram-webapp', {'initData': hijack_init}, format='json')
+            self.assertEqual(r_hijack.status_code, 200)
+            self.assertFalse(r_hijack.json()['linked'])
+            admin_victim.refresh_from_db()
+            self.assertIsNone(admin_victim.telegram_chat_id)
+
+            dup_init = hijack_init + '&query_id=dup'
+            r_dup = anon.post('/api/v1/auth/telegram-webapp', {'initData': dup_init}, format='json')
+            self.assertEqual(r_dup.status_code, 400)
+            self.assertEqual(r_dup.json()['code'], 'TMA_INVALID_INIT_DATA')
+
+        # AUD-V2-02 & AUD-V2-03: GitHub 403/429 rate-limit -> GITHUB_RATE_LIMIT, 60s cache & 15/5min throttle
+        cache.clear()
+        StudyGroup.objects.get_or_create(name='js-01', defaults={'month': 1, 'is_active': True})
+        student = create_user(
+            login='audit_gh_stud',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            current_month=1,
+            deadline_boosters=2,
+        )
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(student)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+
+        rl_resp = MagicMock(status_code=403, headers={'X-RateLimit-Remaining': '0'}, text='API rate limit exceeded')
+        rl_resp.json.return_value = {'message': 'API rate limit exceeded'}
+        rl_ctx = MagicMock()
+        rl_ctx.__enter__.return_value.get.return_value = rl_resp
+        with patch('admin_panel.services.github_service.httpx.Client', return_value=rl_ctx):
+            r_rl = api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://github.com/u/rl-repo'}, format='json')
+        self.assertEqual(r_rl.status_code, 400)
+        self.assertEqual(r_rl.json()['code'], 'GITHUB_RATE_LIMIT')
+
+        fresh_iso = (timezone.now() - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        ok_repo = MagicMock(status_code=200, headers={}, text='')
+        ok_repo.json.return_value = {'size': 50, 'default_branch': 'main', 'private': False}
+        ok_commits = MagicMock(status_code=200, headers={}, text='')
+        ok_commits.json.return_value = [{'sha': '111', 'commit': {'committer': {'date': fresh_iso}, 'message': 'ok'}}]
+        gh_http = MagicMock()
+        gh_http.get.side_effect = [ok_repo, ok_commits]
+        gh_ctx = MagicMock()
+        gh_ctx.__enter__.return_value = gh_http
+
+        task_hw = Task.objects.create(
+            title='Cached GH HW',
+            description='desc',
+            topic='Python',
+            group_number='js-01',
+            month=1,
+        )
+        with patch('admin_panel.services.github_service.httpx.Client', return_value=gh_ctx):
+            self.assertEqual(
+                api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://github.com/u/cached-repo'}, format='json').status_code,
+                200,
+            )
+            # Subsequent submit hits 60s cache -> 0 extra GitHub HTTP calls!
+            self.assertEqual(
+                api.post(f'/api/v1/tasks/{task_hw.id}/submissions', {'solutionLink': 'https://github.com/u/cached-repo'}, format='json').status_code,
+                201,
+            )
+        self.assertEqual(gh_http.get.call_count, 2)
+
+        # Throttle: 15 requests allowed per 5 min (2 already consumed above -> 13 more allowed, 16th -> 429)
+        for _ in range(13):
+            res = api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://gitlab.com/bad/url'}, format='json')
+            self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://gitlab.com/bad/url'}, format='json').status_code,
+            429,
+        )
+
+        # AUD-V2-04 & AUD-V2-08: Deadline boost guards & refund on task deletion
+        no_dl_task = Task.objects.create(title='No DL', description='d', topic='Py', group_number='js-01', month=1, deadline=None)
+        r_nodl = api.post(f'/api/v1/tasks/{no_dl_task.id}/apply-deadline-boost')
+        self.assertEqual(r_nodl.status_code, 400)
+        self.assertEqual(r_nodl.json()['code'], 'TASK_HAS_NO_DEADLINE')
+
+        past_dl_task = Task.objects.create(
+            title='Past DL',
+            description='d',
+            topic='Py',
+            group_number='js-01',
+            month=1,
+            deadline=timezone.now() - timedelta(days=5),
+        )
+        r_past = api.post(f'/api/v1/tasks/{past_dl_task.id}/apply-deadline-boost')
+        self.assertEqual(r_past.status_code, 200)
+        ext_obj = TaskDeadlineExtension.objects.get(user=student, task=past_dl_task)
+        self.assertGreater(ext_obj.extended_until, timezone.now() + timedelta(hours=23))
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 1)
+
+        # Accepted task cannot consume booster
+        Submission.objects.create(
+            user=student,
+            task=past_dl_task,
+            version=1,
+            status=SubmissionStatusChoices.ACCEPTED,
+            score=10,
+            solution_link='https://github.com/u/accepted',
+        )
+        r_acc = api.post(f'/api/v1/tasks/{past_dl_task.id}/apply-deadline-boost')
+        self.assertEqual(r_acc.status_code, 409)
+        self.assertEqual(r_acc.json()['code'], 'TASK_ALREADY_ACCEPTED')
+
+        # Deleting an unsubmitted task refunds spent deadline booster
+        del_task = Task.objects.create(
+            title='Deletable DL',
+            description='d',
+            topic='Py',
+            group_number='js-01',
+            month=1,
+            deadline=timezone.now() + timedelta(hours=6),
+        )
+        self.assertEqual(api.post(f'/api/v1/tasks/{del_task.id}/apply-deadline-boost').status_code, 200)
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 0)
+
+        mentor_api = APIClient()
+        m_tok, _, _ = generate_tokens_for_user(admin_victim)
+        mentor_api.credentials(HTTP_AUTHORIZATION=f'Bearer {m_tok}')
+        self.assertEqual(mentor_api.delete(f'/api/v1/tasks/{del_task.id}').status_code, 200)
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 1)
+
+        # Admin delete_queryset also refunds deadline booster
+        del_task_adm = Task.objects.create(
+            title='Deletable Admin DL',
+            description='d',
+            topic='Py',
+            group_number='js-01',
+            month=1,
+            deadline=timezone.now() + timedelta(hours=6),
+        )
+        self.assertEqual(api.post(f'/api/v1/tasks/{del_task_adm.id}/apply-deadline-boost').status_code, 200)
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 0)
+        task_adm = TaskAdmin(Task, admin.site)
+        task_adm.message_user = MagicMock()
+        task_adm.delete_queryset(RequestFactory().post('/admin/'), Task.objects.filter(pk=del_task_adm.pk))
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 1)
+
+        # AUD-V2-05: Admin password change / deactivation / role change revokes Sessions & PasswordResetTickets
+        PasswordResetTicket.objects.create(
+            token_hash='h1' * 32,
+            user=student,
+            expires_at=timezone.now() + timedelta(minutes=15),
+        )
+        self.assertTrue(Session.objects.filter(user=student).exists())
+        u_admin = UserAdmin(User, admin.site)
+        u_admin.message_user = MagicMock()
+        req = RequestFactory().post('/admin/')
+        req.user = MagicMock(pk=1, id=1, is_authenticated=True, is_superuser=True)
+        with override_settings(PLATFORM_OWNER_ADMIN_ID='1'):
+            u_admin.save_model(
+                req,
+                student,
+                MagicMock(changed_data=['new_password'], cleaned_data={'new_password': 'BrandNew-Pass-2026!'}),
+                change=True,
+            )
+        self.assertFalse(Session.objects.filter(user=student).exists())
+        self.assertFalse(PasswordResetTicket.objects.filter(user=student).exists())
+
+        # Role change via API also revokes sessions
+        _, _, _ = generate_tokens_for_user(student)
+        self.assertTrue(Session.objects.filter(user=student).exists())
+        with override_settings(PLATFORM_OWNER_USER_ID=admin_victim.id):
+            role_resp = mentor_api.patch(f'/api/v1/admin/users/{student.id}/role', {'role': 'ADMIN'}, format='json')
+        self.assertEqual(role_resp.status_code, 200)
+        self.assertFalse(Session.objects.filter(user=student).exists())
+
+        # AUD-V2-06 & AUD-V2-18: AI review transient retries, prompt-injection prompt, size==0 filter & readonly admin
+        self.assertIn('untrusted_student_code', SYSTEM_PROMPT)
+        self.assertNotIn('ai_feedback', SubmissionAdmin.fieldsets[1][1]['fields'])
+
+        empty_tree = {'tree': [{'path': 'main.py', 'type': 'blob', 'size': 0}]}
+        tree_http = MagicMock()
+        tree_http.get.return_value = MagicMock(status_code=200, headers={}, json=lambda: empty_tree)
+        tree_ctx = MagicMock()
+        tree_ctx.__enter__.return_value = tree_http
+        with patch('admin_panel.services.ai_review_service.httpx.Client', return_value=tree_ctx):
+            self.assertEqual(fetch_repository_source_files('https://github.com/u/empty-file'), [])
+        self.assertEqual(tree_http.get.call_count, 1)
+
+        TelegramOutbox.objects.all().delete()
+        retry_sub = Submission.objects.create(
+            user=student,
+            task=no_dl_task,
+            version=1,
+            solution_link='https://github.com/u/retry-ai',
+            status=SubmissionStatusChoices.SENT,
+        )
+        item = outbox_service.enqueue_ai_review(retry_sub.id, retry_sub.solution_link, notify_mentors=False)
+
+        llm_503 = MagicMock(status_code=503, headers={}, text='overloaded')
+        llm_ok = MagicMock(status_code=200, headers={}, text='')
+        llm_ok.json.return_value = {'choices': [{'message': {'content': '1) Ок\n2) Ок\n3) Ок'}}]}
+        llm_http = MagicMock()
+        llm_http.post.side_effect = [llm_503, llm_ok]
+        llm_ctx = MagicMock()
+        llm_ctx.__enter__.return_value = llm_http
+
+        with patch.dict('os.environ', {'AI_REVIEW_API_KEY': 'sk-retry'}), \
+             patch('admin_panel.services.ai_review_service.fetch_repository_source_files', return_value=[('main.py', 'x = 1')]), \
+             patch('admin_panel.services.ai_review_service.httpx.Client', return_value=llm_ctx):
+            # Attempt 1 -> 503 -> stays pending without writing error stub
+            self.assertFalse(outbox_service.deliver(item.pk))
+            item.refresh_from_db()
+            retry_sub.refresh_from_db()
+            self.assertEqual(item.status, 'pending')
+            self.assertEqual(item.attempts, 1)
+            self.assertIsNone(retry_sub.ai_feedback)
+
+            # Attempt 2 -> 200 -> saves real feedback and marks sent
+            TelegramOutbox.objects.filter(pk=item.pk).update(available_at=timezone.now() - timedelta(seconds=1))
+            self.assertTrue(outbox_service.deliver(item.pk))
+            item.refresh_from_db()
+            retry_sub.refresh_from_db()
+            self.assertEqual(item.status, 'sent')
+            self.assertIn('1) Ок', retry_sub.ai_feedback)
+
+    def test_v2_11_audit_fixes_radar_groups_frames_streak_tz_webapp_and_pdf_gc(self):
+        from datetime import datetime, timedelta, timezone as dt_timezone
+        from unittest.mock import patch
+        from django.contrib.auth import get_user_model
+        from django.core.cache import cache
+        from django.test.utils import CaptureQueriesContext
+        from rest_framework.test import APIClient
+        from admin_panel.admin import UserAdminForm, dashboard_callback
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import PlatformSetting, ShopProduct, TelegramOutbox
+        from admin_panel.services.media_service import save_instruction_pdf_asset
+        from admin_panel.services.settings_service import invalidate_settings_cache
+        from admin_panel.services.telegram_service import get_webapp_url
+        from admin_panel.views.auth_views import update_user_streak
+
+        cache.clear()
+        now = timezone.now()
+        StudyGroup.objects.get_or_create(name='js-01', defaults={'month': 1, 'is_active': True})
+        task = Task.objects.create(title='Radar V2', description='d', topic='Py', group_number='js-01', month=1)
+
+        # AUD-V2-10: Student active today with 10-day streak & 5-day-old submission MUST NOT be flagged at risk
+        s_active_daily = create_user(
+            login='daily_watcher',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            streak_count=10,
+            last_active_date=now,
+            is_active=True,
+        )
+        sub_5d = Submission.objects.create(user=s_active_daily, task=task, version=1, status='ACCEPTED', score=10, solution_link='https://github.com/a/1')
+        Submission.objects.filter(pk=sub_5d.pk).update(created_at=now - timedelta(days=5))
+
+        s_truly_idle = create_user(
+            login='truly_idle',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            streak_count=2,
+            last_active_date=now - timedelta(days=6),
+            telegram_chat_id='919191',
+            is_active=True,
+        )
+        sub_6d = Submission.objects.create(user=s_truly_idle, task=task, version=1, status='SENT', solution_link='https://github.com/a/2')
+        Submission.objects.filter(pk=sub_6d.pk).update(created_at=now - timedelta(days=6))
+
+        ctx = {}
+        with CaptureQueriesContext(connection) as q_dash:
+            dashboard_callback(None, ctx)
+        self.assertEqual(len(q_dash), 1)
+        self.assertEqual(ctx['burnout_radar_count'], 1)
+        self.assertEqual([r['login'] for r in ctx['burnout_radar_students']], ['truly_idle'])
+
+        # AUD-V2-11: Daily cooldown on burnout_nudge_view prevents duplicate Telegram spam
+        owner = get_user_model().objects.create_superuser(username='nudge_owner', password='Owner-Pass-2026!')
+        adm = Client()
+        adm.force_login(owner)
+        TelegramOutbox.objects.all().delete()
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(owner.pk)):
+            adm.post(f'/admin/burnout-nudge/{s_truly_idle.pk}/')
+            adm.post(f'/admin/burnout-nudge/{s_truly_idle.pk}/')
+        self.assertEqual(TelegramOutbox.objects.filter(chat_id='919191').count(), 1)
+
+        # AUD-V2-12: Non-list unlocked_avatar_frames never raises 500 TypeError & form validates list
+        bad_form = UserAdminForm(
+            data={
+                'login': 'bad_frames_u',
+                'role': 'STUDENT',
+                'current_month': 1,
+                'streak_count': 0,
+                'unlocked_avatar_frames': '123',
+            }
+        )
+        self.assertFalse(bad_form.is_valid())
+        self.assertIn('unlocked_avatar_frames', bad_form.errors)
+
+        User.objects.filter(pk=s_active_daily.pk).update(unlocked_avatar_frames=123)
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(s_active_daily)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+        r_frame = api.patch('/api/v1/users/me', {'activeAvatarFrame': 'gold'}, format='json')
+        self.assertEqual(r_frame.status_code, 400)
+
+        frame_prod = ShopProduct.objects.create(
+            title='Рамка Тест',
+            price_som=0,
+            price_coins=5,
+            stock=10,
+            item_type='AVATAR_FRAME',
+            metadata={'frameSlug': 'gold'},
+        )
+        r_buy = api.post('/api/v1/shop/orders', {'productId': frame_prod.id}, format='json')
+        self.assertEqual(r_buy.status_code, 201)
+        s_active_daily.refresh_from_db()
+        self.assertEqual(s_active_daily.unlocked_avatar_frames, ['gold'])
+
+        # AUD-V2-13: Streak uses Asia/Bishkek (UTC+6) calendar boundaries
+        # 2026-11-25 17:30 UTC == 2026-11-25 23:30 +06:00
+        # 2026-11-25 18:30 UTC == 2026-11-26 00:30 +06:00 -> next Bishkek day (+1 streak)!
+        t_day1 = datetime(2026, 11, 25, 17, 30, tzinfo=dt_timezone.utc)
+        t_day2_early = datetime(2026, 11, 25, 18, 30, tzinfo=dt_timezone.utc)
+        t_day2_morning = datetime(2026, 11, 26, 0, 30, tzinfo=dt_timezone.utc)
+        User.objects.filter(pk=s_active_daily.pk).update(streak_count=4, last_active_date=t_day1)
+        s_active_daily.refresh_from_db()
+        with patch('admin_panel.views.auth_views.timezone.now', return_value=t_day2_early):
+            self.assertEqual(update_user_streak(s_active_daily), 5)
+        # Crossing 00:00 UTC on the same Bishkek day (05:30 +06 -> 06:30 +06) must NOT increment twice
+        with patch('admin_panel.views.auth_views.timezone.now', return_value=t_day2_morning):
+            self.assertEqual(update_user_streak(s_active_daily), 5)
+
+        # AUD-V2-14: get_webapp_url() respects dynamic PlatformSetting('frontend_url')
+        PlatformSetting.objects.update_or_create(
+            key='frontend_url',
+            defaults={'value': 'https://tma.merts.example', 'value_type': 'string', 'category': 'branding', 'is_public': True},
+        )
+        invalidate_settings_cache()
+        self.assertEqual(get_webapp_url(), 'https://tma.merts.example')
+
+        # AUD-V2-16: Replacing instruction PDF deletes older DOCUMENT MediaAssets
+        save_instruction_pdf_asset(b'%PDF-1.4\n%one\n%%EOF\n', 'application/pdf')
+        second_pdf = save_instruction_pdf_asset(b'%PDF-1.7\n%two\n%%EOF\n', 'application/pdf')
+        self.assertEqual(MediaAsset.objects.filter(kind='DOCUMENT').count(), 1)
+        self.assertEqual(MediaAsset.objects.get(kind='DOCUMENT').pk, second_pdf['id'])

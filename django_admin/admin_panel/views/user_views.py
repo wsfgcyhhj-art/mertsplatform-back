@@ -204,7 +204,8 @@ class CurrentUserView(APIView):
                 user.active_avatar_frame = None
                 updated_fields.append('active_avatar_frame')
             else:
-                unlocked = [str(f).strip().lower() for f in (user.unlocked_avatar_frames or [])]
+                raw_unlocked = user.unlocked_avatar_frames if isinstance(user.unlocked_avatar_frames, list) else []
+                unlocked = [str(f).strip().lower() for f in raw_unlocked if isinstance(f, (str, int)) and str(f).strip()]
                 if frame_slug not in unlocked:
                     return Response(
                         {

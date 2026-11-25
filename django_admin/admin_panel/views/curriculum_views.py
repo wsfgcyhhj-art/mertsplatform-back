@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Mapping
 from datetime import timedelta, timezone as dt_timezone
 from django.db import IntegrityError, transaction
@@ -8,9 +9,10 @@ from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, pa
 from admin_panel.services.github_service import GitHubValidationError, validate_github_repository
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
 from admin_panel.services.outbox_service import enqueue_ai_review
+from admin_panel.throttles import GitHubValidateThrottle
 from django.core.exceptions import ValidationError
 from admin_panel.serializers import CodeMessageErrorSerializer, EmptyRequestSerializer
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework import serializers
@@ -81,8 +83,18 @@ class SubmissionsListResponseSerializer(PaginatedMetaMixin):
 from admin_panel.views.auth_views import update_user_streak
 
 
+def refund_task_deadline_boosters(task_ids) -> int:
+    counts = Counter(
+        TaskDeadlineExtension.objects.filter(task_id__in=list(task_ids)).values_list('user_id', flat=True)
+    )
+    refunded = 0
+    for uid, count in counts.items():
+        User.objects.filter(pk=uid).update(deadline_boosters=F('deadline_boosters') + count)
+        refunded += count
+    return refunded
+
+
 def _create_validated_submission(request, *, task_id: str, solution_link: str, comment: str | None) -> Response:
-    user = User.objects.select_for_update().get(pk=request.user.pk)
     task_id = (task_id or '').strip()
     solution_link = (solution_link or '').strip()
     comment = (comment or '').strip() or None
@@ -101,18 +113,15 @@ def _create_validated_submission(request, *, task_id: str, solution_link: str, c
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
+    if request.user.role != RoleChoices.ADMIN and not task_is_visible(task, request.user):
         return Response({'message': 'Forbidden'}, status=403)
 
-    if Submission.objects.filter(
-        user_id=user.id,
-        task_id=task.id,
-        status__in=(
-            SubmissionStatusChoices.SENT,
-            SubmissionStatusChoices.IN_REVIEW,
-            SubmissionStatusChoices.ACCEPTED,
-        ),
-    ).exists():
+    active_statuses = (
+        SubmissionStatusChoices.SENT,
+        SubmissionStatusChoices.IN_REVIEW,
+        SubmissionStatusChoices.ACCEPTED,
+    )
+    if Submission.objects.filter(user_id=request.user.id, task_id=task.id, status__in=active_statuses).exists():
         return Response(
             {
                 "statusCode": 409,
@@ -122,6 +131,7 @@ def _create_validated_submission(request, *, task_id: str, solution_link: str, c
             status=status.HTTP_409_CONFLICT,
         )
 
+    # Validate external GitHub URL/API BEFORE acquiring a row lock on User.
     try:
         validate_github_repository(solution_link)
     except GitHubValidationError as exc:
@@ -130,34 +140,49 @@ def _create_validated_submission(request, *, task_id: str, solution_link: str, c
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
-    version = (last_sub.version + 1) if last_sub else 1
+    with transaction.atomic():
+        user = User.objects.select_for_update().get(pk=request.user.pk)
+        if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
+            return Response({'message': 'Forbidden'}, status=403)
 
-    submission = Submission(
-        user=user,
-        task=task,
-        version=version,
-        solution_link=solution_link,
-        comment=comment,
-        status=SubmissionStatusChoices.SENT,
-    )
-    submission._skip_signal_ai_enqueue = True
-    try:
-        submission.save()
-    except IntegrityError:
-        return Response(
-            {
-                "statusCode": 409,
-                "error": "Conflict",
-                "message": "У вас уже есть активная или принятая сдача по этому заданию.",
-            },
-            status=status.HTTP_409_CONFLICT,
+        if Submission.objects.filter(user_id=user.id, task_id=task.id, status__in=active_statuses).exists():
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "У вас уже есть активная или принятая сдача по этому заданию.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
+        version = (last_sub.version + 1) if last_sub else 1
+
+        submission = Submission(
+            user=user,
+            task=task,
+            version=version,
+            solution_link=solution_link,
+            comment=comment,
+            status=SubmissionStatusChoices.SENT,
         )
+        submission._skip_signal_ai_enqueue = True
+        try:
+            submission.save()
+        except IntegrityError:
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "У вас уже есть активная или принятая сдача по этому заданию.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
-    update_user_streak(user)
-    transaction.on_commit(
-        lambda sid=submission.pk, sl=solution_link: enqueue_ai_review(sid, sl, notify_mentors=True)
-    )
+        update_user_streak(user)
+        transaction.on_commit(
+            lambda sid=submission.pk, sl=solution_link: enqueue_ai_review(sid, sl, notify_mentors=True)
+        )
 
     serializer = SubmissionSerializer(submission, context={'request': request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -462,6 +487,7 @@ class TaskDetailView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
         try:
+            refund_task_deadline_boosters([task.id])
             task.delete()
         except (ProtectedError, IntegrityError):
             return Response(
@@ -563,7 +589,6 @@ class SubmissionsView(APIView):
             409: ErrorResponseSerializer,
         },
     )
-    @transaction.atomic
     def post(self, request):
         if not isinstance(request.data, Mapping):
             return Response({"statusCode": 400, "error": "Bad Request", "message": "Invalid payload"}, status=400)
@@ -598,7 +623,6 @@ class TaskSubmissionsView(APIView):
             409: ErrorResponseSerializer,
         },
     )
-    @transaction.atomic
     def post(self, request, id: str):
         if not isinstance(request.data, Mapping):
             return Response({"code": "INVALID_PAYLOAD", "message": "Некорректный JSON-запрос."}, status=400)
@@ -623,6 +647,7 @@ class TaskSubmissionsView(APIView):
 class ValidateGitHubSubmissionView(APIView):
     serializer_class = EmptyRequestSerializer
     permission_classes = (IsAuthenticated,)
+    throttle_classes = (GitHubValidateThrottle,)
 
     @extend_schema(
         operation_id="submissions_validate_github",
@@ -631,6 +656,7 @@ class ValidateGitHubSubmissionView(APIView):
         responses={
             200: GitHubValidationResponseSerializer,
             400: CodeMessageErrorSerializer,
+            429: ErrorResponseSerializer,
         },
     )
     def post(self, request):
@@ -665,6 +691,7 @@ class ApplyTaskDeadlineBoostView(APIView):
             400: CodeMessageErrorSerializer,
             403: ErrorResponseSerializer,
             404: ErrorResponseSerializer,
+            409: CodeMessageErrorSerializer,
         },
     )
     @transaction.atomic
@@ -679,6 +706,26 @@ class ApplyTaskDeadlineBoostView(APIView):
             )
         if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
             return Response({"statusCode": 403, "error": "Forbidden", "message": "Forbidden"}, status=403)
+        if task.deadline is None:
+            return Response(
+                {
+                    "code": "TASK_HAS_NO_DEADLINE",
+                    "message": "У этого задания не установлен дедлайн.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if Submission.objects.filter(
+            user_id=user.id,
+            task_id=task.id,
+            status=SubmissionStatusChoices.ACCEPTED,
+        ).exists():
+            return Response(
+                {
+                    "code": "TASK_ALREADY_ACCEPTED",
+                    "message": "Задание уже принято ментором — продление дедлайна не требуется.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         if (user.deadline_boosters or 0) <= 0:
             return Response(
                 {
@@ -688,8 +735,10 @@ class ApplyTaskDeadlineBoostView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        now = timezone.now()
         existing = TaskDeadlineExtension.objects.select_for_update().filter(user=user, task=task).first()
-        base_dt = existing.extended_until if (existing and existing.extended_until) else (task.deadline or timezone.now())
+        current_deadline = existing.extended_until if (existing and existing.extended_until) else task.deadline
+        base_dt = max(current_deadline, now)
         new_deadline = base_dt + timedelta(hours=24)
 
         user.deadline_boosters = (user.deadline_boosters or 0) - 1

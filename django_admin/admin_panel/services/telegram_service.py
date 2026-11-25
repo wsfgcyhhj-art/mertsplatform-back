@@ -107,8 +107,7 @@ def get_frontend_url() -> str:
 
 
 def get_webapp_url() -> str:
-    url = str(getattr(settings, 'FRONTEND_URL', '') or '').strip().rstrip('/')
-    return url or 'https://mertsplatform.vercel.app'
+    return get_frontend_url()
 
 
 def build_webapp_reply_markup(frontend_url: Optional[str] = None) -> Optional[dict]:
@@ -491,7 +490,18 @@ def notify_month_advanced(user: User, new_month: int):
 
 
 def send_burnout_nudge(student: User) -> bool:
-    if not student.telegram_chat_id:
+    if not student.is_active or not student.telegram_chat_id:
+        return False
+    from zoneinfo import ZoneInfo
+    from .outbox_service import enqueue
+    today_str = timezone.now().astimezone(ZoneInfo('Asia/Bishkek')).date().isoformat()
+    cooldown_key = f'burnout_nudge_sent:{student.pk}:{today_str}'
+    if cache_get_safe(cooldown_key):
+        return False
+    dedupe_key = f'burnout_nudge:{student.pk}:{today_str}'
+    from admin_panel.models import TelegramOutbox
+    if TelegramOutbox.objects.filter(dedupe_key=dedupe_key).exists():
+        cache_set_safe(cooldown_key, 1, 86400)
         return False
     tasks_url = escape_html(f"{get_frontend_url()}/tasks")
     name = escape_html(student.name or student.login)
@@ -502,7 +512,8 @@ def send_burnout_nudge(student: User) -> bool:
         "Если возникли сложности с темой — напиши ментору, мы поможем разобраться.\n\n"
         f"👉 <a href=\"{tasks_url}\">Перейти к заданиям на платформе</a>"
     )
-    send_async_notification(student.id, msg)
+    enqueue(student.telegram_chat_id, msg, dedupe_key=dedupe_key)
+    cache_set_safe(cooldown_key, 1, 86400)
     return True
 
 
