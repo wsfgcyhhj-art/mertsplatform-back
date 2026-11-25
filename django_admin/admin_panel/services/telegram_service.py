@@ -103,7 +103,23 @@ def get_frontend_url() -> str:
     configured = str(get_setting('frontend_url', '') or '').strip().rstrip('/')
     if configured:
         return configured
-    return getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    return (getattr(settings, 'FRONTEND_URL', '') or 'https://mertsplatform.vercel.app').strip().rstrip('/')
+
+
+def get_webapp_url() -> str:
+    url = str(getattr(settings, 'FRONTEND_URL', '') or '').strip().rstrip('/')
+    return url or 'https://mertsplatform.vercel.app'
+
+
+def build_webapp_reply_markup(frontend_url: Optional[str] = None) -> Optional[dict]:
+    url = (frontend_url if frontend_url is not None else get_webapp_url()).strip().rstrip('/')
+    if not url.startswith('https://'):
+        return None
+    return {
+        'inline_keyboard': [
+            [{'text': '🚀 Открыть платформу', 'web_app': {'url': url}}],
+        ],
+    }
 
 
 def escape_html(text: Any) -> str:
@@ -622,17 +638,25 @@ def _process_telegram_update(update):
         return
 
     if command == '/start':
-        enqueue(chat_id, handle_start_command(chat_id, argument.strip(), sender.get('username')))
+        enqueue(
+            chat_id,
+            handle_start_command(chat_id, argument.strip(), sender.get('username')),
+            reply_markup=build_webapp_reply_markup(),
+        )
     elif command == '/help':
-        enqueue(chat_id, (
-            "🤖 <b>MertsPlatform</b>\n"
-            "/start — Подключить Telegram\n"
-            "/status — Группа, рейтинг и последние сдачи\n"
-            "/tasks — Актуальные задания (также /hw)\n"
-            "/reset — Восстановить доступ\n"
-            "/help — Справка\n\n"
-            f'<a href="{escape_html(get_frontend_url())}">Открыть платформу</a>'
-        ))
+        enqueue(
+            chat_id,
+            (
+                "🤖 <b>MertsPlatform</b>\n"
+                "/start — Подключить Telegram\n"
+                "/status — Группа, рейтинг и последние сдачи\n"
+                "/tasks — Актуальные задания (также /hw)\n"
+                "/reset — Восстановить доступ\n"
+                "/help — Справка\n\n"
+                f'<a href="{escape_html(get_frontend_url())}">Открыть платформу</a>'
+            ),
+            reply_markup=build_webapp_reply_markup(),
+        )
     elif command in ('/status', '/tasks', '/hw', '/reset'):
         user = User.objects.filter(telegram_chat_id=chat_id).first()
         if not user:
@@ -644,6 +668,67 @@ def _process_telegram_update(update):
             enqueue(chat_id, 'Одноразовое восстановление (20 минут): ' + escape_html(recovery_link(user)))
         else:
             enqueue(chat_id, _student_tasks(user))
+
+
+BOT_COMMANDS = [
+    {'command': 'start', 'description': 'Запустить бота и открыть платформу'},
+    {'command': 'status', 'description': 'Группа, рейтинг и последние сдачи'},
+    {'command': 'tasks', 'description': 'Актуальные домашние задания'},
+    {'command': 'reset', 'description': 'Восстановить доступ'},
+    {'command': 'help', 'description': 'Справка по командам'},
+]
+
+
+def setup_telegram_bot_menu(
+    token: Optional[str] = None,
+    *,
+    client: Optional[httpx.Client] = None,
+) -> bool:
+    bot_token = (token if token is not None else get_bot_token()).strip()
+    if not bot_token:
+        return False
+
+    frontend_url = get_webapp_url()
+
+    def _apply(http_client: httpx.Client) -> bool:
+        ok = True
+        try:
+            http_client.post(
+                f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+                json={'commands': BOT_COMMANDS},
+            )
+        except Exception as exc:
+            ok = False
+            logger.warning("Telegram setMyCommands failed: %s", type(exc).__name__)
+
+        if frontend_url.startswith('https://'):
+            try:
+                menu_resp = http_client.post(
+                    f"https://api.telegram.org/bot{bot_token}/setChatMenuButton",
+                    json={
+                        'menu_button': {
+                            'type': 'web_app',
+                            'text': 'Открыть платформу',
+                            'web_app': {'url': frontend_url},
+                        }
+                    },
+                )
+                if menu_resp.status_code != 200:
+                    ok = False
+                    logger.warning("Telegram setChatMenuButton returned HTTP %s", menu_resp.status_code)
+            except Exception as exc:
+                ok = False
+                logger.warning("Telegram setChatMenuButton failed: %s", type(exc).__name__)
+        return ok
+
+    if client is not None:
+        return _apply(client)
+    try:
+        with httpx.Client(timeout=5.0) as owned_client:
+            return _apply(owned_client)
+    except Exception as exc:
+        logger.warning("Telegram bot menu setup failed: %s", type(exc).__name__)
+        return False
 
 
 def _delete_telegram_webhook(client: httpx.Client, token: str) -> None:
@@ -701,6 +786,7 @@ def run_telegram_polling(max_cycles: Optional[int] = None) -> int:
     fail_counts: Dict[int, int] = {}
 
     with httpx.Client(timeout=30.0) as client:
+        setup_telegram_bot_menu(token, client=client)
         _delete_telegram_webhook(client, token)
         while running and (max_cycles is None or cycles < max_cycles):
             cycles += 1

@@ -2,7 +2,11 @@ import signal
 import time
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from admin_panel.services.telegram_service import get_bot_token, run_telegram_polling
+from admin_panel.services.telegram_service import (
+    get_bot_token,
+    run_telegram_polling,
+    setup_telegram_bot_menu,
+)
 
 
 class Command(BaseCommand):

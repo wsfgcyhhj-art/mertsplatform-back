@@ -2294,3 +2294,90 @@ class PlatformV2FeaturesTestCase(TransactionTestCase):
 
         call_command('install_platform_updates', stdout=StringIO())
         call_command('install_platform_updates', stdout=StringIO())
+
+    def test_v2_09_telegram_bot_webapp_inline_button_and_menu_button(self):
+        from unittest.mock import MagicMock, patch
+        from admin_panel.models import TelegramOutbox
+        from admin_panel.services import outbox_service, telegram_service as tg
+
+        student = create_user(
+            login='bot_tma_stud',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            telegram_auth_code='bindcode123',
+        )
+
+        # 1. Plain /start, /start <code>, and /help include web_app button when FRONTEND_URL is HTTPS
+        with override_settings(FRONTEND_URL='https://mertsplatform.vercel.app'):
+            TelegramOutbox.objects.all().delete()
+            tg.process_telegram_update({
+                'update_id': 71001,
+                'message': {'chat': {'id': 40001, 'type': 'private'}, 'from': {'id': 40001, 'username': 'u1'}, 'text': '/start'},
+            })
+            tg.process_telegram_update({
+                'update_id': 71002,
+                'message': {'chat': {'id': 40002, 'type': 'private'}, 'from': {'id': 40002, 'username': 'u2'}, 'text': '/start bindcode123'},
+            })
+            tg.process_telegram_update({
+                'update_id': 71003,
+                'message': {'chat': {'id': 40001, 'type': 'private'}, 'from': {'id': 40001, 'username': 'u1'}, 'text': '/help'},
+            })
+
+            items = list(TelegramOutbox.objects.order_by('created_at'))
+            self.assertEqual(len(items), 3)
+            expected_btn = [{'text': '🚀 Открыть платформу', 'web_app': {'url': 'https://mertsplatform.vercel.app'}}]
+            for item in items:
+                payload = json.loads(outbox_service.cipher().decrypt(item.payload['encrypted'].encode()))
+                self.assertEqual(payload['reply_markup'], {'inline_keyboard': [expected_btn]})
+            student.refresh_from_db()
+            self.assertEqual(student.telegram_chat_id, '40002')
+
+        # 2. Non-HTTPS FRONTEND_URL omits web_app button cleanly
+        with override_settings(FRONTEND_URL='http://localhost:5173'):
+            TelegramOutbox.objects.all().delete()
+            tg.process_telegram_update({
+                'update_id': 71004,
+                'message': {'chat': {'id': 40003, 'type': 'private'}, 'from': {'id': 40003}, 'text': '/start'},
+            })
+            item_http = TelegramOutbox.objects.get()
+            payload_http = json.loads(outbox_service.cipher().decrypt(item_http.payload['encrypted'].encode()))
+            self.assertIsNone(payload_http['reply_markup'])
+
+        # 3. Bot polling startup calls setMyCommands and setChatMenuButton (and survives network errors)
+        http_client = MagicMock()
+        http_client.post.return_value = MagicMock(status_code=200, json=lambda: {'ok': True})
+        http_client.get.return_value = MagicMock(status_code=200, json=lambda: {'ok': True, 'result': []})
+        client_ctx = MagicMock()
+        client_ctx.__enter__.return_value = http_client
+
+        with override_settings(TELEGRAM_MODE='polling', FRONTEND_URL='https://mertsplatform.vercel.app'), \
+             patch.object(tg, 'get_bot_token', return_value='bot_tok_test'), \
+             patch.object(tg.httpx, 'Client', return_value=client_ctx):
+            tg.run_telegram_polling(max_cycles=1)
+
+        post_calls = {call.args[0]: call.kwargs.get('json') for call in http_client.post.call_args_list}
+        menu_url = 'https://api.telegram.org/botbot_tok_test/setChatMenuButton'
+        cmds_url = 'https://api.telegram.org/botbot_tok_test/setMyCommands'
+        self.assertIn(cmds_url, post_calls)
+        self.assertIn(menu_url, post_calls)
+        self.assertEqual(
+            post_calls[menu_url],
+            {
+                'menu_button': {
+                    'type': 'web_app',
+                    'text': 'Открыть платформу',
+                    'web_app': {'url': 'https://mertsplatform.vercel.app'},
+                }
+            },
+        )
+
+        # Network error during setChatMenuButton must not crash polling
+        err_client = MagicMock()
+        err_client.post.side_effect = tg.httpx.ConnectError('network down')
+        err_client.get.return_value = MagicMock(status_code=200, json=lambda: {'ok': True, 'result': []})
+        err_ctx = MagicMock()
+        err_ctx.__enter__.return_value = err_client
+        with override_settings(TELEGRAM_MODE='polling', FRONTEND_URL='https://mertsplatform.vercel.app'), \
+             patch.object(tg, 'get_bot_token', return_value='bot_tok_test'), \
+             patch.object(tg.httpx, 'Client', return_value=err_ctx):
+            self.assertEqual(tg.run_telegram_polling(max_cycles=1), 0)
