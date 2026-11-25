@@ -19,7 +19,7 @@
 ## 2. Текущая архитектура (Backend-Only: Django Ecosystem)
 - **Репозиторий строго backend-only:** Весь фронтенд вынесен во внешний репозиторий (`https://mertsplatform.vercel.app`); в этом репозитории поддерживаются только `django_admin/`, `docker-compose.yml` и `deploy/`. Проверки: `manage.py check`, `manage.py test admin_panel --noinput`, `manage.py spectacular --validate --fail-on-warn`.
 - **Единый бэкенд и админка (`django_admin/`):** Django 6.1 + Django REST Framework + `drf-spectacular` (Swagger `/api/docs/`, схема `/api/docs-json/`, контракт `django_admin/schema.yml`) + `djangorestframework-simplejwt` + `django-filter` + **Django Unfold Admin** (`/admin/`).
-- **База данных и общий кеш:** PostgreSQL (`managed = False` с идемпотентным bootstrap `install_base_schema` → `install_subscriptions` → `install_security` → `install_shop` + `managed = True` для `PlatformSetting`), общий `DatabaseCache` (`django_cache` через `createcachetable`). Пароли проверяются через Django hashers и legacy `bcrypt`/`sha256` (`admin_panel/authentication.py`).
+- **База данных и общий кеш:** PostgreSQL (`managed = False` с идемпотентным bootstrap `install_base_schema` → `install_subscriptions` → `install_security` → `install_platform_updates` → `install_shop` + `managed = True` для `PlatformSetting`), общий `DatabaseCache` (`django_cache` через `createcachetable`). Пароли проверяются через Django hashers и legacy `bcrypt`/`sha256` (`admin_panel/authentication.py`).
 - **Динамические настройки (`PlatformSetting`):** Брендинг, ссылки, правила геймификации/доступа, шаблоны и тумблеры Telegram редактируются из Unfold Admin (`/admin/`) с кешированием и отдачей публичной конфигурации через `GET /api/v1/system/config` (`is_public=False` по умолчанию).
 - **Медиа-хранилище:** Загружаемые аватарки (256×256 WebP), баннеры (1600×400 WebP) и иконки ачивок сжимаются через Pillow и сохраняются в таблицу `MediaAsset` (`admin_panel/services/media_service.py`), отдаются по `GET /api/v1/media/{id}`.
 - **Геймификация:** Динамический движок правил ачивок (`admin_panel/services/achievement_service.py` + `signals.py`) на 10 триггеров (`MANUAL`, `ON_REGISTER`, `TOTAL_SCORE`, `ACCEPTED_TASKS`, `BONUS_TASKS`, `FIRST_TRY_ACCEPTED`, `PERFECT_SCORE`, `REVISION_ACCEPTED`, `STREAK_DAYS`, `EASTER_EGG`).
@@ -31,3 +31,14 @@
 2. `docs/ANTIGRAVITY_HISTORY.md` — полная хронология предыдущих коммитов и изменённых файлов.
 3. `.specify/memory/constitution.md` — конституция и стандарты качества кода проекта.
 4. `docs/TZ.md` — исходное техническое задание платформы.
+
+## Автоматический релиз и деплой на VPS (обязательно после любых правок кода)
+
+После завершения любой задачи по бэкенду или инфраструктуре агент обязан сам, без дополнительных напоминаний пользователя:
+1) Прогнать `cd django_admin && ./venv/bin/python manage.py check`
+2) Если менялись эндпоинты/сериализаторы — обновить `schema.yml` (`./venv/bin/python manage.py spectacular --file schema.yml --validate --fail-on-warn`)
+3) Прогнать автотесты (`./venv/bin/python manage.py test admin_panel --noinput`)
+4) Убедиться, что `.env` не попал в индекс, закоммитить изменения и выполнить `git push origin main`
+5) Автоматически задеплоить обновление на боевой сервер:
+   `ssh -o BatchMode=yes root@166.0.28.165 "cd /opt/mertsplatform && git pull --ff-only origin main && docker compose up -d --build --wait --remove-orphans"`
+6) Проверить `curl -fsS https://166.0.28.165.sslip.io/api/v1/health` и отчитаться об итоговом коммите и статусе продакшена.

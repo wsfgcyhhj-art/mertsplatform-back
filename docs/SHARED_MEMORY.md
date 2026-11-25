@@ -86,7 +86,7 @@ cd .. && python3 -m unittest deploy/test_migrate_from_neon.py
   - Написан блок регрессионных тестов `django_admin/admin_panel/test_audit_regressions.py` (`6d0b946`: 19 тестов поверх 74) и добавлен регрессионный тест `test_refresh_returns_401_json_and_never_500_on_invalid_inputs` в `test_security.py` (итого **94 теста** в `admin_panel` + 7 deploy-тестов); устранены баги в `StudyGroupAdmin` (ленивый fallback аннотаций), `telegram_service.py` (`cache_get_safe`/`cache_set_safe`), и `auth/refresh` (`401` JSON вместо `500` на битых/не-строковых/осиротевших токенах, `REMOTE_ADDR=None` и сбое стрика).
   - Собран локальный граф знаний `graphify-out/` (`1077 nodes`, `3066 edges`, `66 communities`; исключён из Git через `.git/info/exclude`).
 - **Открыто:**
-  1. Ручное применение правок на боевом VPS `166.0.28.165` (`/opt/mertsplatform`): неинтерактивный `ssh -o BatchMode=yes` возвращает `Permission denied (publickey,password)`.
+  - Открытых блокеров нет: беспарольный SSH к боевому VPS `166.0.28.165` (`/opt/mertsplatform`) настроен, автономный деплой закреплён в `AGENTS.md` и `GEMINI.md`.
 
 ---
 
