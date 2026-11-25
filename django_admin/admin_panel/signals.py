@@ -37,6 +37,7 @@ def on_submission_pre_save(sender, instance: Submission, **kwargs):
         instance._old_score = None
         instance._old_comment = None
         instance._old_voice = None
+        instance._old_solution_link = None
         return
     try:
         old = Submission.objects.select_for_update().get(pk=instance.pk)
@@ -44,6 +45,7 @@ def on_submission_pre_save(sender, instance: Submission, **kwargs):
         instance._old_score = old.score
         instance._old_comment = old.reviewer_comment
         instance._old_voice = old.voice_feedback_url
+        instance._old_solution_link = old.solution_link
         if old.status == SubmissionStatusChoices.REVISION or getattr(old, 'was_revised', False):
             instance.was_revised = True
     except Submission.DoesNotExist:
@@ -51,6 +53,7 @@ def on_submission_pre_save(sender, instance: Submission, **kwargs):
         instance._old_score = None
         instance._old_comment = None
         instance._old_voice = None
+        instance._old_solution_link = None
 
 
 @receiver(pre_save, sender=User)
@@ -121,6 +124,23 @@ def on_submission_post_save(sender, instance: Submission, created, **kwargs):
 
     if is_reviewed and changed:
         notify_submission_reviewed(instance)
+
+    sol_link = (instance.solution_link or '').strip()
+    link_changed = created or (
+        (update_fields is None or 'solution_link' in update_fields)
+        and sol_link != (getattr(instance, '_old_solution_link', None) or '').strip()
+    )
+    if (
+        instance.status == SubmissionStatusChoices.SENT
+        and link_changed
+        and sol_link.lower().startswith(('https://github.com/', 'http://github.com/', 'https://www.github.com/', 'http://www.github.com/'))
+        and not getattr(instance, '_skip_signal_ai_enqueue', False)
+    ):
+        from django.db import transaction
+        from admin_panel.services.outbox_service import enqueue_ai_review
+        transaction.on_commit(
+            lambda sid=instance.pk, sl=sol_link: enqueue_ai_review(sid, sl, notify_mentors=False)
+        )
 
 
 @receiver(post_save, sender=UserAchievement)

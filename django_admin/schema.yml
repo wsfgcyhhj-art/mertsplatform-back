@@ -506,6 +506,90 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /api/v1/auth/telegram-webapp:
+    post:
+      operationId: auth_telegram_webapp
+      summary: Авторизация в Telegram Mini App по подписанному initData
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramWebAppAuthRequestRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramWebAppAuthResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /api/v1/auth/telegram-webapp/link:
+    post:
+      operationId: auth_telegram_webapp_link
+      summary: Привязка существующего аккаунта студента к Telegram Mini App
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramWebAppLinkRequestRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/health:
     get:
       operationId: v1_health_retrieve
@@ -576,6 +660,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LeaderboardResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /api/v1/leaderboard/groups:
+    get:
+      operationId: leaderboard_groups_list
+      summary: Битва учебных групп (агрегированный рейтинг по среднему баллу)
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: string
+        description: Месяц обучения (1..24 или 'all')
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GroupLeaderboardEntry'
           description: ''
         '400':
           content:
@@ -1137,6 +1250,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /api/v1/submissions/validate-github:
+    post:
+      operationId: submissions_validate_github
+      summary: Pre-flight проверка ссылки на GitHub-репозиторий перед отправкой ДЗ
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateGitHubRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ValidateGitHubRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ValidateGitHubRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubValidationResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeMessageError'
+          description: ''
   /api/v1/system/config:
     get:
       operationId: v1_system_config_retrieve
@@ -1375,6 +1521,102 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /api/v1/tasks/{id}/apply-deadline-boost:
+    post:
+      operationId: task_apply_deadline_boost
+      summary: Применить купон продления дедлайна (+24 часа) к заданию
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeadlineBoostResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeMessageError'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /api/v1/tasks/{id}/submissions:
+    post:
+      operationId: task_submissions_create
+      summary: Отправить решение конкретного задания с проверкой GitHub
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskSubmissionCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TaskSubmissionCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TaskSubmissionCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Submission'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodeMessageError'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /api/v1/telegram/webhook:
     post:
       operationId: v1_telegram_webhook_create
@@ -1437,7 +1679,7 @@ paths:
           description: ''
     patch:
       operationId: users_me_update
-      summary: Обновить данные профиля (имя, контакты, оформление)
+      summary: Обновить данные профиля (имя, контакты, оформление, рамка аватара)
       tags:
       - v1
       requestBody:
@@ -2070,6 +2312,16 @@ components:
       required:
       - code
       - label
+    CodeMessageError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
     CsrfTokenResponse:
       type: object
       properties:
@@ -2093,13 +2345,19 @@ components:
         telegramUsername:
           type: string
           nullable: true
+        streakFreezes:
+          type: integer
+        deadlineBoosters:
+          type: integer
         stats:
           $ref: '#/components/schemas/CurrentUserStats'
       required:
       - availableCoins
+      - deadlineBoosters
       - isTelegramConnected
       - spentPoints
       - stats
+      - streakFreezes
       - telegramUsername
       - totalEarnedPoints
       - user
@@ -2116,6 +2374,20 @@ components:
       - streakCount
       - tasksAcceptedCount
       - totalScore
+    DeadlineBoostResponse:
+      type: object
+      properties:
+        taskId:
+          type: string
+        extendedUntil:
+          type: string
+          format: date-time
+        deadlineBoosters:
+          type: integer
+      required:
+      - deadlineBoosters
+      - extendedUntil
+      - taskId
     EasterEggResponse:
       type: object
       properties:
@@ -2136,9 +2408,66 @@ components:
           type: integer
         error:
           type: string
+        code:
+          type: string
         message: {}
         detail:
           type: string
+    GitHubValidationResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        owner:
+          type: string
+        repo:
+          type: string
+        fullName:
+          type: string
+        defaultBranch:
+          type: string
+        lastCommitSha:
+          type: string
+        lastCommitMessage:
+          type: string
+        lastCommitAt:
+          type: string
+          nullable: true
+      required:
+      - defaultBranch
+      - fullName
+      - lastCommitAt
+      - lastCommitMessage
+      - lastCommitSha
+      - owner
+      - repo
+      - valid
+    GroupLeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        groupNumber:
+          type: string
+        studentsCount:
+          type: integer
+        activeStudentsCount:
+          type: integer
+        averageScore:
+          type: number
+          format: double
+        totalScore:
+          type: integer
+        acceptedTasksCount:
+          type: integer
+      required:
+      - acceptedTasksCount
+      - activeStudentsCount
+      - averageScore
+      - groupNumber
+      - rank
+      - studentsCount
+      - totalScore
     HealthCheckResponse:
       type: object
       properties:
@@ -2183,6 +2512,9 @@ components:
         avatarUrl:
           type: string
           nullable: true
+        avatarFrame:
+          type: string
+          nullable: true
         groupNumber:
           type: string
           nullable: true
@@ -2197,6 +2529,7 @@ components:
         tasksAcceptedCount:
           type: integer
       required:
+      - avatarFrame
       - avatarUrl
       - currentMonth
       - groupNumber
@@ -2449,6 +2782,10 @@ components:
         isBonus:
           type: boolean
           default: false
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
     PatchedUserProfileUpdateRequestRequest:
       type: object
       properties:
@@ -2468,6 +2805,10 @@ components:
           type: string
           nullable: true
           maxLength: 500
+        activeAvatarFrame:
+          type: string
+          nullable: true
+          maxLength: 64
     PresetAchievementIcon:
       type: object
       properties:
@@ -2522,10 +2863,14 @@ components:
         avatarUrl:
           type: string
           nullable: true
+        avatarFrame:
+          type: string
+          nullable: true
         awardedAt:
           type: string
           format: date-time
       required:
+      - avatarFrame
       - avatarUrl
       - awardedAt
       - id
@@ -2692,6 +3037,18 @@ components:
           type: string
       required:
       - detail
+    ShopItemTypeEnum:
+      enum:
+      - PHYSICAL
+      - STREAK_FREEZE
+      - DEADLINE_EXTEND
+      - AVATAR_FRAME
+      type: string
+      description: |-
+        * `PHYSICAL` - Физический товар (PHYSICAL)
+        * `STREAK_FREEZE` - Щит заморозки стрика (STREAK_FREEZE)
+        * `DEADLINE_EXTEND` - Купон продления дедлайна (DEADLINE_EXTEND)
+        * `AVATAR_FRAME` - Рамка аватара (AVATAR_FRAME)
     ShopOrder:
       type: object
       properties:
@@ -2749,6 +3106,9 @@ components:
         description:
           type: string
           title: Описание
+        itemType:
+          $ref: '#/components/schemas/ShopItemTypeEnum'
+        metadata: {}
         priceSom:
           type: integer
         priceCoins:
@@ -2764,6 +3124,8 @@ components:
       required:
       - id
       - imageUrl
+      - itemType
+      - metadata
       - priceCoins
       - priceSom
       - title
@@ -2889,12 +3251,17 @@ components:
           type: string
           nullable: true
           title: URL аватара
+        avatarFrame:
+          type: string
+          readOnly: true
+          nullable: true
         group_number:
           type: string
           nullable: true
           title: Номер группы
           maxLength: 64
       required:
+      - avatarFrame
       - id
       - login
     StatusEnum:
@@ -2951,6 +3318,15 @@ components:
         voiceFeedbackUrl:
           type: string
           nullable: true
+        aiFeedback:
+          type: string
+          readOnly: true
+          nullable: true
+        aiReviewedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
         reviewedAt:
           type: string
           format: date-time
@@ -2973,6 +3349,8 @@ components:
           - $ref: '#/components/schemas/ShortTask'
           readOnly: true
       required:
+      - aiFeedback
+      - aiReviewedAt
       - createdAt
       - id
       - reviewedAt
@@ -2993,7 +3371,6 @@ components:
         solutionLink:
           type: string
           minLength: 1
-          format: uri
           maxLength: 500
         comment:
           type: string
@@ -3190,6 +3567,15 @@ components:
         isBonus:
           type: boolean
           default: false
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
+        personalDeadline:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
         mySubmission:
           allOf:
           - $ref: '#/components/schemas/ShortMySubmission'
@@ -3208,6 +3594,7 @@ components:
       - description
       - id
       - mySubmission
+      - personalDeadline
       - title
       - topic
       - updatedAt
@@ -3267,10 +3654,27 @@ components:
         isBonus:
           type: boolean
           default: false
+        deadline:
+          type: string
+          format: date-time
+          nullable: true
       required:
       - description
       - title
       - topic
+    TaskSubmissionCreateRequest:
+      type: object
+      properties:
+        solutionLink:
+          type: string
+          minLength: 1
+          maxLength: 500
+        comment:
+          type: string
+          nullable: true
+          maxLength: 10000
+      required:
+      - solutionLink
     TasksListResponse:
       type: object
       properties:
@@ -3320,6 +3724,52 @@ components:
       - botUsername
       - code
       - link
+    TelegramWebAppAuthRequestRequest:
+      type: object
+      properties:
+        initData:
+          type: string
+          minLength: 1
+          maxLength: 8192
+      required:
+      - initData
+    TelegramWebAppAuthResponse:
+      type: object
+      properties:
+        linked:
+          type: boolean
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+        telegramId:
+          type: string
+        telegramUsername:
+          type: string
+          nullable: true
+      required:
+      - linked
+    TelegramWebAppLinkRequestRequest:
+      type: object
+      properties:
+        initData:
+          type: string
+          minLength: 1
+          maxLength: 8192
+        login:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+      required:
+      - initData
+      - login
+      - password
     TelegramWebhookResponse:
       type: object
       properties:
@@ -3453,7 +3903,23 @@ components:
         bannerUrl:
           type: string
           readOnly: true
+        avatarFrame:
+          type: string
+          readOnly: true
+          nullable: true
+        activeAvatarFrame:
+          type: string
+          readOnly: true
+          nullable: true
+        unlockedAvatarFrames:
+          readOnly: true
         streakCount:
+          type: integer
+          readOnly: true
+        streakFreezes:
+          type: integer
+          readOnly: true
+        deadlineBoosters:
           type: integer
           readOnly: true
         totalScore:
@@ -3467,9 +3933,12 @@ components:
           format: date-time
           title: Дата создания
       required:
+      - activeAvatarFrame
+      - avatarFrame
       - avatarUrl
       - bannerUrl
       - currentMonth
+      - deadlineBoosters
       - groupId
       - groupNumber
       - has_subscription
@@ -3478,10 +3947,21 @@ components:
       - login
       - must_change_password
       - streakCount
+      - streakFreezes
       - subscription_expires_at
       - tasksAcceptedCount
       - telegramUsername
       - totalScore
+      - unlockedAvatarFrames
+    ValidateGitHubRequestRequest:
+      type: object
+      properties:
+        solutionLink:
+          type: string
+          minLength: 1
+          maxLength: 500
+      required:
+      - solutionLink
   securitySchemes:
     jwtAuth:
       type: http

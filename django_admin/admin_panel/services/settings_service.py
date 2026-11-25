@@ -149,6 +149,14 @@ DEFAULT_SETTINGS = [
         'is_public': True,
         'description': 'Стартовый месяц обучения при регистрации',
     },
+    {
+        'key': 'github_max_commit_age_days',
+        'value': '30',
+        'value_type': 'int',
+        'category': 'gamification',
+        'is_public': True,
+        'description': 'Максимальный возраст последнего коммита в GitHub-репозитории при сдаче ДЗ (дней)',
+    },
     # --- Регистрация и доступы ---
     {
         'key': 'registration_open',
@@ -487,6 +495,8 @@ def validate_setting_value(key: str, raw: str, value_type: str, *, is_public: bo
         raise ValidationError(f'Значение "{key}" должно быть целым числом от 0 до 10000.')
     elif key in ('bonus_task_multiplier', 'streak_threshold_days') and (type(parsed) is not int or not (1 <= parsed <= 365)):
         raise ValidationError(f'Значение "{key}" должно быть целым числом от 1 до 365.')
+    elif key == 'github_max_commit_age_days' and (type(parsed) is not int or not (1 <= parsed <= 3650)):
+        raise ValidationError('Порог свежести коммитов должен быть целым числом от 1 до 3650 дней.')
     elif key in ('frontend_url', 'support_url', 'instruction_pdf_url') and stripped:
         URLValidator(schemes=['http', 'https'])(stripped)
     elif key.startswith('tg_template_') and stripped:

@@ -31,7 +31,7 @@ class BcryptJWTAuthentication(JWTAuthentication):
         session = Session.objects.select_related('user').filter(
             id=sid, user_id=uid, user__isnull=False,
             expires_at__gt=timezone.now()).first()
-        if not session:
+        if not session or not session.user.is_active:
             raise AuthenticationFailed('Session expired or revoked')
         return session.user
 
@@ -60,7 +60,7 @@ def rotate_refresh(token):
     if not lookup:
         return None
     user = User.objects.select_for_update().filter(pk=lookup).first()
-    if not user:
+    if not user or not user.is_active:
         Session.objects.filter(refresh_token=digest).delete()
         return None
     session = Session.objects.select_for_update().filter(refresh_token=digest).first()

@@ -321,16 +321,18 @@ class MertsPlatformFullAPITestCase(TransactionTestCase):
         task_id = task_resp.json()['id']
 
         # 3. Student submits solution
-        sub_resp = self.client.post(
-            '/api/v1/submissions',
-            data=json.dumps({
-                "taskId": task_id,
-                "solutionLink": "https://github.com/student/hw-1",
-                "comment": "Готово к проверке",
-            }),
-            content_type='application/json',
-            **student_auth
-        )
+        from unittest.mock import patch
+        with patch('admin_panel.views.curriculum_views.validate_github_repository', return_value={'valid': True}):
+            sub_resp = self.client.post(
+                '/api/v1/submissions',
+                data=json.dumps({
+                    "taskId": task_id,
+                    "solutionLink": "https://github.com/student/hw-1",
+                    "comment": "Готово к проверке",
+                }),
+                content_type='application/json',
+                **student_auth
+            )
         self.assertEqual(sub_resp.status_code, 201)
         submission_id = sub_resp.json()['id']
 
@@ -1689,3 +1691,606 @@ class BackendFlexibilityAndBugfixesTests(TransactionTestCase):
             by_code['OSOBAYA_NAGRADA']['iconUrl'],
             f'http://testserver{manual_ach.icon_url}',
         )
+
+
+class PlatformV2FeaturesTestCase(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        create_schema()
+
+    def setUp(self):
+        clear_data()
+        ensure_default_achievements()
+
+    @staticmethod
+    def _build_tma_init_data(bot_token: str, user_dict: dict, *, auth_date: int | None = None, tamper_hash: bool = False) -> str:
+        import hashlib
+        import hmac
+        from urllib.parse import urlencode
+
+        if auth_date is None:
+            auth_date = int(timezone.now().timestamp())
+        params = {
+            'auth_date': str(auth_date),
+            'query_id': 'AAHdF6IQAAAAAN0XohDhrOrc',
+            'user': json.dumps(user_dict, separators=(',', ':'), ensure_ascii=False),
+        }
+        data_check_string = '\n'.join(f'{k}={v}' for k, v in sorted(params.items()))
+        secret_key = hmac.new(b'WebAppData', bot_token.encode('utf-8'), hashlib.sha256).digest()
+        sig = hmac.new(secret_key, data_check_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        if tamper_hash:
+            sig = ('0' if sig[0] != '0' else '1') + sig[1:]
+        return urlencode({**params, 'hash': sig})
+
+    def test_v2_01_github_preflight_validation_and_task_submissions(self):
+        from datetime import timedelta
+        from unittest.mock import MagicMock, patch
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import PlatformSetting
+
+        student = create_user(login='gh_student', role=RoleChoices.STUDENT, group_number='js-01', current_month=1)
+        task = Task.objects.create(title='GitHub HW', description='Сделать API', topic='Django', group_number='js-01', month=1)
+        api = APIClient()
+        token, _, _ = generate_tokens_for_user(student)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Non-GitHub URL rejected cleanly
+        r_bad = api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://gitlab.com/u/repo'}, format='json')
+        self.assertEqual(r_bad.status_code, 400)
+        self.assertEqual(r_bad.json()['code'], 'GITHUB_INVALID_URL')
+
+        def _mock_client_factory(responses_list, captured_headers=None):
+            client_ctx = MagicMock()
+            http_client = MagicMock()
+            http_client.get.side_effect = responses_list
+            client_ctx.__enter__.return_value = http_client
+
+            def _init(*args, **kwargs):
+                if captured_headers is not None:
+                    captured_headers.update(kwargs.get('headers') or {})
+                return client_ctx
+
+            return _init
+
+        def _resp(status_code: int, payload):
+            m = MagicMock()
+            m.status_code = status_code
+            m.json.return_value = payload
+            return m
+
+        # 2. Private / 404 repo -> GITHUB_NOT_FOUND / GITHUB_REPO_PRIVATE
+        with patch('admin_panel.services.github_service.httpx.Client', side_effect=_mock_client_factory([_resp(404, {})])):
+            r_404 = api.post(f'/api/v1/tasks/{task.id}/submissions', {'solutionLink': 'https://github.com/user/private-repo'}, format='json')
+        self.assertEqual(r_404.status_code, 400)
+        self.assertEqual(r_404.json()['code'], 'GITHUB_NOT_FOUND')
+        self.assertIn('приватный', r_404.json()['message'])
+
+        with patch('admin_panel.services.github_service.httpx.Client', side_effect=_mock_client_factory([_resp(403, {})])):
+            r_403 = api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://github.com/user/forbidden'}, format='json')
+        self.assertEqual(r_403.status_code, 400)
+        self.assertEqual(r_403.json()['code'], 'GITHUB_REPO_PRIVATE')
+
+        # 3. Empty repo (size == 0) -> GITHUB_REPO_EMPTY
+        with patch('admin_panel.services.github_service.httpx.Client', side_effect=_mock_client_factory([_resp(200, {'size': 0, 'default_branch': 'main'})])):
+            r_empty = api.post(f'/api/v1/tasks/{task.id}/submissions', {'solutionLink': 'https://github.com/user/empty-repo'}, format='json')
+        self.assertEqual(r_empty.status_code, 400)
+        self.assertEqual(r_empty.json()['code'], 'GITHUB_REPO_EMPTY')
+
+        # 4. Stale commit (> 30 days) -> GITHUB_NO_RECENT_COMMITS
+        old_iso = (timezone.now() - timedelta(days=45)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        with patch(
+            'admin_panel.services.github_service.httpx.Client',
+            side_effect=_mock_client_factory([
+                _resp(200, {'size': 24, 'default_branch': 'main', 'private': False}),
+                _resp(200, [{'sha': 'abc1234', 'commit': {'committer': {'date': old_iso}, 'message': 'init'}}]),
+            ]),
+        ):
+            r_stale = api.post(f'/api/v1/tasks/{task.id}/submissions', {'solutionLink': 'https://github.com/user/old-repo'}, format='json')
+        self.assertEqual(r_stale.status_code, 400)
+        self.assertEqual(r_stale.json()['code'], 'GITHUB_NO_RECENT_COMMITS')
+
+        # 5. Configurable threshold in PlatformSetting + GITHUB_TOKEN header + valid submission
+        PlatformSetting.objects.update_or_create(
+            key='github_max_commit_age_days',
+            defaults={'value': '60', 'value_type': 'int', 'category': 'gamification', 'is_public': True},
+        )
+        captured_hdrs = {}
+        fresh_iso = (timezone.now() - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'ghp_test_token_123'}), patch(
+            'admin_panel.services.github_service.httpx.Client',
+            side_effect=_mock_client_factory([
+                _resp(200, {'size': 120, 'default_branch': 'main', 'full_name': 'user/good-repo', 'private': False}),
+                _resp(200, [{'sha': 'deadbeef1', 'commit': {'committer': {'date': fresh_iso}, 'message': 'feat: done'}}]),
+            ], captured_hdrs),
+        ):
+            r_val = api.post('/api/v1/submissions/validate-github', {'solutionLink': 'https://github.com/user/good-repo.git'}, format='json')
+        self.assertEqual(r_val.status_code, 200)
+        self.assertTrue(r_val.json()['valid'])
+        self.assertEqual(r_val.json()['repo'], 'good-repo')
+        self.assertEqual(captured_hdrs.get('Authorization'), 'Bearer ghp_test_token_123')
+
+        with patch(
+            'admin_panel.services.github_service.httpx.Client',
+            side_effect=_mock_client_factory([
+                _resp(200, {'size': 120, 'default_branch': 'main', 'private': False}),
+                _resp(200, [{'sha': 'deadbeef1', 'commit': {'committer': {'date': fresh_iso}, 'message': 'feat: done'}}]),
+            ]),
+        ):
+            r_sub = api.post(
+                f'/api/v1/tasks/{task.id}/submissions',
+                {'solutionLink': 'https://github.com/user/good-repo', 'comment': 'Проверьте, пожалуйста'},
+                format='json',
+            )
+        self.assertEqual(r_sub.status_code, 201)
+        self.assertEqual(r_sub.json()['taskId'], task.id)
+
+    def test_v2_02_ai_code_review_async_worker_admin_and_mentor_telegram(self):
+        import base64
+        from unittest.mock import MagicMock, patch
+        from django.contrib.auth import get_user_model
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import TelegramOutbox
+        from admin_panel.services import outbox_service
+        from admin_panel.services.ai_review_service import fetch_repository_source_files
+
+        mentor = create_user(login='ai_mentor', role=RoleChoices.ADMIN, telegram_chat_id='555001')
+        student = create_user(login='ai_student', role=RoleChoices.STUDENT, group_number='js-01', current_month=1, mentor=mentor)
+        task = Task.objects.create(
+            title='REST API Авторизации',
+            description='Реализовать JWT-вход без хардкода секретов',
+            topic='Python',
+            group_number='js-01',
+            month=1,
+        )
+
+        # 1. Verify GitHub source fetcher filters ignored dirs/locks/images and caps to 6 files & 12k chars
+        tree_payload = {
+            'tree': [
+                {'path': 'node_modules/pkg/index.js', 'type': 'blob', 'size': 500},
+                {'path': 'venv/lib/site.py', 'type': 'blob', 'size': 500},
+                {'path': 'package-lock.json', 'type': 'blob', 'size': 5000},
+                {'path': 'logo.png', 'type': 'blob', 'size': 1200},
+                *[{'path': f'src/mod_{i}.py', 'type': 'blob', 'size': 3000} for i in range(8)],
+            ]
+        }
+        big_code = base64.b64encode(('x = 1\n' * 600).encode()).decode()
+        gh_ctx = MagicMock()
+        gh_http = MagicMock()
+        gh_ctx.__enter__.return_value = gh_http
+
+        def _gh_get(url, params=None):
+            m = MagicMock()
+            m.status_code = 200
+            if '/git/trees/' in url:
+                m.json.return_value = tree_payload
+            else:
+                m.json.return_value = {'encoding': 'base64', 'content': big_code}
+            return m
+
+        gh_http.get.side_effect = _gh_get
+        with patch('admin_panel.services.ai_review_service.httpx.Client', return_value=gh_ctx):
+            files = fetch_repository_source_files('https://github.com/student/api-hw')
+        self.assertLessEqual(len(files), 6)
+        self.assertLessEqual(sum(len(c) for _, c in files), 12_000)
+        self.assertTrue(all(not p.startswith(('node_modules/', 'venv/')) for p, _ in files))
+
+        # 2. Submit via API -> queued in TelegramOutbox without blocking response
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(student)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+        TelegramOutbox.objects.all().delete()
+
+        with patch('admin_panel.views.curriculum_views.validate_github_repository', return_value={'valid': True}):
+            resp = api.post(
+                f'/api/v1/tasks/{task.id}/submissions',
+                {'solutionLink': 'https://github.com/student/api-hw'},
+                format='json',
+            )
+        self.assertEqual(resp.status_code, 201)
+        sub = Submission.objects.get(pk=resp.json()['id'])
+        self.assertIsNone(sub.ai_feedback)
+        self.assertEqual(TelegramOutbox.objects.filter(chat_id='__ai_review__', status='pending').count(), 1)
+
+        # 3. Drain worker with AI_REVIEW_API_KEY -> saves ai_feedback & sends mentor Telegram card with AI snippet
+        ai_reply = '1) Безопасность: секретов нет.\n2) ТЗ: выполнено.\n3) Баги: ошибок не найдено.'
+        llm_ctx = MagicMock()
+        llm_http = MagicMock()
+        llm_ctx.__enter__.return_value = llm_http
+        llm_resp = MagicMock()
+        llm_resp.status_code = 200
+        llm_resp.json.return_value = {'choices': [{'message': {'content': ai_reply}}]}
+        llm_http.post.return_value = llm_resp
+
+        with patch.dict('os.environ', {'AI_REVIEW_API_KEY': 'sk-test-key', 'AI_REVIEW_MODEL': 'gpt-4o-mini'}), \
+             patch('admin_panel.services.ai_review_service.fetch_repository_source_files', return_value=[('app.py', 'print("ok")')]), \
+             patch('admin_panel.services.ai_review_service.httpx.Client', return_value=llm_ctx), \
+             patch('admin_panel.services.telegram_service.send_telegram_message', return_value=True) as mock_tg_send:
+            outbox_service.drain()
+
+        sub.refresh_from_db()
+        self.assertEqual(sub.ai_feedback, ai_reply)
+        self.assertIsNotNone(sub.ai_reviewed_at)
+        self.assertTrue(mock_tg_send.called)
+        mentor_msg_calls = [c for c in mock_tg_send.call_args_list if c.args[0] == '555001']
+        self.assertEqual(len(mentor_msg_calls), 1)
+        self.assertIn('AI-разбор', mentor_msg_calls[0].kwargs['text'])
+        self.assertIn('секретов нет', mentor_msg_calls[0].kwargs['text'])
+
+        # 4. Without AI_REVIEW_API_KEY -> saves clean fallback stub without crashing
+        from admin_panel.services.ai_review_service import run_ai_review_for_submission
+        sub2 = Submission.objects.create(
+            user=student,
+            task=Task.objects.create(title='T2', description='D2', topic='JS', month=1),
+            version=1,
+            solution_link='https://github.com/student/no-key',
+            status=SubmissionStatusChoices.SENT,
+        )
+        with patch.dict('os.environ', {'AI_REVIEW_API_KEY': ''}):
+            run_ai_review_for_submission(sub2.id, notify_mentors=False)
+        sub2.refresh_from_db()
+        self.assertIn('AI_REVIEW_API_KEY', sub2.ai_feedback)
+
+        # 5. Django Unfold SubmissionAdmin displays 🤖 AI-разбор block
+        owner = get_user_model().objects.create_superuser(username='unfold_ai_admin', password='Admin-Pass-2026!')
+        adm_client = Client()
+        adm_client.force_login(owner)
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(owner.pk)):
+            change_resp = adm_client.get(f'/admin/admin_panel/submission/{sub.pk}/change/')
+        self.assertEqual(change_resp.status_code, 200)
+        self.assertContains(change_resp, '🤖 AI-разбор')
+        self.assertContains(change_resp, 'секретов нет')
+
+    def test_v2_03_group_battles_leaderboard_and_query_efficiency(self):
+        from django.test.utils import CaptureQueriesContext
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+
+        StudyGroup.objects.create(name='js-01', month=1, is_active=True)
+        StudyGroup.objects.create(name='py-01', month=1, is_active=True)
+        StudyGroup.objects.create(name='empty-01', month=1, is_active=True)
+        StudyGroup.objects.create(name='arch-01', month=1, is_active=False)
+
+        admin_u = create_user(login='gb_admin', role=RoleChoices.ADMIN)
+        s_js1 = create_user(login='js_s1', role=RoleChoices.STUDENT, group_number='js-01', is_active=True)
+        s_js2 = create_user(login='js_s2', role=RoleChoices.STUDENT, group_number='js-01', is_active=True)
+        s_js_inact = create_user(login='js_s3', role=RoleChoices.STUDENT, group_number='js-01', is_active=False)
+        s_py1 = create_user(login='py_s1', role=RoleChoices.STUDENT, group_number='py-01', is_active=True)
+        s_arch = create_user(login='arch_s1', role=RoleChoices.STUDENT, group_number='arch-01', is_active=True)
+
+        t_m1 = Task.objects.create(title='M1 HW', description='d', topic='JS', month=1, max_score=100)
+        t_m2 = Task.objects.create(title='M2 HW', description='d', topic='JS', month=2, max_score=100)
+
+        Submission.objects.create(user=s_js1, task=t_m1, version=1, status='ACCEPTED', score=90, solution_link='https://github.com/a/b')
+        Submission.objects.create(user=s_js2, task=t_m1, version=1, status='ACCEPTED', score=63, solution_link='https://github.com/a/c')
+        # Inactive student's score must not inflate active group stats
+        Submission.objects.create(user=s_js_inact, task=t_m1, version=1, status='ACCEPTED', score=100, solution_link='https://github.com/a/d')
+        # Archived group student must be excluded
+        Submission.objects.create(user=s_arch, task=t_m1, version=1, status='ACCEPTED', score=100, solution_link='https://github.com/a/e')
+        # Month 2 score for py-01
+        ScoreAdjustment.objects.create(user=s_py1, admin=admin_u, amount=40, reason='M2 bonus', month=2)
+
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(s_js1)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+
+        with CaptureQueriesContext(connection) as ctx:
+            resp_all = api.get('/api/v1/leaderboard/groups')
+        self.assertEqual(resp_all.status_code, 200)
+        self.assertLessEqual(len(ctx), 5)
+
+        data = resp_all.json()
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]['rank'], 1)
+        self.assertEqual(data[0]['groupNumber'], 'js-01')
+        self.assertEqual(data[0]['studentsCount'], 3)
+        self.assertEqual(data[0]['activeStudentsCount'], 2)
+        self.assertEqual(data[0]['totalScore'], 153)
+        self.assertEqual(data[0]['averageScore'], 76.5)
+        self.assertEqual(data[0]['acceptedTasksCount'], 2)
+
+        self.assertEqual(data[1]['rank'], 2)
+        self.assertEqual(data[1]['groupNumber'], 'py-01')
+        self.assertEqual(data[1]['totalScore'], 40)
+
+        # Month filter: in month=1 py-01 has 0 points (division-by-zero safe!)
+        resp_m1 = api.get('/api/v1/leaderboard/groups?month=1').json()
+        py_m1 = next(item for item in resp_m1 if item['groupNumber'] == 'py-01')
+        self.assertEqual(py_m1['averageScore'], 0.0)
+        self.assertEqual(py_m1['totalScore'], 0)
+
+    def test_v2_04_burnout_radar_dashboard_filter_and_telegram_nudge(self):
+        from datetime import timedelta
+        from django.contrib.auth import get_user_model
+        from admin_panel.models import TelegramOutbox
+
+        now = timezone.now()
+        task = Task.objects.create(title='Radar Task', description='d', topic='Py', month=1)
+
+        # Student 1: broken streak (streak_count=0 with past submission)
+        s_broken = create_user(
+            login='broken_streak',
+            name='Алибек Стриков',
+            role=RoleChoices.STUDENT,
+            group_number='py-01',
+            streak_count=0,
+            last_active_date=now - timedelta(days=1),
+            telegram_username='alibek_dev',
+            telegram_chat_id='777111',
+            is_active=True,
+        )
+        Submission.objects.create(user=s_broken, task=task, version=1, status='ACCEPTED', score=10, solution_link='https://github.com/a/1')
+
+        # Student 2: last submission/activity 6 days ago
+        s_idle = create_user(
+            login='idle_student',
+            name='Бекзат Тихий',
+            role=RoleChoices.STUDENT,
+            group_number='js-02',
+            streak_count=3,
+            last_active_date=now - timedelta(days=6),
+            telegram_username='@bekzat_js',
+            telegram_chat_id='777222',
+            is_active=True,
+        )
+        old_sub = Submission.objects.create(user=s_idle, task=task, version=1, status='SENT', solution_link='https://github.com/a/2')
+        Submission.objects.filter(pk=old_sub.pk).update(created_at=now - timedelta(days=6))
+
+        # Student 3: healthy active student (should NOT appear in radar)
+        s_healthy = create_user(
+            login='healthy_student',
+            name='Данияр Активный',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            streak_count=5,
+            last_active_date=now,
+            is_active=True,
+        )
+        Submission.objects.create(user=s_healthy, task=task, version=1, status='SENT', solution_link='https://github.com/a/3')
+
+        # Student 4: inactive student (excluded)
+        create_user(
+            login='archived_student',
+            role=RoleChoices.STUDENT,
+            streak_count=0,
+            last_active_date=now - timedelta(days=20),
+            is_active=False,
+        )
+
+        owner = get_user_model().objects.create_superuser(username='radar_owner', password='Owner-Pass-2026!')
+        adm = Client()
+        adm.force_login(owner)
+
+        with override_settings(PLATFORM_OWNER_ADMIN_ID=str(owner.pk)):
+            dash = adm.get('/admin/')
+            self.assertEqual(dash.status_code, 200)
+            self.assertContains(dash, '🚨 Радар отстающих (риск выгорания)')
+            self.assertContains(dash, 'Алибек Стриков')
+            self.assertContains(dash, 'Бекзат Тихий')
+            self.assertContains(dash, 'https://t.me/alibek_dev')
+            self.assertContains(dash, 'Отправить пинок в Telegram')
+            self.assertNotContains(dash, 'Данияр Активный')
+
+            # UserAdmin SimpleListFilter burnout_risk=at_risk
+            filtered = adm.get('/admin/admin_panel/user/?burnout_risk=at_risk')
+            self.assertEqual(filtered.status_code, 200)
+            self.assertContains(filtered, 'broken_streak')
+            self.assertContains(filtered, 'idle_student')
+            self.assertNotContains(filtered, 'healthy_student')
+
+            # Quick action button POST sends Telegram reminder
+            TelegramOutbox.objects.all().delete()
+            nudge_resp = adm.post(f'/admin/burnout-nudge/{s_broken.pk}/', follow=True)
+            self.assertEqual(nudge_resp.status_code, 200)
+            self.assertEqual(TelegramOutbox.objects.filter(chat_id='777111').count(), 1)
+
+    def test_v2_05_streak_freeze_and_deadline_boosters_in_shop(self):
+        from datetime import timedelta
+        from io import StringIO
+        from django.core.management import call_command
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import ShopOrderStatus, ShopProduct, TelegramOutbox
+        from admin_panel.views.auth_views import update_user_streak
+
+        call_command('install_shop', missing_only=True, stdout=StringIO())
+        freeze_product = ShopProduct.objects.get(item_type='STREAK_FREEZE')
+        boost_product = ShopProduct.objects.get(item_type='DEADLINE_EXTEND')
+        self.assertEqual((freeze_product.price_coins, freeze_product.stock), (150, 999))
+        self.assertEqual((boost_product.price_coins, boost_product.stock), (200, 999))
+
+        admin_u = create_user(login='boost_admin', role=RoleChoices.ADMIN)
+        student = create_user(
+            login='boost_student',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            current_month=1,
+            streak_count=7,
+            last_active_date=timezone.now(),
+            telegram_chat_id='888111',
+        )
+        ScoreAdjustment.objects.create(user=student, admin=admin_u, amount=500, reason='Seed coins', month=1)
+
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(student)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+
+        # 1. Buy STREAK_FREEZE and DEADLINE_EXTEND -> immediately COMPLETED and credited
+        r_freeze = api.post('/api/v1/shop/orders', {'productId': freeze_product.id}, format='json')
+        self.assertEqual(r_freeze.status_code, 201)
+        self.assertEqual(r_freeze.json()['order']['status'], ShopOrderStatus.COMPLETED)
+
+        r_boost = api.post('/api/v1/shop/orders', {'productId': boost_product.id}, format='json')
+        self.assertEqual(r_boost.status_code, 201)
+        self.assertEqual(r_boost.json()['order']['status'], ShopOrderStatus.COMPLETED)
+
+        me = api.get('/api/v1/users/me').json()
+        self.assertEqual(me['streakFreezes'], 1)
+        self.assertEqual(me['deadlineBoosters'], 1)
+        self.assertEqual(me['user']['streakFreezes'], 1)
+        self.assertEqual(me['user']['deadlineBoosters'], 1)
+
+        # 2. Miss exactly 1 calendar day (last_active_date = 2 days ago) -> shield saves streak!
+        TelegramOutbox.objects.all().delete()
+        student.refresh_from_db()
+        student.last_active_date = timezone.now() - timedelta(days=2)
+        student.save(update_fields=['last_active_date'])
+
+        saved_streak = update_user_streak(student)
+        student.refresh_from_db()
+        self.assertEqual(saved_streak, 7)
+        self.assertEqual(student.streak_count, 7)
+        self.assertEqual(student.streak_freezes, 0)
+        self.assertEqual(TelegramOutbox.objects.filter(chat_id='888111').count(), 1)
+        from admin_panel.services.outbox_service import cipher
+        decrypted = json.loads(cipher().decrypt(TelegramOutbox.objects.get(chat_id='888111').payload['encrypted'].encode()))
+        self.assertIn('Щит заморозки спас твой стрик', decrypted['text'])
+
+        # 3. Apply deadline booster (+24 hours) to a task
+        base_deadline = timezone.now() + timedelta(hours=12)
+        task = Task.objects.create(
+            title='Deadline Task',
+            description='desc',
+            topic='Python',
+            group_number='js-01',
+            month=1,
+            deadline=base_deadline,
+        )
+        ext_resp = api.post(f'/api/v1/tasks/{task.id}/apply-deadline-boost')
+        self.assertEqual(ext_resp.status_code, 200)
+        self.assertEqual(ext_resp.json()['deadlineBoosters'], 0)
+        student.refresh_from_db()
+        self.assertEqual(student.deadline_boosters, 0)
+
+        # Second call without boosters returns 400
+        ext_fail = api.post(f'/api/v1/tasks/{task.id}/apply-deadline-boost')
+        self.assertEqual(ext_fail.status_code, 400)
+        self.assertEqual(ext_fail.json()['code'], 'NO_DEADLINE_BOOSTERS')
+
+    def test_v2_06_custom_avatar_frames_and_leaderboard_badges(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from rest_framework.test import APIClient
+        from admin_panel.authentication import generate_tokens_for_user
+        from admin_panel.models import ShopProduct
+
+        call_command('install_shop', missing_only=True, stdout=StringIO())
+        frames = {
+            p.metadata.get('frameSlug'): p
+            for p in ShopProduct.objects.filter(item_type='AVATAR_FRAME')
+        }
+        self.assertEqual(set(frames.keys()), {'gold', 'neon', 'flame', 'cyber'})
+        self.assertEqual(frames['neon'].price_coins, 350)
+
+        admin_u = create_user(login='frame_admin', role=RoleChoices.ADMIN)
+        student = create_user(login='frame_student', role=RoleChoices.STUDENT, group_number='js-01', current_month=1)
+        ScoreAdjustment.objects.create(user=student, admin=admin_u, amount=1000, reason='Coins', month=1)
+
+        ach = Achievement.objects.get(code='WELCOME')
+        UserAchievement.objects.get_or_create(user=student, achievement=ach)
+
+        api = APIClient()
+        tok, _, _ = generate_tokens_for_user(student)
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {tok}')
+
+        # 1. Cannot equip locked frame
+        locked_resp = api.patch('/api/v1/users/me', {'activeAvatarFrame': 'neon'}, format='json')
+        self.assertEqual(locked_resp.status_code, 400)
+
+        # 2. Purchase neon frame -> unlocked immediately; duplicate purchase rejected (409)
+        buy_resp = api.post('/api/v1/shop/orders', {'productId': frames['neon'].id}, format='json')
+        self.assertEqual(buy_resp.status_code, 201)
+        dup_buy = api.post('/api/v1/shop/orders', {'productId': frames['neon'].id}, format='json')
+        self.assertEqual(dup_buy.status_code, 409)
+
+        # 3. Equip neon frame via PATCH /api/v1/users/me
+        equip_resp = api.patch('/api/v1/users/me', {'activeAvatarFrame': 'neon'}, format='json')
+        self.assertEqual(equip_resp.status_code, 200)
+        self.assertEqual(equip_resp.json()['user']['avatarFrame'], 'neon')
+
+        # 4. Verify avatarFrame in GET /api/v1/leaderboard and GET /api/v1/achievements/{id}
+        lb = api.get('/api/v1/leaderboard').json()['leaderboard']
+        lb_row = next(r for r in lb if r['id'] == student.id)
+        self.assertEqual(lb_row['avatarFrame'], 'neon')
+
+        ach_detail = api.get(f'/api/v1/achievements/{ach.id}').json()['achievement']
+        achiever = next(a for a in ach_detail['recentAchievers'] if a['id'] == student.id)
+        self.assertEqual(achiever['avatarFrame'], 'neon')
+
+        # 5. Unequip frame with null
+        unequip_resp = api.patch('/api/v1/users/me', {'activeAvatarFrame': None}, format='json')
+        self.assertEqual(unequip_resp.status_code, 200)
+        self.assertIsNone(unequip_resp.json()['user']['avatarFrame'])
+
+    def test_v2_07_telegram_mini_app_initdata_auth_and_account_linking(self):
+        from unittest.mock import patch
+        from rest_framework.test import APIClient
+
+        bot_token = '123456789:AAExampleMiniAppBotSecretToken999'
+        anon = APIClient()
+
+        with patch.dict('os.environ', {'TELEGRAM_BOT_TOKEN': bot_token}):
+            # 1. Tampered signature -> 401
+            bad_init = self._build_tma_init_data(bot_token, {'id': 900100, 'username': 'tma_user'}, tamper_hash=True)
+            r_tampered = anon.post('/api/v1/auth/telegram-webapp', {'initData': bad_init}, format='json')
+            self.assertEqual(r_tampered.status_code, 401)
+
+            # 2. Expired auth_date (> 86400s) -> 401
+            old_ts = int(timezone.now().timestamp()) - 90000
+            expired_init = self._build_tma_init_data(bot_token, {'id': 900100, 'username': 'tma_user'}, auth_date=old_ts)
+            r_expired = anon.post('/api/v1/auth/telegram-webapp', {'initData': expired_init}, format='json')
+            self.assertEqual(r_expired.status_code, 401)
+
+            # 3. Valid initData for unlinked Telegram account -> 200 {"linked": false, ...}
+            valid_unlinked = self._build_tma_init_data(bot_token, {'id': 900100, 'username': 'new_tg_stud'})
+            r_unlinked = anon.post('/api/v1/auth/telegram-webapp', {'initData': valid_unlinked}, format='json')
+            self.assertEqual(r_unlinked.status_code, 200)
+            self.assertEqual(
+                r_unlinked.json(),
+                {'linked': False, 'telegramId': '900100', 'telegramUsername': 'new_tg_stud'},
+            )
+
+            # 4. Link existing student via POST /api/v1/auth/telegram-webapp/link
+            student = create_user(login='tma_student', role=RoleChoices.STUDENT, group_number='js-01')
+            student.set_password('StudentTmaPass#1')
+            student.save()
+
+            r_link = anon.post(
+                '/api/v1/auth/telegram-webapp/link',
+                {'initData': valid_unlinked, 'login': 'tma_student', 'password': 'StudentTmaPass#1'},
+                format='json',
+            )
+            self.assertEqual(r_link.status_code, 200)
+            self.assertIn('accessToken', r_link.json())
+            self.assertEqual(r_link.json()['user']['id'], student.id)
+            student.refresh_from_db()
+            self.assertEqual(student.telegram_chat_id, '900100')
+
+            # 5. Subsequent POST /api/v1/auth/telegram-webapp logs in immediately
+            r_linked = anon.post('/api/v1/auth/telegram-webapp', {'initData': valid_unlinked}, format='json')
+            self.assertEqual(r_linked.status_code, 200)
+            self.assertTrue(r_linked.json()['linked'])
+            self.assertEqual(r_linked.json()['user']['login'], 'tma_student')
+
+            # 6. Auto-match by telegram_username without prior telegram_chat_id
+            by_uname_student = create_user(
+                login='uname_match',
+                role=RoleChoices.STUDENT,
+                group_number='py-01',
+                telegram_username='matched_by_uname',
+            )
+            uname_init = self._build_tma_init_data(bot_token, {'id': 900200, 'username': 'Matched_By_Uname'})
+            r_uname = anon.post('/api/v1/auth/telegram-webapp', {'initData': uname_init}, format='json')
+            self.assertEqual(r_uname.status_code, 200)
+            self.assertTrue(r_uname.json()['linked'])
+            by_uname_student.refresh_from_db()
+            self.assertEqual(by_uname_student.telegram_chat_id, '900200')
+
+    def test_v2_08_install_platform_updates_idempotent(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        call_command('install_platform_updates', stdout=StringIO())
+        call_command('install_platform_updates', stdout=StringIO())

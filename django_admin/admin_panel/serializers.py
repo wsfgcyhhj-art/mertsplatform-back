@@ -17,6 +17,7 @@ from admin_panel.models import (
     User,
     Lesson,
     Task,
+    TaskDeadlineExtension,
     Submission,
     ScoreAdjustment,
     Achievement,
@@ -28,9 +29,11 @@ from admin_panel.models import (
 
 
 class ShortUserSerializer(serializers.ModelSerializer):
+    avatarFrame = serializers.CharField(source='active_avatar_frame', read_only=True, allow_null=True)
+
     class Meta:
         model = User
-        fields = ('id', 'login', 'name', 'role', 'avatar_url', 'group_number')
+        fields = ('id', 'login', 'name', 'role', 'avatar_url', 'avatarFrame', 'group_number')
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -57,6 +60,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
     groupId = serializers.SerializerMethodField()
     currentMonth = serializers.IntegerField(source='current_month', read_only=True)
     streakCount = serializers.IntegerField(source='streak_count', read_only=True)
+    streakFreezes = serializers.IntegerField(source='streak_freezes', read_only=True)
+    deadlineBoosters = serializers.IntegerField(source='deadline_boosters', read_only=True)
+    avatarFrame = serializers.CharField(source='active_avatar_frame', read_only=True, allow_null=True)
+    activeAvatarFrame = serializers.CharField(source='active_avatar_frame', read_only=True, allow_null=True)
+    unlockedAvatarFrames = serializers.JSONField(source='unlocked_avatar_frames', read_only=True)
     totalScore = serializers.SerializerMethodField()
     tasksAcceptedCount = serializers.SerializerMethodField()
 
@@ -76,7 +84,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'currentMonth',
             'avatarUrl',
             'bannerUrl',
+            'avatarFrame',
+            'activeAvatarFrame',
+            'unlockedAvatarFrames',
             'streakCount',
+            'streakFreezes',
+            'deadlineBoosters',
             'totalScore',
             'tasksAcceptedCount',
             'created_at',
@@ -188,6 +201,8 @@ class TaskSerializer(serializers.ModelSerializer):
     hasScore = serializers.BooleanField(source='has_score', default=False)
     maxScore = serializers.IntegerField(source='max_score', allow_null=True, required=False)
     isBonus = serializers.BooleanField(source='is_bonus', default=False)
+    deadline = serializers.DateTimeField(allow_null=True, required=False)
+    personalDeadline = serializers.SerializerMethodField()
     mySubmission = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
@@ -221,10 +236,27 @@ class TaskSerializer(serializers.ModelSerializer):
             'hasScore',
             'maxScore',
             'isBonus',
+            'deadline',
+            'personalDeadline',
             'mySubmission',
             'createdAt',
             'updatedAt',
         )
+
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
+    def get_personalDeadline(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return obj.deadline
+        if 'deadline_extensions_map' in self.context:
+            ext_until = self.context['deadline_extensions_map'].get(obj.id)
+        else:
+            ext_until = (
+                TaskDeadlineExtension.objects.filter(task_id=obj.id, user_id=request.user.id)
+                .values_list('extended_until', flat=True)
+                .first()
+            )
+        return ext_until or obj.deadline
 
     @extend_schema_field(ShortMySubmissionSerializer(allow_null=True))
     def get_mySubmission(self, obj):
@@ -259,6 +291,8 @@ class SubmissionSerializer(serializers.ModelSerializer):
     solutionLink = serializers.CharField(source='solution_link')
     reviewerComment = serializers.CharField(source='reviewer_comment', allow_null=True, required=False)
     voiceFeedbackUrl = serializers.CharField(source='voice_feedback_url', allow_null=True, required=False)
+    aiFeedback = serializers.CharField(source='ai_feedback', allow_null=True, read_only=True)
+    aiReviewedAt = serializers.DateTimeField(source='ai_reviewed_at', allow_null=True, read_only=True)
     reviewedAt = serializers.DateTimeField(source='reviewed_at', allow_null=True, read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
@@ -279,6 +313,8 @@ class SubmissionSerializer(serializers.ModelSerializer):
             'score',
             'reviewerComment',
             'voiceFeedbackUrl',
+            'aiFeedback',
+            'aiReviewedAt',
             'reviewedAt',
             'createdAt',
             'updatedAt',
@@ -365,8 +401,14 @@ class ScoreAdjustmentRequestSerializer(serializers.Serializer):
 class ErrorResponseSerializer(serializers.Serializer):
     statusCode = serializers.IntegerField(required=False)
     error = serializers.CharField(required=False)
+    code = serializers.CharField(required=False)
     message = serializers.JSONField(required=False)
     detail = serializers.CharField(required=False)
+
+
+class CodeMessageErrorSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    message = serializers.CharField()
 
 
 class MessageResponseSerializer(serializers.Serializer):

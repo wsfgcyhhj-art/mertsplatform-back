@@ -569,11 +569,12 @@ class AuditIntegrationRegressionTests(TransactionTestCase):
         self.student.last_active_date = timezone.now() - timedelta(days=1)
         self.student.save()
 
-        sub_resp = self.student_client.post(
-            '/api/v1/submissions',
-            {'taskId': task.id, 'solutionLink': 'https://github.com/u/streak'},
-            format='json',
-        )
+        with patch('admin_panel.views.curriculum_views.validate_github_repository', return_value={'valid': True}):
+            sub_resp = self.student_client.post(
+                '/api/v1/submissions',
+                {'taskId': task.id, 'solutionLink': 'https://github.com/u/streak'},
+                format='json',
+            )
         self.assertEqual(sub_resp.status_code, 201)
         self.student.refresh_from_db()
         self.assertEqual(self.student.streak_count, 2)
@@ -988,7 +989,8 @@ class AuditV2RegressionTests(TransactionTestCase):
         self.assertIn(surrogate_login.status_code, (400, 401))
 
         task = Task.objects.create(title='HW1', topic='Py', month=1, max_score=10)
-        s1 = self.student_client.post('/api/v1/submissions', {'taskId': task.id, 'solutionLink': 'https://github.com/u/r1'}, format='json')
+        with patch('admin_panel.views.curriculum_views.validate_github_repository', return_value={'valid': True}):
+            s1 = self.student_client.post('/api/v1/submissions', {'taskId': task.id, 'solutionLink': 'https://github.com/u/r1'}, format='json')
         self.assertEqual(s1.status_code, 201)
         sub_id = s1.json()['id']
         dup = self.student_client.post('/api/v1/submissions', {'taskId': task.id, 'solutionLink': 'https://github.com/u/r2'}, format='json')

@@ -244,6 +244,7 @@ UNFOLD = {
     ],
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": False,
+    "DASHBOARD_CALLBACK": "admin_panel.admin.dashboard_callback",
     # Оставляем THEME=None в самом движке Unfold, чтобы рендерился встроенный переключатель Light/Dark/System,
     # а скрипт theme_init.js автоматически включает темную тему по умолчанию и добавляет кнопку в шапку!
     "THEME": None,
@@ -388,6 +389,7 @@ SPECTACULAR_SETTINGS = {
     'ENUM_NAME_OVERRIDES': {
         'StatusEnum': 'admin_panel.models.SubmissionStatusChoices',
         'ShopOrderStatusEnum': 'admin_panel.models.ShopOrderStatus',
+        'ShopItemTypeEnum': 'admin_panel.models.ShopItemTypeChoices',
     },
     'TITLE': 'MertsPlatform LMS API',
     'DESCRIPTION': 'Production REST API for MertsPlatform: Authentication, Curriculum, Homework Submissions, Media Assets & Dynamic Gamification Engine.',

@@ -1,9 +1,11 @@
+from datetime import timedelta
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, models, transaction
-from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
+from django.db import IntegrityError, OperationalError, ProgrammingError, models, transaction
+from django.db.models import Count, DateTimeField, IntegerField, OuterRef, Q, Subquery, Value
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
+from django.http import HttpResponseNotAllowed
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.html import format_html_join, escape
@@ -34,6 +36,7 @@ from .models import (
     Task,
     Submission,
     ScoreAdjustment,
+    ShopItemTypeChoices,
     ShopOrder,
     ShopOrderStatus,
     ShopProduct,
@@ -50,6 +53,7 @@ from admin_panel.services.telegram_service import (
     async_broadcast_message,
     notify_lesson_published,
     notify_task_published,
+    send_burnout_nudge,
     send_test_telegram_message,
 )
 from admin_panel.services.achievement_service import (
@@ -91,6 +95,125 @@ class StudyGroupDropdownFilter(DropdownFilter):
     def queryset(self, request, queryset):
         if self.value():
             return queryset.filter(**{self.group_lookup: self.value()})
+        return queryset
+
+
+def annotate_burnout_risk(queryset):
+    last_sub_sq = Subquery(
+        Submission.objects.filter(user_id=OuterRef('pk'))
+        .order_by('-created_at')
+        .values('created_at')[:1],
+        output_field=DateTimeField(),
+    )
+    subs_cnt_sq = Subquery(
+        Submission.objects.filter(user_id=OuterRef('pk'))
+        .values('user_id')
+        .annotate(cnt=Count('id'))
+        .values('cnt')[:1],
+        output_field=IntegerField(),
+    )
+    return queryset.annotate(
+        _last_submission_at=last_sub_sq,
+        _submissions_count=Coalesce(subs_cnt_sq, Value(0)),
+    )
+
+
+def filter_burnout_risk(queryset, *, now=None):
+    now = now or timezone.now()
+    cutoff = now - timedelta(days=4)
+    return (
+        annotate_burnout_risk(queryset)
+        .filter(role=RoleChoices.STUDENT, is_active=True)
+        .filter(
+            Q(streak_count=0, _submissions_count__gt=0)
+            | Q(_last_submission_at__lt=cutoff)
+            | Q(last_active_date__lt=cutoff)
+            | Q(_last_submission_at__isnull=True, last_active_date__isnull=True, created_at__lt=cutoff)
+        )
+    )
+
+
+def _clean_tg_username(user: User) -> str:
+    for candidate in (user.telegram_username, user.telegram):
+        if not candidate:
+            continue
+        cleaned = candidate.strip()
+        if cleaned.startswith(('https://t.me/', 'http://t.me/')):
+            cleaned = cleaned.split('t.me/', 1)[1].split('/', 1)[0].split('?', 1)[0]
+        cleaned = cleaned.lstrip('@').strip()
+        if re.fullmatch(r'[A-Za-z0-9_]{3,32}', cleaned):
+            return cleaned
+    return ''
+
+
+def get_burnout_radar_rows(limit: int = 50) -> list[dict]:
+    now = timezone.now()
+    qs = filter_burnout_risk(User.objects.all(), now=now).order_by('streak_count', '_last_submission_at', 'last_active_date', 'created_at')
+    rows = []
+    for st in qs[:limit]:
+        ref_dt = st._last_submission_at or st.last_active_date or st.created_at
+        days_idle = max(0, (now - ref_dt).days) if ref_dt else 0
+        tg_username = _clean_tg_username(st)
+        rows.append({
+            'id': st.pk,
+            'full_name': (st.name or '').strip() or st.login,
+            'login': st.login,
+            'group_number': st.group_number or '—',
+            'days_without_submissions': days_idle,
+            'streak_count': st.streak_count or 0,
+            'tg_username': tg_username,
+            'tg_url': f'https://t.me/{tg_username}' if tg_username else None,
+            'has_tg_bot': bool(st.telegram_chat_id),
+        })
+    rows.sort(key=lambda item: (-item['days_without_submissions'], item['streak_count'], item['login']))
+    return rows
+
+
+def dashboard_callback(request, context):
+    try:
+        total_at_risk = filter_burnout_risk(User.objects.all()).count()
+        radar_rows = get_burnout_radar_rows(limit=50)
+    except (OperationalError, ProgrammingError):
+        total_at_risk = 0
+        radar_rows = []
+    context['burnout_radar_count'] = total_at_risk
+    context['burnout_radar_students'] = radar_rows
+    return context
+
+
+def burnout_nudge_view(request, user_id: str):
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+    if not getattr(request.user, 'is_staff', False):
+        raise PermissionDenied('Требуются права администратора.')
+    student = User.objects.filter(pk=user_id, role=RoleChoices.STUDENT).first()
+    if not student:
+        messages.error(request, 'Студент не найден.')
+        return redirect(reverse('admin:index'))
+    if send_burnout_nudge(student):
+        messages.success(request, f'Напоминание отправлено студенту @{student.login} в Telegram.')
+    else:
+        messages.warning(request, f'У студента @{student.login} не привязан Telegram-бот.')
+    return redirect(reverse('admin:index'))
+
+
+class BurnoutRiskFilter(admin.SimpleListFilter):
+    title = 'Риск выгорания (4+ дней без сдач)'
+    parameter_name = 'burnout_risk'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('at_risk', 'В зоне риска (4+ дней / сбит стрик)'),
+            ('safe', 'Без риска выгорания'),
+        )
+
+    def queryset(self, request, queryset):
+        val = (self.value() or '').strip().lower()
+        if val in ('at_risk', '1', 'yes', 'true'):
+            return filter_burnout_risk(queryset)
+        if val in ('safe', '0', 'no', 'false'):
+            risk_ids = filter_burnout_risk(User.objects.all()).values('pk')
+            return queryset.exclude(pk__in=risk_ids)
         return queryset
 
 
@@ -161,7 +284,58 @@ class SubmissionAdmin(ModelAdmin):
     search_fields = ('user__login', 'user__name', 'task__title', 'solution_link')
     list_editable = ('status', 'score')
     ordering = ('-created_at',)
+    readonly_fields = ('ai_review_panel', 'ai_reviewed_at', 'created_at', 'updated_at')
+    fieldsets = (
+        ('Сдача и оценка', {
+            'fields': (
+                'user',
+                'task',
+                'reviewer',
+                'version',
+                'solution_link',
+                'comment',
+                'status',
+                'was_revised',
+                'score',
+                'reviewer_comment',
+                'voice_feedback_url',
+                'mentor_telegram_msg_id',
+                'reviewed_at',
+            ),
+        }),
+        ('🤖 AI-разбор', {
+            'fields': ('ai_review_panel', 'ai_feedback', 'ai_reviewed_at'),
+        }),
+        ('Системные даты', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',),
+        }),
+    )
     actions = ['mark_accepted', 'mark_revision']
+
+    @admin.display(description='🤖 AI-разбор')
+    def ai_review_panel(self, obj):
+        if not obj or not obj.ai_feedback:
+            return format_html(
+                '<div style="padding:12px 14px;border-radius:12px;background:#18181b;border:1px solid #27272a;'
+                'color:#a1a1aa;font-size:13px;">{}</div>',
+                '⏳ AI-анализ ещё выполняется в очереди воркера или не запускался.',
+            )
+        reviewed_str = (
+            timezone.localtime(obj.ai_reviewed_at).strftime('%d.%m.%Y %H:%M')
+            if obj.ai_reviewed_at
+            else '—'
+        )
+        return format_html(
+            '<div style="padding:14px 16px;border-radius:12px;background:#09090b;'
+            'border:1px solid rgba(245,158,11,0.4);max-width:720px;">'
+            '<div style="font-size:11px;font-weight:700;color:#fbbf24;text-transform:uppercase;'
+            'letter-spacing:0.05em;margin-bottom:6px;">🤖 AI Code Review ({})</div>'
+            '<div style="white-space:pre-wrap;font-size:13px;line-height:1.5;color:#f4f4f5;">{}</div>'
+            '</div>',
+            reviewed_str,
+            obj.ai_feedback,
+        )
 
     def get_changelist_form(self, request, **kwargs):
         return SubmissionListForm
@@ -676,6 +850,9 @@ class UserAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance and self.instance.pk and self.instance.group_number:
             self.initial['group_selector'] = self.instance.group_number
+        for opt_field in ('unlocked_avatar_frames', 'streak_freezes', 'deadline_boosters'):
+            if opt_field in self.fields:
+                self.fields[opt_field].required = False
 
     def clean_new_password(self):
         pwd = self.cleaned_data.get('new_password') or ''
@@ -694,6 +871,12 @@ class UserAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        if cleaned_data.get('unlocked_avatar_frames') is None:
+            cleaned_data['unlocked_avatar_frames'] = []
+        if cleaned_data.get('streak_freezes') is None:
+            cleaned_data['streak_freezes'] = 0
+        if cleaned_data.get('deadline_boosters') is None:
+            cleaned_data['deadline_boosters'] = 0
         if 'group_selector' in self.fields:
             grp = clean_group(
                 (cleaned_data.get('group_selector') or '').strip(),
@@ -735,8 +918,9 @@ class UserAdmin(GroupSavingAdmin):
         'group_number',
         'current_month',
         'role',
+        'is_active',
     )
-    list_filter = ('role', 'mentor', 'current_month', StudyGroupDropdownFilter)
+    list_filter = ('role', 'is_active', BurnoutRiskFilter, 'mentor', 'current_month', StudyGroupDropdownFilter)
     search_fields = ('login', 'name', 'telegram', 'telegram_username', 'telegram_chat_id', 'group_number')
     list_editable = ('name', 'current_month')
     raw_id_fields = ('mentor',)
@@ -908,17 +1092,17 @@ class UserAdmin(GroupSavingAdmin):
 
     fieldsets = (
         ('Основная информация', {
-            'fields': ('login', 'name', 'role', 'new_password'),
+            'fields': ('login', 'name', 'role', 'is_active', 'new_password'),
         }),
         ('Telegram и бот', {
             'fields': ('telegram_chat_id', 'telegram', 'telegram_username', 'telegram_auth_code'),
             'description': 'Настройки для бота Telegraf. Числовой Chat ID используется для роутинга карточек сдачи ДЗ менторам и отправки уведомлений.',
         }),
         ('Обучение и менторство', {
-            'fields': ('mentor', 'group_selector', 'current_month', 'streak_count', 'last_active_date'),
+            'fields': ('mentor', 'group_selector', 'current_month', 'streak_count', 'streak_freezes', 'deadline_boosters', 'last_active_date'),
         }),
         ('Оформление профиля', {
-            'fields': ('avatar_url', 'banner_url'),
+            'fields': ('avatar_url', 'banner_url', 'active_avatar_frame', 'unlocked_avatar_frames'),
             'classes': ('collapse',),
         }),
         ('Системная информация', {
@@ -1834,6 +2018,20 @@ class ShopProductForm(forms.ModelForm):
         model = ShopProduct
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'item_type' in self.fields:
+            self.fields['item_type'].required = False
+        if 'metadata' in self.fields:
+            self.fields['metadata'].required = False
+
+    def clean_item_type(self):
+        return self.cleaned_data.get('item_type') or ShopItemTypeChoices.PHYSICAL
+
+    def clean_metadata(self):
+        val = self.cleaned_data.get('metadata')
+        return val if isinstance(val, dict) else {}
+
     def clean_image_url(self):
         raw = self.cleaned_data.get('image_url') or ''
         return validate_safe_url(raw, allow_media_path=True, max_length=500)
@@ -1858,11 +2056,11 @@ class ShopProductForm(forms.ModelForm):
 class ShopProductAdmin(ModelAdmin):
     list_fullwidth = True
     form = ShopProductForm
-    fields = ('title', 'description', 'price_som', 'price_coins', 'stock', 'is_active', 'order', 'image_url', 'image')
-    list_display = ('title', 'price_som', 'price_coins', 'stock', 'is_active', 'order')
+    fields = ('title', 'description', 'item_type', 'metadata', 'price_som', 'price_coins', 'stock', 'is_active', 'order', 'image_url', 'image')
+    list_display = ('title', 'item_type', 'price_som', 'price_coins', 'stock', 'is_active', 'order')
     list_editable = ('price_coins', 'stock', 'is_active')
     search_fields = ('title', 'description')
-    list_filter = ('is_active',)
+    list_filter = ('item_type', 'is_active')
 
     def save_model(self, request, obj, form, change):
         from .services.media_service import read_upload, save_optimized_media_asset

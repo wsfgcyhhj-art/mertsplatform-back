@@ -1,6 +1,7 @@
 from admin_panel.achievement_icons import to_absolute_media_url
 from admin_panel.serializers import EmptyRequestSerializer
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
+from admin_panel.services.group_service import normalize_group_number
 from admin_panel.services.score_service import annotate_user_scores
 from django.db.models import Count, Q
 from rest_framework.views import APIView
@@ -11,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from admin_panel.models import (
     User,
+    StudyGroup,
     Achievement,
     UserAchievement,
     Submission,
@@ -44,6 +46,7 @@ class RecentAchieverSerializer(serializers.Serializer):
     name = serializers.CharField(allow_null=True)
     login = serializers.CharField()
     avatarUrl = serializers.CharField(allow_null=True)
+    avatarFrame = serializers.CharField(allow_null=True)
     awardedAt = serializers.DateTimeField()
 
 
@@ -64,12 +67,23 @@ class LeaderboardEntrySerializer(serializers.Serializer):
     name = serializers.CharField(allow_null=True)
     login = serializers.CharField()
     avatarUrl = serializers.CharField(allow_null=True)
+    avatarFrame = serializers.CharField(allow_null=True)
     groupNumber = serializers.CharField(allow_null=True)
     currentMonth = serializers.IntegerField()
     streakCount = serializers.IntegerField()
     totalScore = serializers.IntegerField()
     tasksSentCount = serializers.IntegerField()
     tasksAcceptedCount = serializers.IntegerField()
+
+
+class GroupLeaderboardEntrySerializer(serializers.Serializer):
+    rank = serializers.IntegerField()
+    groupNumber = serializers.CharField()
+    studentsCount = serializers.IntegerField()
+    activeStudentsCount = serializers.IntegerField()
+    averageScore = serializers.FloatField()
+    totalScore = serializers.IntegerField()
+    acceptedTasksCount = serializers.IntegerField()
 
 
 class LeaderboardResponseSerializer(serializers.Serializer):
@@ -197,6 +211,7 @@ class AchievementDetailView(APIView):
                 'name': ua.user.name,
                 'login': ua.user.login,
                 'avatarUrl': to_absolute_media_url(ua.user.avatar_url, request=request),
+                'avatarFrame': ua.user.active_avatar_frame,
                 'awardedAt': ua.awarded_at,
             }
             for ua in recent_qs
@@ -240,7 +255,7 @@ class LeaderboardView(APIView):
         if not 1 <= page <= 100000 or not 1 <= limit <= 200:
             return Response({'message': 'Invalid pagination'}, status=400)
 
-        students_qs = User.objects.filter(role=RoleChoices.STUDENT)
+        students_qs = User.objects.filter(role=RoleChoices.STUDENT, is_active=True)
 
         group_filter = (qparam(request, 'groupNumber', 'group_number') or '').strip()
         if group_filter and group_filter.upper() != 'ALL':
@@ -280,6 +295,7 @@ class LeaderboardView(APIView):
                 'name',
                 'login',
                 'avatar_url',
+                'active_avatar_frame',
                 'group_number',
                 'current_month',
                 'streak_count',
@@ -296,6 +312,7 @@ class LeaderboardView(APIView):
                 'name': row['name'],
                 'login': row['login'],
                 'avatarUrl': to_absolute_media_url(row['avatar_url'], request=request),
+                'avatarFrame': row['active_avatar_frame'],
                 'groupNumber': row['group_number'],
                 'currentMonth': row['current_month'],
                 'streakCount': row['streak_count'],
@@ -314,3 +331,96 @@ class LeaderboardView(APIView):
             "month": target_month,
             "leaderboard": results,
         })
+
+
+class GroupLeaderboardView(APIView):
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        operation_id="leaderboard_groups_list",
+        summary="Битва учебных групп (агрегированный рейтинг по среднему баллу)",
+        responses={200: GroupLeaderboardEntrySerializer(many=True), 400: ErrorResponseSerializer},
+        parameters=[
+            OpenApiParameter(name="month", type=str, description="Месяц обучения (1..24 или 'all')"),
+        ],
+    )
+    def get(self, request):
+        raw_month = qparam(request, 'month')
+        target_month = None
+        if raw_month not in (None, '') and str(raw_month).strip().lower() != 'all':
+            try:
+                target_month = int(raw_month)
+                if not 1 <= target_month <= 24:
+                    return Response({'message': 'Invalid month parameter'}, status=400)
+            except (TypeError, ValueError):
+                return Response({'message': 'Invalid month parameter'}, status=400)
+
+        archived_groups = set()
+        canonical_names = {}
+        for g_name, g_active in StudyGroup.objects.values_list('name', 'is_active'):
+            norm = normalize_group_number(g_name)
+            if not norm or norm == 'all':
+                continue
+            canonical_names[norm] = g_name.strip()
+            if not g_active:
+                archived_groups.add(norm)
+
+        rows = list(
+            annotate_user_scores(
+                User.objects.filter(role=RoleChoices.STUDENT)
+                .exclude(group_number__isnull=True)
+                .exclude(group_number=''),
+                month=target_month,
+            ).values('group_number', 'is_active', 'total_score', 'tasks_accepted_count')
+        )
+
+        buckets = {}
+        for row in rows:
+            raw_grp = (row['group_number'] or '').strip()
+            norm = normalize_group_number(raw_grp)
+            if not norm or norm == 'all' or norm in archived_groups:
+                continue
+            bucket = buckets.get(norm)
+            if bucket is None:
+                bucket = {
+                    'groupNumber': canonical_names.get(norm, raw_grp),
+                    'studentsCount': 0,
+                    'activeStudentsCount': 0,
+                    'totalScore': 0,
+                    'acceptedTasksCount': 0,
+                }
+                buckets[norm] = bucket
+            bucket['studentsCount'] += 1
+            if row['is_active']:
+                bucket['activeStudentsCount'] += 1
+                bucket['totalScore'] += int(row['total_score'] or 0)
+                bucket['acceptedTasksCount'] += int(row['tasks_accepted_count'] or 0)
+
+        compiled = []
+        for bucket in buckets.values():
+            active_cnt = bucket['activeStudentsCount']
+            if active_cnt <= 0:
+                continue
+            total_score = bucket['totalScore']
+            avg_score = round(total_score / active_cnt, 1) if active_cnt > 0 else 0.0
+            compiled.append({
+                'groupNumber': bucket['groupNumber'],
+                'studentsCount': bucket['studentsCount'],
+                'activeStudentsCount': active_cnt,
+                'averageScore': avg_score,
+                'totalScore': total_score,
+                'acceptedTasksCount': bucket['acceptedTasksCount'],
+            })
+
+        compiled.sort(
+            key=lambda item: (
+                -item['averageScore'],
+                -item['totalScore'],
+                -item['acceptedTasksCount'],
+                item['groupNumber'].lower(),
+            )
+        )
+        for idx, item in enumerate(compiled, 1):
+            item['rank'] = idx
+        return Response(compiled)

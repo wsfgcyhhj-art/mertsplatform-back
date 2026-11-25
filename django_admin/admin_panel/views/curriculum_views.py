@@ -1,13 +1,15 @@
 from collections.abc import Mapping
-from datetime import timezone as dt_timezone
+from datetime import timedelta, timezone as dt_timezone
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from admin_panel.models import ALLOWED_SUBMISSION_TRANSITIONS, User
+from admin_panel.models import ALLOWED_SUBMISSION_TRANSITIONS, TaskDeadlineExtension, User
 from django.core.validators import URLValidator
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
+from admin_panel.services.github_service import GitHubValidationError, validate_github_repository
 from admin_panel.services.group_service import normalize_group_number, with_normalized_group
+from admin_panel.services.outbox_service import enqueue_ai_review
 from django.core.exceptions import ValidationError
-from admin_panel.serializers import EmptyRequestSerializer
+from admin_panel.serializers import CodeMessageErrorSerializer, EmptyRequestSerializer
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -44,14 +46,121 @@ class TasksListResponseSerializer(PaginatedMetaMixin):
 
 class SubmissionCreateSerializer(serializers.Serializer):
     taskId = serializers.CharField(max_length=64)
-    solutionLink = serializers.CharField(max_length=500, validators=[URLValidator(schemes=['https', 'http'])])
+    solutionLink = serializers.CharField(max_length=500)
     comment = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=10000)
+
+
+class TaskSubmissionCreateSerializer(serializers.Serializer):
+    solutionLink = serializers.CharField(max_length=500)
+    comment = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=10000)
+
+
+class ValidateGitHubRequestSerializer(serializers.Serializer):
+    solutionLink = serializers.CharField(max_length=500)
+
+
+class GitHubValidationResponseSerializer(serializers.Serializer):
+    valid = serializers.BooleanField()
+    owner = serializers.CharField()
+    repo = serializers.CharField()
+    fullName = serializers.CharField()
+    defaultBranch = serializers.CharField()
+    lastCommitSha = serializers.CharField()
+    lastCommitMessage = serializers.CharField()
+    lastCommitAt = serializers.CharField(allow_null=True)
+
+
+class DeadlineBoostResponseSerializer(serializers.Serializer):
+    taskId = serializers.CharField()
+    extendedUntil = serializers.DateTimeField()
+    deadlineBoosters = serializers.IntegerField()
 
 
 class SubmissionsListResponseSerializer(PaginatedMetaMixin):
     submissions = SubmissionSerializer(many=True)
-from admin_panel.services.telegram_service import notify_submission_created
 from admin_panel.views.auth_views import update_user_streak
+
+
+def _create_validated_submission(request, *, task_id: str, solution_link: str, comment: str | None) -> Response:
+    user = User.objects.select_for_update().get(pk=request.user.pk)
+    task_id = (task_id or '').strip()
+    solution_link = (solution_link or '').strip()
+    comment = (comment or '').strip() or None
+
+    if not task_id or not solution_link:
+        return Response(
+            {"statusCode": 400, "error": "Bad Request", "message": "taskId and solutionLink are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        task = Task.objects.get(id=task_id)
+    except Task.DoesNotExist:
+        return Response(
+            {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
+        return Response({'message': 'Forbidden'}, status=403)
+
+    if Submission.objects.filter(
+        user_id=user.id,
+        task_id=task.id,
+        status__in=(
+            SubmissionStatusChoices.SENT,
+            SubmissionStatusChoices.IN_REVIEW,
+            SubmissionStatusChoices.ACCEPTED,
+        ),
+    ).exists():
+        return Response(
+            {
+                "statusCode": 409,
+                "error": "Conflict",
+                "message": "У вас уже есть активная или принятая сдача по этому заданию.",
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    try:
+        validate_github_repository(solution_link)
+    except GitHubValidationError as exc:
+        return Response(
+            {"code": exc.code, "message": exc.message},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
+    version = (last_sub.version + 1) if last_sub else 1
+
+    submission = Submission(
+        user=user,
+        task=task,
+        version=version,
+        solution_link=solution_link,
+        comment=comment,
+        status=SubmissionStatusChoices.SENT,
+    )
+    submission._skip_signal_ai_enqueue = True
+    try:
+        submission.save()
+    except IntegrityError:
+        return Response(
+            {
+                "statusCode": 409,
+                "error": "Conflict",
+                "message": "У вас уже есть активная или принятая сдача по этому заданию.",
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    update_user_streak(user)
+    transaction.on_commit(
+        lambda sid=submission.pk, sl=solution_link: enqueue_ai_review(sid, sl, notify_mentors=True)
+    )
+
+    serializer = SubmissionSerializer(submission, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 def task_is_visible(task, user):
@@ -215,17 +324,26 @@ class TasksListView(APIView):
 
         task_ids = [t.id for t in items]
         my_submissions_map = {}
+        deadline_extensions_map = {}
         if task_ids:
             for sub in (
                 Submission.objects.filter(user_id=user.id, task_id__in=task_ids)
                 .order_by('task_id', '-version', '-created_at')
             ):
                 my_submissions_map.setdefault(sub.task_id, sub)
+            deadline_extensions_map = dict(
+                TaskDeadlineExtension.objects.filter(user_id=user.id, task_id__in=task_ids)
+                .values_list('task_id', 'extended_until')
+            )
 
         serializer = TaskSerializer(
             items,
             many=True,
-            context={'request': request, 'my_submissions_map': my_submissions_map},
+            context={
+                'request': request,
+                'my_submissions_map': my_submissions_map,
+                'deadline_extensions_map': deadline_extensions_map,
+            },
         )
         payload = {"tasks": serializer.data}
         if page_meta is not None:
@@ -456,71 +574,142 @@ class SubmissionsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         req_data = req_serializer.validated_data
-        user = User.objects.select_for_update().get(pk=request.user.pk)
-        task_id = req_data['taskId'].strip()
-        solution_link = req_data['solutionLink'].strip()
-        comment = (req_data.get('comment') or '').strip() or None
+        return _create_validated_submission(
+            request,
+            task_id=req_data['taskId'],
+            solution_link=req_data['solutionLink'],
+            comment=req_data.get('comment'),
+        )
 
-        if not task_id or not solution_link:
+
+class TaskSubmissionsView(APIView):
+    serializer_class = SubmissionSerializer
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        operation_id="task_submissions_create",
+        summary="Отправить решение конкретного задания с проверкой GitHub",
+        request=TaskSubmissionCreateSerializer,
+        responses={
+            201: SubmissionSerializer,
+            400: CodeMessageErrorSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+    )
+    @transaction.atomic
+    def post(self, request, id: str):
+        if not isinstance(request.data, Mapping):
+            return Response({"code": "INVALID_PAYLOAD", "message": "Некорректный JSON-запрос."}, status=400)
+        req_serializer = TaskSubmissionCreateSerializer(data=request.data)
+        if not req_serializer.is_valid():
             return Response(
-                {"statusCode": 400, "error": "Bad Request", "message": "taskId and solutionLink are required"},
+                {
+                    "code": "GITHUB_INVALID_URL",
+                    "message": "Укажите корректную ссылку на публичный GitHub-репозиторий (https://github.com/owner/repo).",
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        req_data = req_serializer.validated_data
+        return _create_validated_submission(
+            request,
+            task_id=id,
+            solution_link=req_data['solutionLink'],
+            comment=req_data.get('comment'),
+        )
 
+
+class ValidateGitHubSubmissionView(APIView):
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        operation_id="submissions_validate_github",
+        summary="Pre-flight проверка ссылки на GitHub-репозиторий перед отправкой ДЗ",
+        request=ValidateGitHubRequestSerializer,
+        responses={
+            200: GitHubValidationResponseSerializer,
+            400: CodeMessageErrorSerializer,
+        },
+    )
+    def post(self, request):
+        if not isinstance(request.data, Mapping):
+            return Response({"code": "GITHUB_INVALID_URL", "message": "Некорректный запрос."}, status=400)
+        req_serializer = ValidateGitHubRequestSerializer(data=request.data)
+        if not req_serializer.is_valid():
+            return Response(
+                {
+                    "code": "GITHUB_INVALID_URL",
+                    "message": "Укажите корректную ссылку на публичный GitHub-репозиторий (https://github.com/owner/repo).",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
-            task = Task.objects.get(id=task_id)
+            result = validate_github_repository(req_serializer.validated_data['solutionLink'])
+        except GitHubValidationError as exc:
+            return Response({"code": exc.code, "message": exc.message}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class ApplyTaskDeadlineBoostView(APIView):
+    serializer_class = EmptyRequestSerializer
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        operation_id="task_apply_deadline_boost",
+        summary="Применить купон продления дедлайна (+24 часа) к заданию",
+        request=None,
+        responses={
+            200: DeadlineBoostResponseSerializer,
+            400: CodeMessageErrorSerializer,
+            403: ErrorResponseSerializer,
+            404: ErrorResponseSerializer,
+        },
+    )
+    @transaction.atomic
+    def post(self, request, id: str):
+        user = User.objects.select_for_update().get(pk=request.user.pk)
+        try:
+            task = Task.objects.get(id=id)
         except Task.DoesNotExist:
             return Response(
                 {"statusCode": 404, "error": "Not Found", "message": "Task not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
         if user.role != RoleChoices.ADMIN and not task_is_visible(task, user):
-            return Response({'message': 'Forbidden'}, status=403)
-
-        if Submission.objects.filter(
-            user_id=user.id,
-            task_id=task.id,
-            status__in=(
-                SubmissionStatusChoices.SENT,
-                SubmissionStatusChoices.IN_REVIEW,
-                SubmissionStatusChoices.ACCEPTED,
-            ),
-        ).exists():
+            return Response({"statusCode": 403, "error": "Forbidden", "message": "Forbidden"}, status=403)
+        if (user.deadline_boosters or 0) <= 0:
             return Response(
                 {
-                    "statusCode": 409,
-                    "error": "Conflict",
-                    "message": "У вас уже есть активная или принятая сдача по этому заданию.",
+                    "code": "NO_DEADLINE_BOOSTERS",
+                    "message": "У вас нет доступных купонов продления дедлайна (+24 часа).",
                 },
-                status=status.HTTP_409_CONFLICT,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Calculate version
-        last_sub = Submission.objects.filter(user_id=user.id, task_id=task.id).order_by('-version').first()
-        version = (last_sub.version + 1) if last_sub else 1
+        existing = TaskDeadlineExtension.objects.select_for_update().filter(user=user, task=task).first()
+        base_dt = existing.extended_until if (existing and existing.extended_until) else (task.deadline or timezone.now())
+        new_deadline = base_dt + timedelta(hours=24)
 
-        try:
-            submission = Submission.objects.create(
+        user.deadline_boosters = (user.deadline_boosters or 0) - 1
+        user.save(update_fields=['deadline_boosters', 'updated_at'])
+
+        if existing:
+            existing.extended_until = new_deadline
+            existing.save(update_fields=['extended_until'])
+        else:
+            existing = TaskDeadlineExtension.objects.create(
                 user=user,
                 task=task,
-                version=version,
-                solution_link=solution_link,
-                comment=comment,
-                status=SubmissionStatusChoices.SENT,
+                extended_until=new_deadline,
             )
-        except IntegrityError:
-            return Response(
-                {"statusCode": 409, "error": "Conflict", "message": "У вас уже есть активная или принятая сдача по этому заданию."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        update_user_streak(user)
 
-        # Notify mentors via Telegram
-        notify_submission_created(submission)
-
-        serializer = SubmissionSerializer(submission, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({
+            "taskId": task.id,
+            "extendedUntil": existing.extended_until,
+            "deadlineBoosters": user.deadline_boosters,
+        })
 
 
 class SubmissionDetailView(APIView):

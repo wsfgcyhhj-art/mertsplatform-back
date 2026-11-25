@@ -1,7 +1,7 @@
 from django.db import connection
 from admin_panel.models import *
 
-UNMANAGED_MODELS = [StudyGroup, User, Lesson, Task, Submission, ScoreAdjustment, Achievement,
+UNMANAGED_MODELS = [StudyGroup, User, Lesson, Task, TaskDeadlineExtension, Submission, ScoreAdjustment, Achievement,
                     UserAchievement, MonthlyScoreArchive, MediaAsset, Session, SubscriptionGrant,
                     TelegramIdentity, PasswordResetTicket, AuthRateBucket, TelegramUpdate, TelegramOutbox, ShopProduct, ShopOrder]
 

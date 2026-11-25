@@ -1,4 +1,11 @@
-from .auth_views import RegisterView, LoginView, RefreshTokenView, LogoutView
+from .auth_views import (
+    RegisterView,
+    LoginView,
+    RefreshTokenView,
+    LogoutView,
+    TelegramWebAppAuthView,
+    TelegramWebAppLinkView,
+)
 from .user_views import (
     CurrentUserView,
     ChangePasswordView,
@@ -14,10 +21,18 @@ from .curriculum_views import (
     LessonsListView,
     TasksListView,
     TaskDetailView,
+    TaskSubmissionsView,
+    ApplyTaskDeadlineBoostView,
     SubmissionsView,
+    ValidateGitHubSubmissionView,
     SubmissionDetailView,
 )
-from .gamification_views import AchievementsCatalogView, AchievementDetailView, LeaderboardView
+from .gamification_views import (
+    AchievementsCatalogView,
+    AchievementDetailView,
+    LeaderboardView,
+    GroupLeaderboardView,
+)
 from .admin_views import (
     AdminUsersListView,
     AdminUserRoleView,

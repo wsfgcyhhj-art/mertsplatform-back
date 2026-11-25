@@ -8,7 +8,7 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 from admin_panel.achievement_icons import to_absolute_media_url
 from admin_panel.api_utils import qparam, parse_bool_param, resolve_ordering, paginate_list_or_qs
-from admin_panel.models import ShopOrder, ShopOrderStatus, ShopProduct
+from admin_panel.models import ShopItemTypeChoices, ShopOrder, ShopOrderStatus, ShopProduct
 from admin_panel.serializers import PaginatedMetaMixin
 from admin_panel.services.shop_service import ShopConflict, place_order, shop_balance
 from admin_panel.throttles import ShopOrderThrottle
@@ -23,11 +23,13 @@ class ShopBalanceSerializer(serializers.Serializer):
 class ShopProductSerializer(serializers.ModelSerializer):
     priceSom = serializers.IntegerField(source='price_som')
     priceCoins = serializers.IntegerField(source='price_coins')
+    itemType = serializers.ChoiceField(source='item_type', choices=ShopItemTypeChoices.choices)
+    metadata = serializers.JSONField()
     imageUrl = serializers.SerializerMethodField()
 
     class Meta:
         model = ShopProduct
-        fields = ('id', 'title', 'description', 'priceSom', 'priceCoins', 'imageUrl', 'stock')
+        fields = ('id', 'title', 'description', 'itemType', 'metadata', 'priceSom', 'priceCoins', 'imageUrl', 'stock')
 
     def get_imageUrl(self, obj) -> str:
         url = obj.image_url or ''

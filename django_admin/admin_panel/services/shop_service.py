@@ -5,7 +5,15 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
-from admin_panel.models import RoleChoices, ShopOrder, ShopOrderStatus, ShopProduct, SubmissionStatusChoices, User
+from admin_panel.models import (
+    RoleChoices,
+    ShopItemTypeChoices,
+    ShopOrder,
+    ShopOrderStatus,
+    ShopProduct,
+    SubmissionStatusChoices,
+    User,
+)
 from admin_panel.services.score_service import latest_accepted
 from admin_panel.services.telegram_service import escape_html, send_async_notification
 
@@ -45,7 +53,27 @@ def place_order(user, product_id, comment, request_key=None, expected_price=None
     if balance['availableCoins'] < product.price_coins:
         raise ShopConflict('Недостаточно баллов для покупки.')
 
-    order = ShopOrder(user=user, product=product, price_coins=product.price_coins, comment=comment)
+    is_digital = product.item_type != ShopItemTypeChoices.PHYSICAL
+    frame_slug = ''
+    if product.item_type == ShopItemTypeChoices.AVATAR_FRAME:
+        meta = product.metadata if isinstance(product.metadata, dict) else {}
+        frame_slug = str(meta.get('frameSlug') or '').strip().lower()
+        if not frame_slug:
+            raise ShopConflict('Некорректные метаданные рамки аватара.')
+        unlocked_frames = list(user.unlocked_avatar_frames or [])
+        if frame_slug in unlocked_frames:
+            raise ShopConflict('Эта рамка аватара уже разблокирована.')
+
+    now = timezone.now()
+    order = ShopOrder(
+        user=user,
+        product=product,
+        price_coins=product.price_coins,
+        comment=comment,
+        status=ShopOrderStatus.COMPLETED if is_digital else ShopOrderStatus.PENDING,
+        processed_by='system:instant' if is_digital else '',
+        processed_at=now if is_digital else None,
+    )
     if order_id:
         order.pk = order_id
     order.save(force_insert=True)
@@ -53,20 +81,41 @@ def place_order(user, product_id, comment, request_key=None, expected_price=None
     product.save(update_fields=['stock'])
 
     title = escape_html(product.title)
-    send_async_notification(
-        user.pk, f'🛍 <b>Заказ оформлен!</b> Товар: <b>{title}</b> за <b>{order.price_coins} баллов</b>. '
-        'Ожидайте подтверждения выдачи.',
-    )
-    admins = User.objects.filter(role=RoleChoices.ADMIN, telegram_chat_id__isnull=False).exclude(telegram_chat_id='')
-    owner = admins.filter(pk=settings.PLATFORM_OWNER_USER_ID).first()
-    recipients = [owner.pk] if owner else admins.values_list('pk', flat=True)
-    for recipient in recipients:
-        if recipient != user.pk:
-            send_async_notification(
-                recipient,
-                f'🛍 <b>Новый заказ мерча</b>\n{title} — {order.price_coins} баллов.\n'
-                f'Студент: @{escape_html(user.login)}\nЗаказ: <code>{order.pk}</code>',
-            )
+    if is_digital:
+        if product.item_type == ShopItemTypeChoices.STREAK_FREEZE:
+            user.streak_freezes = (user.streak_freezes or 0) + 1
+            user.updated_at = now
+            user.save(update_fields=['streak_freezes', 'updated_at'])
+        elif product.item_type == ShopItemTypeChoices.DEADLINE_EXTEND:
+            user.deadline_boosters = (user.deadline_boosters or 0) + 1
+            user.updated_at = now
+            user.save(update_fields=['deadline_boosters', 'updated_at'])
+        elif product.item_type == ShopItemTypeChoices.AVATAR_FRAME:
+            unlocked_frames = list(user.unlocked_avatar_frames or [])
+            if frame_slug not in unlocked_frames:
+                unlocked_frames.append(frame_slug)
+            user.unlocked_avatar_frames = unlocked_frames
+            user.updated_at = now
+            user.save(update_fields=['unlocked_avatar_frames', 'updated_at'])
+        send_async_notification(
+            user.pk,
+            f'⚡ <b>Цифровой бонус активирован!</b> Начислено: <b>{title}</b> за <b>{order.price_coins} баллов</b>.',
+        )
+    else:
+        send_async_notification(
+            user.pk, f'🛍 <b>Заказ оформлен!</b> Товар: <b>{title}</b> за <b>{order.price_coins} баллов</b>. '
+            'Ожидайте подтверждения выдачи.',
+        )
+        admins = User.objects.filter(role=RoleChoices.ADMIN, telegram_chat_id__isnull=False).exclude(telegram_chat_id='')
+        owner = admins.filter(pk=settings.PLATFORM_OWNER_USER_ID).first()
+        recipients = [owner.pk] if owner else admins.values_list('pk', flat=True)
+        for recipient in recipients:
+            if recipient != user.pk:
+                send_async_notification(
+                    recipient,
+                    f'🛍 <b>Новый заказ мерча</b>\n{title} — {order.price_coins} баллов.\n'
+                    f'Студент: @{escape_html(user.login)}\nЗаказ: <code>{order.pk}</code>',
+                )
     balance['spentPoints'] += order.price_coins
     balance['availableCoins'] -= order.price_coins
     return order, balance, True

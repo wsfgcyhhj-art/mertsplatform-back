@@ -34,6 +34,11 @@ from admin_panel.authentication import generate_tokens_for_user
 from admin_panel.services.achievement_service import evaluate_user_achievements, TriggerTypeChoices
 from admin_panel.services.group_service import parse_month_from_group_name
 from admin_panel.services.settings_service import get_setting
+from admin_panel.services.telegram_service import send_async_notification
+from admin_panel.services.telegram_webapp_service import (
+    TelegramWebAppAuthError,
+    verify_telegram_webapp_init_data,
+)
 
 SIMPLE_FORM_CONTENT_TYPES = ('application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain')
 logger = logging.getLogger(__name__)
@@ -103,6 +108,8 @@ def update_user_streak(user: User) -> int:
     with transaction.atomic():
         locked = User.objects.select_for_update().get(pk=user.pk)
         changed = False
+        used_freeze = False
+        update_fields = ['streak_count', 'last_active_date', 'updated_at']
         if not locked.last_active_date:
             locked.streak_count = 1
             locked.last_active_date = now
@@ -113,15 +120,27 @@ def update_user_streak(user: User) -> int:
                 locked.streak_count = (locked.streak_count or 0) + 1
                 locked.last_active_date = now
                 changed = True
+            elif days_diff == 2 and (locked.streak_freezes or 0) > 0 and (locked.streak_count or 0) > 0:
+                locked.streak_freezes = (locked.streak_freezes or 0) - 1
+                locked.last_active_date = now
+                update_fields.append('streak_freezes')
+                changed = True
+                used_freeze = True
             elif days_diff > 1 or days_diff < 0:
                 locked.streak_count = 1
                 locked.last_active_date = now
                 changed = True
 
         if changed:
-            locked.save(update_fields=['streak_count', 'last_active_date', 'updated_at'])
+            locked.save(update_fields=update_fields)
             evaluate_user_achievements(locked.id, trigger_filter=TriggerTypeChoices.STREAK_DAYS)
+            if used_freeze:
+                send_async_notification(
+                    locked.id,
+                    f'🛡 <b>Щит заморозки спас твой стрик!</b> Стрик <b>{locked.streak_count} дн.</b> сохранён.',
+                )
         user.streak_count = locked.streak_count
+        user.streak_freezes = locked.streak_freezes
         user.last_active_date = locked.last_active_date
         user.updated_at = locked.updated_at
         return locked.streak_count
@@ -311,6 +330,11 @@ class LoginView(APIView):
                 {"statusCode": 401, "error": "Unauthorized", "message": "Invalid credentials"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if not user.is_active:
+            return Response(
+                {"statusCode": 403, "error": "Forbidden", "message": "Аккаунт деактивирован"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Upgrade legacy bcrypt only after successful verification of the plain password.
         if user.password_hash.startswith(('$2a$', '$2b$', '$2y$')):
@@ -409,3 +433,199 @@ class CsrfTokenView(APIView):
     @extend_schema(responses={200: CsrfTokenResponseSerializer})
     def get(self, request):
         return Response({'csrfToken': get_token(request)})
+
+
+class TelegramWebAppAuthRequestSerializer(serializers.Serializer):
+    initData = serializers.CharField(max_length=8192, trim_whitespace=False)
+
+
+class TelegramWebAppAuthResponseSerializer(serializers.Serializer):
+    linked = serializers.BooleanField()
+    accessToken = serializers.CharField(required=False)
+    refreshToken = serializers.CharField(required=False)
+    user = UserProfileSerializer(required=False)
+    telegramId = serializers.CharField(required=False)
+    telegramUsername = serializers.CharField(required=False, allow_null=True)
+
+
+class TelegramWebAppLinkRequestSerializer(serializers.Serializer):
+    initData = serializers.CharField(max_length=8192, trim_whitespace=False)
+    login = serializers.CharField(max_length=255)
+    password = serializers.CharField(max_length=1024, trim_whitespace=False)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class TelegramWebAppAuthView(APIView):
+    parser_classes = (DualCaseJSONParser,)
+    throttle_classes = (AuthThrottle,)
+    throttle_scope = 'tma_auth'
+    serializer_class = EmptyRequestSerializer
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    @extend_schema(
+        operation_id="auth_telegram_webapp",
+        summary="Авторизация в Telegram Mini App по подписанному initData",
+        request=TelegramWebAppAuthRequestSerializer,
+        responses={
+            200: TelegramWebAppAuthResponseSerializer,
+            400: ErrorResponseSerializer,
+            401: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+        },
+    )
+    @transaction.atomic
+    def post(self, request):
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "Invalid JSON payload"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = TelegramWebAppAuthRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "initData is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            tg_data = verify_telegram_webapp_init_data(serializer.validated_data['initData'])
+        except TelegramWebAppAuthError as exc:
+            return Response(
+                {"code": exc.code, "message": exc.message},
+                status=exc.status_code,
+            )
+
+        tg_id = tg_data['telegram_id']
+        tg_username = tg_data['telegram_username']
+
+        user = User.objects.select_for_update().filter(telegram_chat_id=tg_id).first()
+        if not user and tg_username:
+            user = (
+                User.objects.select_for_update()
+                .filter(telegram_username__iexact=tg_username)
+                .filter(Q(telegram_chat_id__isnull=True) | Q(telegram_chat_id=''))
+                .first()
+            )
+            if user:
+                user.telegram_chat_id = tg_id
+                user.telegram_username = tg_username.lower()
+                user.save(update_fields=['telegram_chat_id', 'telegram_username', 'updated_at'])
+
+        if not user:
+            return Response({
+                "linked": False,
+                "telegramId": tg_id,
+                "telegramUsername": tg_username,
+            })
+
+        if not user.is_active:
+            return Response(
+                {"statusCode": 403, "error": "Forbidden", "message": "Аккаунт деактивирован"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if tg_username and user.telegram_username != tg_username.lower():
+            user.telegram_username = tg_username.lower()
+            user.save(update_fields=['telegram_username', 'updated_at'])
+
+        update_user_streak(user)
+        access_token, refresh_token, _session = generate_tokens_for_user(user)
+        user_data = UserProfileSerializer(user, context={'request': request}).data
+        response = Response({
+            "linked": True,
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "user": user_data,
+        })
+        set_auth_cookies(request, response, refresh_token)
+        return response
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class TelegramWebAppLinkView(APIView):
+    parser_classes = (DualCaseJSONParser,)
+    throttle_classes = (AuthThrottle,)
+    throttle_scope = 'tma_link'
+    serializer_class = EmptyRequestSerializer
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    @extend_schema(
+        operation_id="auth_telegram_webapp_link",
+        summary="Привязка существующего аккаунта студента к Telegram Mini App",
+        request=TelegramWebAppLinkRequestSerializer,
+        responses={
+            200: AuthSessionResponseSerializer,
+            400: ErrorResponseSerializer,
+            401: ErrorResponseSerializer,
+            403: ErrorResponseSerializer,
+            409: ErrorResponseSerializer,
+        },
+    )
+    @transaction.atomic
+    def post(self, request):
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "Invalid JSON payload"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = TelegramWebAppLinkRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"statusCode": 400, "error": "Bad Request", "message": "initData, login and password are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            tg_data = verify_telegram_webapp_init_data(serializer.validated_data['initData'])
+        except TelegramWebAppAuthError as exc:
+            return Response(
+                {"code": exc.code, "message": exc.message},
+                status=exc.status_code,
+            )
+
+        login = serializer.validated_data['login'].strip()
+        password = serializer.validated_data['password']
+        tg_id = tg_data['telegram_id']
+        tg_username = tg_data['telegram_username']
+
+        user = User.objects.select_for_update().filter(login=login).first()
+        if not user or not user.check_password(password):
+            return Response(
+                {"statusCode": 401, "error": "Unauthorized", "message": "Invalid credentials"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        if not user.is_active:
+            return Response(
+                {"statusCode": 403, "error": "Forbidden", "message": "Аккаунт деактивирован"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if User.objects.filter(telegram_chat_id=tg_id).exclude(pk=user.pk).exists():
+            return Response(
+                {
+                    "statusCode": 409,
+                    "error": "Conflict",
+                    "message": "Этот Telegram-аккаунт уже привязан к другому профилю.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if user.password_hash.startswith(('$2a$', '$2b$', '$2y$')):
+            user.set_password(password)
+        user.telegram_chat_id = tg_id
+        if tg_username:
+            user.telegram_username = tg_username.lower()
+        user.save()
+
+        update_user_streak(user)
+        access_token, refresh_token, _session = generate_tokens_for_user(user)
+        user_data = UserProfileSerializer(user, context={'request': request}).data
+        response = Response({
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "user": user_data,
+        })
+        set_auth_cookies(request, response, refresh_token)
+        return response

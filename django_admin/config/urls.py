@@ -1,3 +1,4 @@
+from admin_panel.admin import burnout_nudge_view
 from admin_panel.views.shop_views import MyShopOrdersView, ShopBalanceView, ShopOrdersView, ShopProductsView
 from admin_panel.views.auth_views import CsrfTokenView
 from admin_panel.views.subscription_views import PasswordResetView
@@ -15,6 +16,8 @@ from admin_panel.views import (
     LoginView,
     RefreshTokenView,
     LogoutView,
+    TelegramWebAppAuthView,
+    TelegramWebAppLinkView,
     CurrentUserView,
     ChangePasswordView,
     AvatarUploadView,
@@ -27,11 +30,15 @@ from admin_panel.views import (
     LessonsListView,
     TasksListView,
     TaskDetailView,
+    TaskSubmissionsView,
+    ApplyTaskDeadlineBoostView,
     SubmissionsView,
+    ValidateGitHubSubmissionView,
     SubmissionDetailView,
     AchievementsCatalogView,
     AchievementDetailView,
     LeaderboardView,
+    GroupLeaderboardView,
     AdminUsersListView,
     AdminUserRoleView,
     AdminScoreAdjustmentView,
@@ -57,6 +64,7 @@ urlpatterns = [
     path('api/v1/auth/reset-password', PasswordResetView.as_view()),
     # Static & Admin
     path('favicon.ico', favicon_redirect, name='favicon'),
+    path('admin/burnout-nudge/<str:user_id>/', admin.site.admin_view(burnout_nudge_view), name='admin_burnout_nudge'),
     path('admin/', admin.site.urls),
 
     # OpenAPI 3.0.3 Documentation
@@ -73,6 +81,8 @@ urlpatterns = [
     path('api/v1/auth/login', LoginView.as_view(), name='auth-login'),
     path('api/v1/auth/refresh', RefreshTokenView.as_view(), name='auth-refresh'),
     path('api/v1/auth/logout', LogoutView.as_view(), name='auth-logout'),
+    path('api/v1/auth/telegram-webapp', TelegramWebAppAuthView.as_view(), name='auth-telegram-webapp'),
+    path('api/v1/auth/telegram-webapp/link', TelegramWebAppLinkView.as_view(), name='auth-telegram-webapp-link'),
 
     # Current User Profile & Settings
     path('api/v1/users/me', CurrentUserView.as_view(), name='users-me'),
@@ -97,15 +107,19 @@ urlpatterns = [
     path('api/v1/lessons', LessonsListView.as_view(), name='lessons-list'),
     path('api/v1/tasks', TasksListView.as_view(), name='tasks-list'),
     path('api/v1/tasks/<str:id>', TaskDetailView.as_view(), name='task-detail'),
+    path('api/v1/tasks/<str:id>/submissions', TaskSubmissionsView.as_view(), name='task-submissions'),
+    path('api/v1/tasks/<str:id>/apply-deadline-boost', ApplyTaskDeadlineBoostView.as_view(), name='task-apply-deadline-boost'),
 
     # Submissions (Homework)
     path('api/v1/submissions', SubmissionsView.as_view(), name='submissions-list'),
+    path('api/v1/submissions/validate-github', ValidateGitHubSubmissionView.as_view(), name='submissions-validate-github'),
     path('api/v1/submissions/<str:id>', SubmissionDetailView.as_view(), name='submission-detail'),
 
     # Gamification: Achievements & Leaderboard
     path('api/v1/achievements', AchievementsCatalogView.as_view(), name='achievements-catalog'),
     path('api/v1/achievements/<str:id>', AchievementDetailView.as_view(), name='achievement-detail'),
     path('api/v1/leaderboard', LeaderboardView.as_view(), name='leaderboard'),
+    path('api/v1/leaderboard/groups', GroupLeaderboardView.as_view(), name='leaderboard-groups'),
 
     path('api/v1/shop/balance', ShopBalanceView.as_view(), name='shop-balance'),
     path('api/v1/shop/products', ShopProductsView.as_view(), name='shop-products'),

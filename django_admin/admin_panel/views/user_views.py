@@ -44,6 +44,8 @@ class CurrentUserResponseSerializer(ShopBalanceSerializer):
     user = UserProfileSerializer()
     isTelegramConnected = serializers.BooleanField()
     telegramUsername = serializers.CharField(allow_null=True)
+    streakFreezes = serializers.IntegerField()
+    deadlineBoosters = serializers.IntegerField()
     stats = CurrentUserStatsSerializer()
 
 
@@ -52,6 +54,7 @@ class UserProfileUpdateRequestSerializer(serializers.Serializer):
     telegram = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
     avatarUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=500)
     bannerUrl = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=500)
+    activeAvatarFrame = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=64)
 
     def _validate_media_url(self, value):
         if value is None or not value.strip():
@@ -154,6 +157,8 @@ class CurrentUserView(APIView):
             "user": data,
             "isTelegramConnected": bool(user.telegram_chat_id),
             "telegramUsername": user.telegram_username,
+            "streakFreezes": user.streak_freezes or 0,
+            "deadlineBoosters": user.deadline_boosters or 0,
             "stats": stats,
             "totalEarnedPoints": earned_points,
             "spentPoints": spent_points,
@@ -162,10 +167,11 @@ class CurrentUserView(APIView):
 
     @extend_schema(
         operation_id="users_me_update",
-        summary="Обновить данные профиля (имя, контакты, оформление)",
+        summary="Обновить данные профиля (имя, контакты, оформление, рамка аватара)",
         request=UserProfileUpdateRequestSerializer,
         responses={200: UserEnvelopeSerializer, 400: ErrorResponseSerializer},
     )
+    @transaction.atomic
     def patch(self, request):
         if not isinstance(request.data, Mapping):
             return Response({'message': 'Invalid request payload'}, status=400)
@@ -176,7 +182,7 @@ class CurrentUserView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = request.user
+        user = User.objects.select_for_update().get(pk=request.user.pk)
         field_map = {
             'name': 'name',
             'telegram': 'telegram',
@@ -190,6 +196,26 @@ class CurrentUserView(APIView):
                 cleaned = raw_val.strip() if isinstance(raw_val, str) else raw_val
                 setattr(user, model_key, cleaned or None)
                 updated_fields.append(model_key)
+
+        if 'activeAvatarFrame' in serializer.validated_data:
+            raw_frame = serializer.validated_data['activeAvatarFrame']
+            frame_slug = raw_frame.strip().lower() if isinstance(raw_frame, str) else ''
+            if not frame_slug:
+                user.active_avatar_frame = None
+                updated_fields.append('active_avatar_frame')
+            else:
+                unlocked = [str(f).strip().lower() for f in (user.unlocked_avatar_frames or [])]
+                if frame_slug not in unlocked:
+                    return Response(
+                        {
+                            "statusCode": 400,
+                            "error": "Bad Request",
+                            "message": "Эта рамка аватара не разблокирована у вашего профиля.",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                user.active_avatar_frame = frame_slug
+                updated_fields.append('active_avatar_frame')
 
         if updated_fields:
             user.save(update_fields=updated_fields + ['updated_at'])

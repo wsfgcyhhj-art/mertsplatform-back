@@ -1,0 +1,93 @@
+{% extends 'admin/base.html' %}
+{% load i18n %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+    {% include "unfold/helpers/site_branding.html" %}
+{% endblock %}
+
+{% block content %}
+    <div style="margin-bottom:24px;border-radius:16px;border:1px solid rgba(245,158,11,0.35);background:#09090b;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.28);">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:16px 20px;border-bottom:1px solid #27272a;background:linear-gradient(90deg, rgba(245,158,11,0.12), rgba(24,24,27,0.9));">
+            <div>
+                <h2 style="margin:0;font-size:16px;font-weight:700;color:#fafafa;display:flex;align-items:center;gap:8px;">
+                    🚨 Радар отстающих (риск выгорания)
+                </h2>
+                <p style="margin:4px 0 0;font-size:12px;color:#a1a1aa;">
+                    Активные студенты со сбитым стриком или без сдач/активности более 4 дней
+                </p>
+            </div>
+            <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(245,158,11,0.16);color:#fbbf24;border:1px solid rgba(245,158,11,0.4);">
+                В зоне риска: {{ burnout_radar_count|default:0 }}
+            </span>
+        </div>
+
+        {% if burnout_radar_students %}
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;color:#e4e4e7;">
+                    <thead>
+                        <tr style="border-bottom:1px solid #27272a;background:#18181b;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#a1a1aa;">
+                            <th style="padding:12px 16px;">ФИО</th>
+                            <th style="padding:12px 16px;">Группа</th>
+                            <th style="padding:12px 16px;">Дней без сдач</th>
+                            <th style="padding:12px 16px;">Текущий стрик</th>
+                            <th style="padding:12px 16px;">Telegram</th>
+                            <th style="padding:12px 16px;text-align:right;">Действие</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for st in burnout_radar_students %}
+                            <tr style="border-bottom:1px solid #18181b;">
+                                <td style="padding:12px 16px;font-weight:600;color:#fafafa;">
+                                    {{ st.full_name }}
+                                    <span style="display:block;font-size:11px;font-weight:400;color:#71717a;">@{{ st.login }}</span>
+                                </td>
+                                <td style="padding:12px 16px;">
+                                    <span style="display:inline-block;padding:2px 8px;border-radius:6px;background:#18181b;border:1px solid #27272a;color:#d4d4d8;font-size:12px;">
+                                        {{ st.group_number }}
+                                    </span>
+                                </td>
+                                <td style="padding:12px 16px;font-weight:700;color:#f87171;">
+                                    {{ st.days_without_submissions }} дн.
+                                </td>
+                                <td style="padding:12px 16px;">
+                                    <span style="font-weight:600;color:{% if st.streak_count == 0 %}#f87171{% else %}#fbbf24{% endif %};">
+                                        🔥 {{ st.streak_count }} дн.
+                                    </span>
+                                </td>
+                                <td style="padding:12px 16px;">
+                                    {% if st.tg_url %}
+                                        <a href="{{ st.tg_url }}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:none;font-weight:600;">
+                                            https://t.me/{{ st.tg_username }} ↗
+                                        </a>
+                                    {% else %}
+                                        <span style="color:#71717a;">—</span>
+                                    {% endif %}
+                                </td>
+                                <td style="padding:12px 16px;text-align:right;">
+                                    {% if st.has_tg_bot %}
+                                        <form method="post" action="{% url 'admin_burnout_nudge' st.id %}" style="display:inline;margin:0;">
+                                            {% csrf_token %}
+                                            <button type="submit" style="padding:6px 12px;border-radius:8px;border:1px solid rgba(245,158,11,0.5);background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px;font-weight:600;cursor:pointer;">
+                                                Отправить пинок в Telegram
+                                            </button>
+                                        </form>
+                                    {% else %}
+                                        <span style="font-size:11px;color:#71717a;">Бот не привязан</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div style="padding:20px;font-size:13px;color:#34d399;">
+                ✅ Отлично! Все активные студенты сдают домашние задания по графику и держат стрик.
+            </div>
+        {% endif %}
+    </div>
+
+    {% include "unfold/helpers/dashboard_default.html" %}
+{% endblock %}

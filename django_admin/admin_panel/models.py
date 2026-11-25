@@ -117,6 +117,11 @@ class User(AtomicModel):
     avatar_url = models.TextField('URL аватара', blank=True, null=True)
     banner_url = models.TextField('URL баннера', blank=True, null=True)
     streak_count = models.IntegerField('Стрик (дней)', default=0)
+    streak_freezes = models.IntegerField('Заморозки стрика', default=0, db_default=0)
+    deadline_boosters = models.IntegerField('Бустеры дедлайна (+24ч)', default=0, db_default=0)
+    active_avatar_frame = models.CharField('Активная рамка аватара', max_length=64, blank=True, null=True)
+    unlocked_avatar_frames = models.JSONField('Разблокированные рамки', default=list, blank=True)
+    is_active = models.BooleanField('Активен', default=True, db_default=True)
     last_active_date = models.DateTimeField('Последняя активность', blank=True, null=True)
     mentor = models.ForeignKey(
         'self',
@@ -148,10 +153,6 @@ class User(AtomicModel):
     @property
     def is_anonymous(self):
         return False
-
-    @property
-    def is_active(self):
-        return True
 
     @property
     def is_staff(self):
@@ -333,6 +334,7 @@ class Task(AtomicModel):
     has_score = models.BooleanField('Оценивается баллами', default=True)
     max_score = models.IntegerField('Макс. балл', blank=True, null=True)
     is_bonus = models.BooleanField('Бонусное задание', default=False)
+    deadline = models.DateTimeField('Дедлайн сдачи', blank=True, null=True)
     created_at = models.DateTimeField('Дата создания', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)
 
@@ -354,6 +356,37 @@ class Task(AtomicModel):
 
     def __str__(self):
         return f"[Месяц {self.month}] {self.title} ({self.topic})"
+
+
+class TaskDeadlineExtension(AtomicModel):
+    id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
+    user = models.ForeignKey(
+        User,
+        models.CASCADE,
+        db_column='user_id',
+        related_name='deadline_extensions',
+        verbose_name='Студент',
+    )
+    task = models.ForeignKey(
+        Task,
+        models.CASCADE,
+        db_column='task_id',
+        related_name='deadline_extensions',
+        verbose_name='Задание',
+    )
+    extended_until = models.DateTimeField('Продлено до')
+    created_at = models.DateTimeField('Дата применения', default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'TaskDeadlineExtension'
+        unique_together = (('user', 'task'),)
+        verbose_name = 'Продление дедлайна'
+        verbose_name_plural = 'Продления дедлайнов'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user} -> {self.task} (до {self.extended_until})"
 
 
 class Submission(AtomicModel):
@@ -378,6 +411,8 @@ class Submission(AtomicModel):
     reviewer_comment = models.TextField('Комментарий ревьюера', blank=True, null=True)
     mentor_telegram_msg_id = models.CharField('ID сообщения ментора в TG', max_length=255, blank=True, null=True)
     voice_feedback_url = models.CharField('Голосовой фидбек (file_id / URL)', max_length=500, blank=True, null=True)
+    ai_feedback = models.TextField('AI-разбор кода', blank=True, null=True)
+    ai_reviewed_at = models.DateTimeField('Дата AI-разбора', blank=True, null=True)
     reviewed_at = models.DateTimeField('Дата проверки', blank=True, null=True)
     created_at = models.DateTimeField('Дата отправки', default=timezone.now)
     updated_at = models.DateTimeField('Дата обновления', default=timezone.now)
@@ -596,6 +631,13 @@ class TelegramOutbox(models.Model):
         db_table = 'TelegramOutbox'
 
 
+class ShopItemTypeChoices(models.TextChoices):
+    PHYSICAL = 'PHYSICAL', 'Физический товар (PHYSICAL)'
+    STREAK_FREEZE = 'STREAK_FREEZE', 'Щит заморозки стрика (STREAK_FREEZE)'
+    DEADLINE_EXTEND = 'DEADLINE_EXTEND', 'Купон продления дедлайна (DEADLINE_EXTEND)'
+    AVATAR_FRAME = 'AVATAR_FRAME', 'Рамка аватара (AVATAR_FRAME)'
+
+
 class ShopProduct(models.Model):
     id = models.CharField(primary_key=True, max_length=64, default=generate_uuid, editable=False)
     title = models.CharField('Название', max_length=255, unique=True)
@@ -606,6 +648,14 @@ class ShopProduct(models.Model):
     stock = models.PositiveIntegerField('Остаток', default=0)
     is_active = models.BooleanField('Активен', default=True)
     order = models.PositiveIntegerField('Порядок', default=0)
+    item_type = models.CharField(
+        'Тип товара',
+        max_length=32,
+        choices=ShopItemTypeChoices.choices,
+        default=ShopItemTypeChoices.PHYSICAL,
+        db_default='PHYSICAL',
+    )
+    metadata = models.JSONField('Метаданные', default=dict, blank=True)
 
     class Meta:
         managed = False

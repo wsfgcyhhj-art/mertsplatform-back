@@ -294,6 +294,10 @@ def notify_submission_created(submission: Submission):
     student = submission.user
     task = submission.task
     comment_block = f"💬 Комментарий: {escape_html(submission.comment)}\n" if submission.comment else ""
+    ai_block = ""
+    if getattr(submission, 'ai_feedback', None):
+        ai_snippet = escape_html(str(submission.ai_feedback).strip()[:350])
+        ai_block = f"\n🤖 <b>AI-разбор:</b>\n<i>{ai_snippet}</i>\n"
     msg = render_telegram_template('tg_template_submission_created', {
         'student_name': escape_html(student.name or student.login),
         'student_login': escape_html(student.login),
@@ -302,7 +306,10 @@ def notify_submission_created(submission: Submission):
         'solution_link': escape_html(submission.solution_link),
         'version': submission.version,
         'comment': comment_block,
+        'ai_review': ai_block,
     })
+    if ai_block and ai_block not in msg:
+        msg = msg.rstrip() + "\n" + ai_block
 
     recipients = []
     if student.mentor and student.mentor.telegram_chat_id:
@@ -465,6 +472,22 @@ def notify_month_advanced(user: User, new_month: int):
         f"👉 <a href=\"{lessons_link}\">Начать обучение Месяца {new_month}</a>"
     )
     send_async_notification(user.id, msg)
+
+
+def send_burnout_nudge(student: User) -> bool:
+    if not student.telegram_chat_id:
+        return False
+    tasks_url = escape_html(f"{get_frontend_url()}/tasks")
+    name = escape_html(student.name or student.login)
+    msg = (
+        f"👋 Привет, <b>{name}</b>!\n\n"
+        "Заметили, что ты давно не отправлял домашние задания. "
+        "Даже небольшой шаг сегодня поможет вернуть учебный ритм и стрик! 🔥\n"
+        "Если возникли сложности с темой — напиши ментору, мы поможем разобраться.\n\n"
+        f"👉 <a href=\"{tasks_url}\">Перейти к заданиям на платформе</a>"
+    )
+    send_async_notification(student.id, msg)
+    return True
 
 
 # --- Bot Command Handlers & Polling ---

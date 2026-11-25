@@ -19,6 +19,35 @@ def cipher():
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest()))
 
 
+AI_REVIEW_CHAT_SENTINEL = '__ai_review__'
+
+
+def enqueue_ai_review(submission_id: str, solution_link: str = '', *, notify_mentors: bool = False) -> TelegramOutbox:
+    link_hash = hashlib.sha256((solution_link or '').strip().encode('utf-8')).hexdigest()[:16]
+    key = f'ai_review:{submission_id}:{link_hash}'
+    message = {
+        'kind': 'ai_review',
+        'submission_id': str(submission_id),
+        'notify_mentors': bool(notify_mentors),
+    }
+    encrypted = cipher().encrypt(json.dumps(message).encode()).decode()
+    item, created = TelegramOutbox.objects.get_or_create(
+        dedupe_key=key,
+        defaults={'chat_id': AI_REVIEW_CHAT_SENTINEL, 'payload': {'encrypted': encrypted}},
+    )
+    if not created and notify_mentors and item.status == 'pending':
+        try:
+            current = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
+        except Exception:
+            current = {}
+        if not current.get('notify_mentors'):
+            item.payload = {'encrypted': encrypted}
+            item.save(update_fields=['payload'])
+    if created and settings.TELEGRAM_OUTBOX_EAGER:
+        transaction.on_commit(lambda: deliver(item.pk), robust=True)
+    return item
+
+
 def enqueue(chat_id, text, reply_markup=None, dedupe_key=None, *, voice=None):
     identity = event_context.get()
     fingerprint = hashlib.sha256((str(chat_id) + (voice or text)).encode()).hexdigest()
@@ -64,10 +93,20 @@ def deliver(pk):
     try:
         reset_last_telegram_error()
         payload = json.loads(cipher().decrypt(item.payload['encrypted'].encode()))
-        ok = send_telegram_message(item.chat_id, **payload)
-        error = '' if ok else (get_last_telegram_error() or 'Telegram rejected message or network unavailable')
-        permanent = False if ok else is_last_telegram_error_permanent()
-        retry_after = None if ok else get_last_telegram_retry_after()
+        if payload.get('kind') == 'ai_review':
+            from .ai_review_service import run_ai_review_for_submission
+            ok = run_ai_review_for_submission(
+                payload['submission_id'],
+                notify_mentors=bool(payload.get('notify_mentors')),
+            )
+            error = '' if ok else 'AI review task failed'
+            permanent = False
+            retry_after = None
+        else:
+            ok = send_telegram_message(item.chat_id, **payload)
+            error = '' if ok else (get_last_telegram_error() or 'Telegram rejected message or network unavailable')
+            permanent = False if ok else is_last_telegram_error_permanent()
+            retry_after = None if ok else get_last_telegram_retry_after()
     except (InvalidToken, KeyError, json.JSONDecodeError, TypeError) as exc:
         ok, permanent, error = False, True, f'{type(exc).__name__}: {str(exc)[:180]}'
     except Exception as exc:
@@ -90,13 +129,25 @@ def deliver(pk):
 
 
 def drain(limit=100):
-    ids = list(TelegramOutbox.objects.filter(status__in=['pending', 'sending'], available_at__lte=timezone.now()).order_by('created_at').values_list('pk', flat=True)[:limit])
     sent = 0
-    throttle = len(ids) > 1 and not getattr(settings, 'TESTING', False)
-    for idx, pk in enumerate(ids):
-        if idx and throttle:
-            time.sleep(0.04)
-        sent += int(bool(deliver(pk)))
+    for _pass in range(2):
+        rows = list(
+            TelegramOutbox.objects.filter(status__in=['pending', 'sending'], available_at__lte=timezone.now())
+            .order_by('created_at')
+            .values_list('pk', 'chat_id')[:limit]
+        )
+        if not rows:
+            break
+        had_ai_job = False
+        throttle = len(rows) > 1 and not getattr(settings, 'TESTING', False)
+        for idx, (pk, chat_id) in enumerate(rows):
+            if idx and throttle:
+                time.sleep(0.04)
+            if chat_id == AI_REVIEW_CHAT_SENTINEL:
+                had_ai_job = True
+            sent += int(bool(deliver(pk)))
+        if not had_ai_job:
+            break
     return sent
 
 
