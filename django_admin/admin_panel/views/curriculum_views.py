@@ -738,6 +738,8 @@ class ApplyTaskDeadlineBoostView(APIView):
         now = timezone.now()
         existing = TaskDeadlineExtension.objects.select_for_update().filter(user=user, task=task).first()
         current_deadline = existing.extended_until if (existing and existing.extended_until) else task.deadline
+        if current_deadline is not None and timezone.is_naive(current_deadline):
+            current_deadline = timezone.make_aware(current_deadline, dt_timezone.utc)
         base_dt = max(current_deadline, now)
         new_deadline = base_dt + timedelta(hours=24)
 

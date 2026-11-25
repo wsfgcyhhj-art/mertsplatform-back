@@ -2689,6 +2689,23 @@ class PlatformV2FeaturesTestCase(TransactionTestCase):
         self.assertEqual(ctx['burnout_radar_count'], 1)
         self.assertEqual([r['login'] for r in ctx['burnout_radar_students']], ['truly_idle'])
 
+        # Legacy PostgreSQL timestamp without time zone (naive datetime) must not crash radar
+        from admin_panel.admin import get_burnout_radar_rows
+        naive_student = create_user(
+            login='naive_dt_stud',
+            role=RoleChoices.STUDENT,
+            group_number='js-01',
+            streak_count=0,
+            is_active=True,
+        )
+        naive_student._last_submission_at = datetime(2026, 11, 1, 12, 0, 0)
+        naive_student._submissions_count = 1
+        with patch('admin_panel.admin.filter_burnout_risk') as mock_filter:
+            mock_filter.return_value.order_by.return_value = [naive_student]
+            naive_rows = get_burnout_radar_rows(limit=10)
+        self.assertEqual(len(naive_rows), 1)
+        self.assertGreaterEqual(naive_rows[0]['days_without_submissions'], 1)
+
         # AUD-V2-11: Daily cooldown on burnout_nudge_view prevents duplicate Telegram spam
         owner = get_user_model().objects.create_superuser(username='nudge_owner', password='Owner-Pass-2026!')
         adm = Client()

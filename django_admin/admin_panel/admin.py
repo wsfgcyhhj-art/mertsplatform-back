@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, ProgrammingError, models, transaction
@@ -154,6 +154,8 @@ def get_burnout_radar_rows(limit: int = 50) -> list[dict]:
     rows = []
     for st in qs[:limit]:
         ref_dt = st._last_submission_at or st.last_active_date or st.created_at
+        if ref_dt is not None and timezone.is_naive(ref_dt):
+            ref_dt = timezone.make_aware(ref_dt, dt_timezone.utc)
         days_idle = max(0, (now - ref_dt).days) if ref_dt else 0
         tg_username = _clean_tg_username(st)
         rows.append({
